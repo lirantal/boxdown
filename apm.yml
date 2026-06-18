@@ -1,0 +1,9 @@
+name: "boxdown"
+version: 1.0.0
+description: "sandbox"
+author: "Liran Tal"
+dependencies:
+  apm:
+    - lirantal/nodejs-cli-apps-best-practices/skills/nodejs-cli-best-practices
+  mcp: []
+scripts: {}
