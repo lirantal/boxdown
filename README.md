@@ -7,7 +7,7 @@
 </p>
 
 <p align="center">
-  sandbox
+  Start and SSH into a reusable Dev Container environment for any local project.
 </p>
 
 <p align="center">
@@ -22,13 +22,59 @@
 ## Install
 
 ```sh
-pnpm install boxdown
+npm install -g boxdown
 ```
-## Usage: CLI
 
-```bash
-// @TODO
-const {} = require('boxdown')
+You can also run it without installing:
+
+```sh
+npx boxdown start
+```
+
+## Usage
+
+From any project repository on your host:
+
+```sh
+npx boxdown start
+```
+
+Boxdown builds or reuses a Dev Container for the current directory, then opens a shell inside it. The target repository stays clean; Boxdown writes generated configuration and SSH keys under user cache/data directories instead of copying `.devcontainer/` into the project.
+
+### Portless SSH
+
+Install an SSH alias for the current project:
+
+```sh
+npx boxdown ssh-config install
+```
+
+By default this creates a `<repo-name>-devcontainer` SSH host. Validate it with:
+
+```sh
+ssh <repo-name>-devcontainer 'whoami && pwd'
+```
+
+Use the same alias in Cursor, Claude, Codex, or any SSH-capable tool.
+
+### Commands
+
+```sh
+boxdown start
+boxdown shell
+boxdown ssh-config install
+boxdown install-ssh-config
+boxdown ssh-proxy
+boxdown refresh-gh-token
+boxdown refresh-gh-token-running
+```
+
+Shared options:
+
+```sh
+--workspace <path>  # target project directory, defaults to cwd
+--alias <name>      # SSH alias, defaults to <repo-name>-devcontainer
+--recreate          # recreate the devcontainer before starting
 ```
 
 ## Contributing

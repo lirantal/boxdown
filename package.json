@@ -1,7 +1,7 @@
 {
   "name": "boxdown",
   "version": "0.0.1",
-  "description": "sandbox",
+  "description": "Run a reusable devcontainer sandbox for any local project",
   "types": "dist/main.d.mts",
   "type": "module",
   "bin": {
@@ -30,6 +30,8 @@
     "pnpm": ">=10.26.0"
   },
   "files": [
+    "assets",
+    "docs",
     "dist",
     "src",
     "bin"
@@ -38,8 +40,8 @@
     "start": "tsx src/bin/cli.ts",
     "build": "tsc && tsdown",
     "lint": "eslint . && pnpm run lint:markdown",
-    "lint:markdown": "markdownlint-cli -c .github/.markdownlint.yml -i 'apm_modules/**' -i '.git' -i '__tests__' -i '.github' -i '.changeset' -i 'CODE_OF_CONDUCT.md' -i 'CHANGELOG.md' -i 'docs/**' -i 'node_modules' -i 'dist' '**/**.md'",
-    "lint:markdown:fix": "markdownlint-cli -c .github/.markdownlint.yml -i 'apm_modules/**' -i '.git' -i '__tests__' -i '.github' -i '.changeset' -i 'CODE_OF_CONDUCT.md' -i 'CHANGELOG.md' -i 'docs/**' -i 'node_modules' -i 'dist' '**/**.md' --fix",
+    "lint:markdown": "markdownlint -c .github/.markdownlint.yml -i 'apm_modules/**' -i '.git' -i '__tests__' -i '.github' -i '.changeset' -i 'CODE_OF_CONDUCT.md' -i 'CHANGELOG.md' -i 'node_modules' -i 'dist' '**/**.md'",
+    "lint:markdown:fix": "markdownlint -c .github/.markdownlint.yml -i 'apm_modules/**' -i '.git' -i '__tests__' -i '.github' -i '.changeset' -i 'CODE_OF_CONDUCT.md' -i 'CHANGELOG.md' -i 'node_modules' -i 'dist' '**/**.md' --fix",
     "lint:fix": "eslint . --fix",
     "test": "c8 node --import tsx --test __tests__/**/*.test.ts",
     "test:watch": "c8 node --import tsx --test --watch __tests__/**/*.test.ts",
@@ -60,6 +62,10 @@
   },
   "license": "Apache-2.0",
   "keywords": [
+    "devcontainer",
+    "docker",
+    "development-environment",
+    "ssh",
     "sandbox"
   ],
   "homepage": "https://github.com/lirantal/boxdown",

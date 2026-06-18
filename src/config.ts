@@ -1,0 +1,65 @@
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+
+import {
+  BOXDOWN_CONTAINER_DEVCONTAINER_DIR,
+  BOXDOWN_CONTAINER_SSH_DIR,
+  BOXDOWN_CONTAINER_SSH_PUBLIC_KEY_PATH
+} from './constants.ts'
+import { parseJsonc } from './jsonc.ts'
+import type { WorkspaceContext } from './paths.ts'
+import { shellQuote } from './shell.ts'
+
+export interface DevcontainerConfig {
+  name?: string
+  mounts?: string[]
+  containerEnv?: Record<string, string>
+  runArgs?: string[]
+  initializeCommand?: string
+  postCreateCommand?: string
+  postStartCommand?: string
+  [key: string]: unknown
+}
+
+export function readBaseDevcontainerConfig (assetsDevcontainerDir: string): DevcontainerConfig {
+  const configPath = join(assetsDevcontainerDir, 'devcontainer.json')
+  return parseJsonc<DevcontainerConfig>(readFileSync(configPath, 'utf8'))
+}
+
+export function buildGeneratedDevcontainerConfig (context: WorkspaceContext): DevcontainerConfig {
+  const baseConfig = readBaseDevcontainerConfig(context.assetsDevcontainerDir)
+  const mounts = Array.isArray(baseConfig.mounts)
+    ? baseConfig.mounts.filter((mount): mount is string => typeof mount === 'string')
+    : []
+
+  const boxdownMounts = [
+    `type=bind,source=${context.assetsDevcontainerDir},target=${BOXDOWN_CONTAINER_DEVCONTAINER_DIR},readonly`,
+    `type=bind,source=${context.sshPublicKeyRuntimeDir},target=${BOXDOWN_CONTAINER_SSH_DIR},readonly`
+  ]
+
+  return {
+    ...baseConfig,
+    name: `Boxdown: ${context.workspaceBasename}`,
+    mounts: [...mounts, ...boxdownMounts],
+    initializeCommand: `BOXDOWN_WORKSPACE_FOLDER=${shellQuote(context.workspaceFolder)} bash ${shellQuote(join(context.assetsDevcontainerDir, 'hooks', 'initialize.sh'))}`,
+    postCreateCommand: `bash ${shellQuote(`${BOXDOWN_CONTAINER_DEVCONTAINER_DIR}/hooks/post-create.sh`)}`,
+    postStartCommand: `bash ${shellQuote(`${BOXDOWN_CONTAINER_DEVCONTAINER_DIR}/hooks/post-start.sh`)}`,
+    containerEnv: {
+      ...(baseConfig.containerEnv ?? {}),
+      BOXDOWN_CONTAINER_WORKSPACE_FOLDER: '/workspaces/${localWorkspaceFolderBasename}',
+      BOXDOWN_WORKSPACE_BASENAME: '${localWorkspaceFolderBasename}',
+      DEVCONTAINER_SSH_PUBLIC_KEY_FILE: BOXDOWN_CONTAINER_SSH_PUBLIC_KEY_PATH
+    }
+  }
+}
+
+export function writeGeneratedDevcontainerConfig (context: WorkspaceContext): DevcontainerConfig {
+  const config = buildGeneratedDevcontainerConfig(context)
+  mkdirSync(context.workspaceCacheDir, { recursive: true })
+  writeFileSync(context.generatedConfigPath, `${JSON.stringify(config, null, 2)}\n`)
+  return config
+}
+
+export function publishContainerPortFromConfig (config: DevcontainerConfig): string | undefined {
+  return config.runArgs?.find((arg) => /^[0-9.]+::[0-9]+$/.test(arg))?.split('::')[1]
+}
