@@ -12,7 +12,7 @@ import { parseCliArgs, USAGE } from '../src/main.ts'
 import { createWorkspaceContext } from '../src/paths.ts'
 import { DEFAULT_TTY_MAX_COLUMNS, interactiveShellEnvArgs, interactiveShellScript } from '../src/shell.ts'
 import { buildSshConfigBlock, defaultSshAlias, replaceSshConfigBlock } from '../src/ssh-config.ts'
-import { createStatusInfo, formatStatusText, parseDockerPsJsonLines } from '../src/status.ts'
+import { createStatusInfo, formatStatusText, parseDockerPsJsonLines, statusIsHealthy } from '../src/status.ts'
 
 const assetsDevcontainerDir = fileURLToPath(new URL('../assets/devcontainer', import.meta.url))
 
@@ -137,7 +137,13 @@ describe('status output', () => {
       },
       assetsDevcontainerDir
     })
-    const exists = (path: string): boolean => path === context.generatedConfigPath || path === context.sshKeyPath
+    const exists = (path: string): boolean => [
+      context.generatedConfigPath,
+      context.assetsDevcontainerDir,
+      context.sshKeyPath,
+      context.sshPublicKeyPath,
+      context.sshPublicKeyRuntimePath
+    ].includes(path)
     const running = createStatusInfo(context, 'demo-devcontainer', {
       id: 'abc123',
       name: 'demo',
@@ -153,12 +159,17 @@ describe('status output', () => {
     const absent = createStatusInfo(context, 'demo-devcontainer', undefined, () => false)
 
     assert.strictEqual(running.container.running, true)
+    assert.strictEqual(statusIsHealthy(running), true)
     assert.strictEqual(stopped.container.running, false)
+    assert.strictEqual(statusIsHealthy(stopped), false)
     assert.strictEqual(absent.container.found, false)
+    assert.strictEqual(statusIsHealthy(absent), false)
     assert.match(formatStatusText(running), /State: running/)
     assert.match(formatStatusText(stopped), /State: exited/)
     assert.match(formatStatusText(running), /Generated config: .* \(yes\)/)
     assert.match(formatStatusText(absent), /State: absent/)
+    assert.match(formatStatusText(absent, { color: true }), /\u001B\[31mno\u001B\[0m/)
+    assert.match(formatStatusText(running, { color: true }), /\u001B\[32myes\u001B\[0m/)
   })
 })
 

@@ -16,10 +16,15 @@ so its output can match a custom SSH host alias.
 ## Status
 
 `status` reports the resolved workspace, generated config path, cache/data
-paths, SSH key paths, SSH alias, and the matching Docker container state.
+paths, SSH key paths, SSH alias, and the matching Docker container state. Human
+output color-codes healthy values in green and missing or unhealthy values in
+red.
 
 `status --json` prints the same information as structured JSON for scripts.
-Missing or stopped containers are reported as normal status and still exit 0.
+`status` exits 0 only when the generated config exists, devcontainer assets
+exist, SSH key material exists, the runtime public key exists, and the
+workspace container is running. Missing setup or a stopped/absent container is
+reported in the output and exits nonzero.
 
 ## Stop and Down
 

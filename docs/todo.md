@@ -17,8 +17,9 @@ refresh commands.
 - Workspace persistent state defaults to `~/.local/share/boxdown`.
 - Host private SSH keys stay on the host; the container receives only a public
   key mount.
-- Lifecycle commands report status, check host prerequisites, stop containers,
-  and remove containers without deleting Boxdown state or SSH keys.
+- Lifecycle commands report status, color-code unhealthy status output, check
+  host prerequisites, stop containers, and remove containers without deleting
+  Boxdown state or SSH keys.
 - Unit tests cover parsing, generated config shape, SSH config block generation,
   lifecycle output formatting, and packaging safety.
 

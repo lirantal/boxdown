@@ -4,7 +4,7 @@ import { doctorHasFailures, formatDoctorText, runDoctorChecks } from './doctor.t
 import { startDevcontainer, printPortHint, openShell, ensureContainerSshRuntime, runSshdProxy, refreshContainerGhAuth, findRunningContainerId, findWorkspaceContainer, stopWorkspaceContainer, removeWorkspaceContainer } from './devcontainer.ts'
 import { createWorkspaceContext } from './paths.ts'
 import { defaultSshAlias, installSshConfig } from './ssh-config.ts'
-import { createStatusInfo, formatStatusText } from './status.ts'
+import { createStatusInfo, formatStatusText, statusIsHealthy } from './status.ts'
 
 export type BoxdownCommand =
   | 'help'
@@ -193,10 +193,10 @@ export async function runCli (argv: string[] = process.argv.slice(2)): Promise<n
       if (parsed.json) {
         process.stdout.write(`${JSON.stringify(status, null, 2)}\n`)
       } else {
-        process.stdout.write(formatStatusText(status))
+        process.stdout.write(formatStatusText(status, { color: true }))
       }
 
-      return 0
+      return statusIsHealthy(status) ? 0 : 1
     }
 
     if (parsed.command === 'stop') {

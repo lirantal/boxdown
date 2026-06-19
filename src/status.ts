@@ -19,6 +19,8 @@ export interface StatusInfo {
     keyExists: boolean
     publicKeyPath: string
     publicKeyExists: boolean
+    publicKeyRuntimePath: string
+    publicKeyRuntimeExists: boolean
   }
   paths: {
     cacheRoot: string
@@ -91,7 +93,9 @@ export function createStatusInfo (
       keyPath: context.sshKeyPath,
       keyExists: exists(context.sshKeyPath),
       publicKeyPath: context.sshPublicKeyPath,
-      publicKeyExists: exists(context.sshPublicKeyPath)
+      publicKeyExists: exists(context.sshPublicKeyPath),
+      publicKeyRuntimePath: context.sshPublicKeyRuntimePath,
+      publicKeyRuntimeExists: exists(context.sshPublicKeyRuntimePath)
     },
     paths: {
       cacheRoot: context.cacheRoot,
@@ -114,12 +118,42 @@ export function createStatusInfo (
   }
 }
 
-function yesNo (value: boolean): string {
-  return value ? 'yes' : 'no'
+export function statusIsHealthy (status: StatusInfo): boolean {
+  return status.paths.generatedConfigExists &&
+    status.paths.assetsDevcontainerExists &&
+    status.ssh.keyExists &&
+    status.ssh.publicKeyExists &&
+    status.ssh.publicKeyRuntimeExists &&
+    status.container.found &&
+    status.container.running
 }
 
-export function formatStatusText (status: StatusInfo): string {
+const color = {
+  green: '\u001B[32m',
+  red: '\u001B[31m',
+  reset: '\u001B[0m'
+}
+
+function colorize (value: string, colorName: 'green' | 'red', enabled: boolean): string {
+  if (!enabled) {
+    return value
+  }
+
+  return `${color[colorName]}${value}${color.reset}`
+}
+
+function yesNo (value: boolean, colorEnabled: boolean): string {
+  return colorize(value ? 'yes' : 'no', value ? 'green' : 'red', colorEnabled)
+}
+
+function stateText (state: string, healthy: boolean, colorEnabled: boolean): string {
+  return colorize(state, healthy ? 'green' : 'red', colorEnabled)
+}
+
+export function formatStatusText (status: StatusInfo, options: { color?: boolean } = {}): string {
+  const colorEnabled = options.color ?? false
   const containerState = status.container.found ? status.container.state ?? 'unknown' : 'absent'
+  const healthy = statusIsHealthy(status)
   const lines = [
     'Boxdown status',
     '',
@@ -134,16 +168,17 @@ export function formatStatusText (status: StatusInfo): string {
     `  Data root: ${status.paths.dataRoot}`,
     `  Workspace cache: ${status.paths.workspaceCacheDir}`,
     `  Workspace data: ${status.paths.workspaceDataDir}`,
-    `  Generated config: ${status.paths.generatedConfigPath} (${yesNo(status.paths.generatedConfigExists)})`,
-    `  Devcontainer assets: ${status.paths.assetsDevcontainerDir} (${yesNo(status.paths.assetsDevcontainerExists)})`,
+    `  Generated config: ${status.paths.generatedConfigPath} (${yesNo(status.paths.generatedConfigExists, colorEnabled)})`,
+    `  Devcontainer assets: ${status.paths.assetsDevcontainerDir} (${yesNo(status.paths.assetsDevcontainerExists, colorEnabled)})`,
     '',
     'SSH:',
-    `  Private key: ${status.ssh.keyPath} (${yesNo(status.ssh.keyExists)})`,
-    `  Public key: ${status.ssh.publicKeyPath} (${yesNo(status.ssh.publicKeyExists)})`,
+    `  Private key: ${status.ssh.keyPath} (${yesNo(status.ssh.keyExists, colorEnabled)})`,
+    `  Public key: ${status.ssh.publicKeyPath} (${yesNo(status.ssh.publicKeyExists, colorEnabled)})`,
+    `  Runtime public key: ${status.ssh.publicKeyRuntimePath} (${yesNo(status.ssh.publicKeyRuntimeExists, colorEnabled)})`,
     '',
     'Container:',
-    `  State: ${containerState}`,
-    `  Running: ${yesNo(status.container.running)}`
+    `  State: ${stateText(containerState, healthy, colorEnabled)}`,
+    `  Running: ${yesNo(status.container.running, colorEnabled)}`
   ]
 
   if (status.container.id !== undefined) {
