@@ -21,7 +21,6 @@ export interface ParsedCli {
 
 export const USAGE = `Usage:
   boxdown start [--workspace <path>] [--recreate]
-  boxdown shell [--workspace <path>] [--recreate]
   boxdown ssh-config install [--workspace <path>] [--alias <name>]
   boxdown install-ssh-config [--workspace <path>] [--alias <name>]
   boxdown ssh-proxy [--workspace <path>] [--alias <name>]
@@ -30,8 +29,7 @@ export const USAGE = `Usage:
 
 Commands:
   start                     Start or reuse the workspace devcontainer, then open
-                            an interactive shell inside it.
-  shell                     Alias for start.
+                            an interactive shell inside it. Alias: shell.
   ssh-config install        Install or update an SSH host alias for the workspace
                             devcontainer.
   install-ssh-config        Alias for ssh-config install.

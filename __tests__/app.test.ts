@@ -43,9 +43,13 @@ describe('CLI parsing', () => {
   })
 
   test('help describes available commands', () => {
+    const usageLines = USAGE.split(/\r?\n/)
+
     assert.match(USAGE, /Commands:/)
     assert.match(USAGE, /start\s+Start or reuse the workspace devcontainer/)
-    assert.match(USAGE, /shell\s+Alias for start/)
+    assert.match(USAGE, /Alias: shell/)
+    assert.ok(!usageLines.includes('  boxdown shell [--workspace <path>] [--recreate]'))
+    assert.ok(!usageLines.some((line) => line.startsWith('  shell')))
     assert.match(USAGE, /ssh-config install\s+Install or update an SSH host alias/)
     assert.match(USAGE, /ssh-proxy\s+Internal command used by the generated SSH/)
     assert.match(USAGE, /refresh-gh-token\s+Start or reuse the devcontainer/)
