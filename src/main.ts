@@ -1,12 +1,18 @@
 import { existsSync } from 'node:fs'
 
-import { startDevcontainer, printPortHint, openShell, ensureContainerSshRuntime, runSshdProxy, refreshContainerGhAuth, findRunningContainerId } from './devcontainer.ts'
+import { doctorHasFailures, formatDoctorText, runDoctorChecks } from './doctor.ts'
+import { startDevcontainer, printPortHint, openShell, ensureContainerSshRuntime, runSshdProxy, refreshContainerGhAuth, findRunningContainerId, findWorkspaceContainer, stopWorkspaceContainer, removeWorkspaceContainer } from './devcontainer.ts'
 import { createWorkspaceContext } from './paths.ts'
 import { defaultSshAlias, installSshConfig } from './ssh-config.ts'
+import { createStatusInfo, formatStatusText } from './status.ts'
 
 export type BoxdownCommand =
   | 'help'
   | 'start'
+  | 'status'
+  | 'stop'
+  | 'down'
+  | 'doctor'
   | 'ssh-config-install'
   | 'ssh-proxy'
   | 'refresh-gh-token'
@@ -17,10 +23,15 @@ export interface ParsedCli {
   workspace?: string
   alias?: string
   recreate: boolean
+  json: boolean
 }
 
 export const USAGE = `Usage:
   boxdown start [--workspace <path>] [--recreate]
+  boxdown status [--workspace <path>] [--alias <name>] [--json]
+  boxdown stop [--workspace <path>]
+  boxdown down [--workspace <path>]
+  boxdown doctor [--workspace <path>]
   boxdown ssh-config install [--workspace <path>] [--alias <name>]
   boxdown ssh-proxy [--workspace <path>] [--alias <name>]
   boxdown refresh-gh-token [--workspace <path>]
@@ -29,6 +40,12 @@ export const USAGE = `Usage:
 Commands:
   start                     Start or reuse the workspace devcontainer, then open
                             an interactive shell inside it. Alias: shell.
+  status                    Show workspace state, generated paths, SSH key paths,
+                            and the matching devcontainer state.
+  stop                      Stop the workspace devcontainer if it is running.
+  down                      Remove the workspace devcontainer. Keeps Boxdown
+                            cache, generated config, data, and SSH keys.
+  doctor                    Check required host tools and Boxdown assets.
   ssh-config install        Install or update an SSH host alias for the workspace
                             devcontainer.
   ssh-proxy                 Internal command used by the generated SSH
@@ -43,6 +60,7 @@ Options:
   --workspace <path>  Target project directory. Defaults to the current directory.
   --alias <name>      SSH host alias. Defaults to <repo-name>-devcontainer.
   --recreate          Remove the existing devcontainer before starting.
+  --json              Print JSON output. Supported by status only.
   --help, -h          Show help.
 `
 
@@ -51,7 +69,16 @@ export function parseCliArgs (argv: string[]): ParsedCli {
   let workspace: string | undefined
   let alias: string | undefined
   let recreate = false
+  let json = false
   const positional: string[] = []
+
+  function parsed (command: BoxdownCommand): ParsedCli {
+    if (json && command !== 'status') {
+      throw new Error('--json is only supported with status')
+    }
+
+    return { command, workspace, alias, recreate, json }
+  }
 
   while (args.length > 0) {
     const arg = args.shift()
@@ -61,7 +88,7 @@ export function parseCliArgs (argv: string[]): ParsedCli {
     }
 
     if (arg === '--help' || arg === '-h') {
-      return { command: 'help', workspace, alias, recreate }
+      return parsed('help')
     }
 
     if (arg === '--workspace') {
@@ -87,6 +114,11 @@ export function parseCliArgs (argv: string[]): ParsedCli {
       continue
     }
 
+    if (arg === '--json') {
+      json = true
+      continue
+    }
+
     if (arg.startsWith('-')) {
       throw new Error(`Unknown option: ${arg}`)
     }
@@ -95,27 +127,43 @@ export function parseCliArgs (argv: string[]): ParsedCli {
   }
 
   if (positional.length === 0) {
-    return { command: 'help', workspace, alias, recreate }
+    return parsed('help')
   }
 
   if (positional[0] === 'start' || positional[0] === 'shell') {
-    return { command: 'start', workspace, alias, recreate }
+    return parsed('start')
+  }
+
+  if (positional[0] === 'status' && positional.length === 1) {
+    return parsed('status')
+  }
+
+  if (positional[0] === 'stop' && positional.length === 1) {
+    return parsed('stop')
+  }
+
+  if (positional[0] === 'down' && positional.length === 1) {
+    return parsed('down')
+  }
+
+  if (positional[0] === 'doctor' && positional.length === 1) {
+    return parsed('doctor')
   }
 
   if (positional[0] === 'ssh-config' && positional[1] === 'install' && positional.length === 2) {
-    return { command: 'ssh-config-install', workspace, alias, recreate }
+    return parsed('ssh-config-install')
   }
 
   if (positional[0] === 'ssh-proxy' && positional.length === 1) {
-    return { command: 'ssh-proxy', workspace, alias, recreate }
+    return parsed('ssh-proxy')
   }
 
   if (positional[0] === 'refresh-gh-token' && positional.length === 1) {
-    return { command: 'refresh-gh-token', workspace, alias, recreate }
+    return parsed('refresh-gh-token')
   }
 
   if (positional[0] === 'refresh-gh-token-running' && positional.length === 1) {
-    return { command: 'refresh-gh-token-running', workspace, alias, recreate }
+    return parsed('refresh-gh-token-running')
   }
 
   throw new Error(`Unknown command: ${positional.join(' ')}`)
@@ -133,13 +181,42 @@ export async function runCli (argv: string[] = process.argv.slice(2)): Promise<n
     const context = createWorkspaceContext({ workspace: parsed.workspace })
     const alias = parsed.alias ?? defaultSshAlias(context.workspaceBasename)
 
-    if (!existsSync(context.assetsDevcontainerDir)) {
-      throw new Error(`Missing Boxdown devcontainer assets: ${context.assetsDevcontainerDir}`)
-    }
-
     if (parsed.command === 'ssh-config-install') {
       await installSshConfig(context, alias)
       return 0
+    }
+
+    if (parsed.command === 'status') {
+      const container = await findWorkspaceContainer(context)
+      const status = createStatusInfo(context, alias, container, existsSync)
+
+      if (parsed.json) {
+        process.stdout.write(`${JSON.stringify(status, null, 2)}\n`)
+      } else {
+        process.stdout.write(formatStatusText(status))
+      }
+
+      return 0
+    }
+
+    if (parsed.command === 'stop') {
+      await stopWorkspaceContainer(context)
+      return 0
+    }
+
+    if (parsed.command === 'down') {
+      await removeWorkspaceContainer(context)
+      return 0
+    }
+
+    if (parsed.command === 'doctor') {
+      const checks = await runDoctorChecks(context)
+      process.stdout.write(formatDoctorText(checks))
+      return doctorHasFailures(checks) ? 1 : 0
+    }
+
+    if (!existsSync(context.assetsDevcontainerDir)) {
+      throw new Error(`Missing Boxdown devcontainer assets: ${context.assetsDevcontainerDir}`)
     }
 
     if (parsed.command === 'ssh-proxy') {

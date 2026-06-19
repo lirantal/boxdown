@@ -21,6 +21,7 @@ Unit tests should avoid starting Docker. Prefer pure tests for:
 - Workspace path resolution and state directory selection.
 - Generated devcontainer config shape.
 - SSH config block creation and idempotent replacement.
+- Lifecycle status and doctor output formatting.
 - Safety invariants, such as not packaging `.ssh/` key material.
 
 Use temporary directories for workspace and state tests. Do not write to the
@@ -47,8 +48,11 @@ Confirm `assets/devcontainer/**` is included and `.ssh/` is not.
 Manual Docker acceptance is heavier and should be done intentionally:
 
 ```sh
-npx boxdown start --workspace /path/to/repo
-npx boxdown ssh-config install --workspace /path/to/repo
+boxdown start --workspace /path/to/repo
+boxdown status --workspace /path/to/repo
+boxdown status --workspace /path/to/repo --json
+boxdown doctor --workspace /path/to/repo
+boxdown ssh-config install --workspace /path/to/repo
 ssh <repo-name>-devcontainer 'whoami && pwd'
 ```
 

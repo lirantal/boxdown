@@ -4,7 +4,8 @@ This file is a handoff for the next Boxdown implementation session. It assumes
 v1 exists as a CLI-first package that stores reusable devcontainer assets under
 `assets/devcontainer/`, generates per-workspace override config outside target
 repositories, and supports start (with `shell` as an alias), SSH proxy, SSH
-config install, and GitHub auth refresh commands.
+config install, lifecycle status/stop/down/doctor commands, and GitHub auth
+refresh commands.
 
 ## Current Baseline
 
@@ -16,45 +17,44 @@ config install, and GitHub auth refresh commands.
 - Workspace persistent state defaults to `~/.local/share/boxdown`.
 - Host private SSH keys stay on the host; the container receives only a public
   key mount.
+- Lifecycle commands report status, check host prerequisites, stop containers,
+  and remove containers without deleting Boxdown state or SSH keys.
 - Unit tests cover parsing, generated config shape, SSH config block generation,
-  and packaging safety.
+  lifecycle output formatting, and packaging safety.
 
 ## Next Implementation Tracks
 
-### 1. Manual Acceptance and Runtime Fixes
+### 1. Manual Acceptance and Runtime Fixes (completed)
 
-Run the real Docker and SSH workflow against at least two repositories. This is
-the highest-priority next step because v1 was verified with unit tests, build,
-lint, and package dry-runs, but not with full container startup.
+The real Docker and SSH workflow was tested from linked local `boxdown`
+commands. Runtime fixes from that pass included interactive terminal width
+normalization and command alias cleanup.
 
 Acceptance commands:
 
 ```sh
-npx boxdown start --workspace ~/projects/repos/gh-cp
-npx boxdown ssh-config install --workspace ~/projects/repos/gh-cp
+boxdown start --workspace ~/projects/repos/gh-cp
+boxdown ssh-config install --workspace ~/projects/repos/gh-cp
 ssh gh-cp-devcontainer 'whoami && pwd'
 
-npx boxdown start --workspace ~/projects/repos/lirantaldotcom
-npx boxdown ssh-config install --workspace ~/projects/repos/lirantaldotcom
+boxdown start --workspace ~/projects/repos/lirantaldotcom
+boxdown ssh-config install --workspace ~/projects/repos/lirantaldotcom
 ssh lirantaldotcom-devcontainer 'whoami && pwd'
 ```
 
-Fix any issues in generated config paths, mounted asset paths, public key setup,
-container labels, or SSH bootstrap behavior.
+### 2. Lifecycle Commands and CLI UX (completed)
 
-### 2. Lifecycle Commands and CLI UX
-
-Add practical commands around the existing start flow:
+Added practical commands around the existing start flow:
 
 - `boxdown status` to show workspace, generated config path, container ID,
   running state, SSH alias, and key paths.
 - `boxdown stop` to stop the workspace container.
-- `boxdown down` or `boxdown remove` to remove the workspace container.
+- `boxdown down` to remove the workspace container.
 - `boxdown doctor` to validate Node, npm, Docker, SSH, `gh`, and asset presence.
-- `--json` output for status-style commands.
+- `boxdown status --json` for machine-readable status output.
 
-Keep destructive commands explicit and conservative. Do not remove generated
-state or SSH keys unless the command name and docs make that behavior clear.
+Lifecycle commands keep destructive behavior explicit and conservative. They do
+not remove generated state or SSH keys.
 
 ### 3. Editor Stub Support
 

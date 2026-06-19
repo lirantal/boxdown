@@ -20,6 +20,7 @@ repository.
 
 - [Feature index](./features/README.md)
 - [Start command](./features/start-and-shell.md)
+- [Lifecycle commands](./features/lifecycle.md)
 - [SSH config and proxy workflow](./features/ssh-config-and-proxy.md)
 - [GitHub auth refresh](./features/github-auth-refresh.md)
 - [Generated config and state](./features/generated-config-and-state.md)

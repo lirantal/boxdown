@@ -9,6 +9,7 @@ import type { WorkspaceContext } from './paths.ts'
 import { runBuffered, runInteractive } from './process.ts'
 import { interactiveShellEnvArgs, interactiveShellScript } from './shell.ts'
 import { ensureHostSshKey } from './ssh-key.ts'
+import { type ContainerSummary, parseDockerPsJsonLines } from './status.ts'
 
 export interface StartOptions {
   recreate?: boolean
@@ -35,6 +36,26 @@ function log (message: string, proxyMode = false): void {
 
 export function parseContainerIdFromUpOutput (output: string): string | undefined {
   return /"containerId"\s*:\s*"([^"]+)"/.exec(output)?.[1]
+}
+
+export async function findWorkspaceContainer (context: WorkspaceContext): Promise<ContainerSummary | undefined> {
+  const result = await runBuffered('docker', [
+    'ps',
+    '-a',
+    '--filter',
+    `label=devcontainer.local_folder=${context.workspaceFolder}`,
+    '--format',
+    '{{json .}}'
+  ], {
+    mirrorStdout: false,
+    mirrorStderr: false
+  })
+
+  if (result.code !== 0) {
+    throw new Error(`Could not inspect devcontainer for ${context.workspaceFolder}`)
+  }
+
+  return parseDockerPsJsonLines(result.stdout)[0]
 }
 
 export async function ensureDevcontainerCli (context: WorkspaceContext): Promise<string> {
@@ -86,6 +107,51 @@ export async function findRunningContainerId (context: WorkspaceContext): Promis
   }
 
   return result.stdout.split(/\r?\n/).find((line) => line.length > 0)
+}
+
+export async function stopWorkspaceContainer (context: WorkspaceContext): Promise<void> {
+  const container = await findWorkspaceContainer(context)
+
+  if (container === undefined) {
+    process.stdout.write(`No devcontainer found for: ${context.workspaceFolder}\n`)
+    return
+  }
+
+  if (container.state?.toLowerCase() !== 'running') {
+    process.stdout.write(`Devcontainer is not running for: ${context.workspaceFolder}\n`)
+    return
+  }
+
+  const result = await runBuffered('docker', ['stop', container.id], {
+    mirrorStdout: false,
+    mirrorStderr: false
+  })
+
+  if (result.code !== 0) {
+    throw new Error(`Could not stop devcontainer ${container.id}`)
+  }
+
+  process.stdout.write(`Stopped devcontainer: ${container.id}\n`)
+}
+
+export async function removeWorkspaceContainer (context: WorkspaceContext): Promise<void> {
+  const container = await findWorkspaceContainer(context)
+
+  if (container === undefined) {
+    process.stdout.write(`No devcontainer found for: ${context.workspaceFolder}\n`)
+    return
+  }
+
+  const result = await runBuffered('docker', ['rm', '-f', container.id], {
+    mirrorStdout: false,
+    mirrorStderr: false
+  })
+
+  if (result.code !== 0) {
+    throw new Error(`Could not remove devcontainer ${container.id}`)
+  }
+
+  process.stdout.write(`Removed devcontainer: ${container.id}\n`)
 }
 
 export async function startDevcontainer (context: WorkspaceContext, options: StartOptions = {}): Promise<string> {

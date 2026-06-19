@@ -61,6 +61,10 @@ Use the same alias in Cursor, Claude, Codex, or any SSH-capable tool.
 
 ```sh
 boxdown start
+boxdown status
+boxdown stop
+boxdown down
+boxdown doctor
 boxdown ssh-config install
 boxdown ssh-proxy
 boxdown refresh-gh-token
@@ -76,6 +80,7 @@ Shared options:
 --workspace <path>  # target project directory, defaults to cwd
 --alias <name>      # SSH alias, defaults to <repo-name>-devcontainer
 --recreate          # recreate the devcontainer before starting
+--json              # JSON output for status
 ```
 
 ## Contributing
