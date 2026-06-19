@@ -7,7 +7,7 @@ import { describe, test } from 'node:test'
 
 import { buildGeneratedDevcontainerConfig, publishContainerPortFromConfig } from '../src/config.ts'
 import { parseJsonc } from '../src/jsonc.ts'
-import { parseCliArgs } from '../src/main.ts'
+import { parseCliArgs, USAGE } from '../src/main.ts'
 import { createWorkspaceContext } from '../src/paths.ts'
 import { DEFAULT_TTY_MAX_COLUMNS, interactiveShellEnvArgs, interactiveShellScript } from '../src/shell.ts'
 import { buildSshConfigBlock, defaultSshAlias, replaceSshConfigBlock } from '../src/ssh-config.ts'
@@ -40,6 +40,16 @@ describe('CLI parsing', () => {
 
   test('rejects unknown commands', () => {
     assert.throws(() => parseCliArgs(['ssh-config', 'remove']), /Unknown command/)
+  })
+
+  test('help describes available commands', () => {
+    assert.match(USAGE, /Commands:/)
+    assert.match(USAGE, /start\s+Start or reuse the workspace devcontainer/)
+    assert.match(USAGE, /shell\s+Alias for start/)
+    assert.match(USAGE, /ssh-config install\s+Install or update an SSH host alias/)
+    assert.match(USAGE, /ssh-proxy\s+Internal command used by the generated SSH/)
+    assert.match(USAGE, /refresh-gh-token\s+Start or reuse the devcontainer/)
+    assert.match(USAGE, /refresh-gh-token-running\s+Refresh GitHub CLI auth only if/)
   })
 })
 

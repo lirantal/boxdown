@@ -28,6 +28,21 @@ export const USAGE = `Usage:
   boxdown refresh-gh-token [--workspace <path>]
   boxdown refresh-gh-token-running [--workspace <path>]
 
+Commands:
+  start                     Start or reuse the workspace devcontainer, then open
+                            an interactive shell inside it.
+  shell                     Alias for start.
+  ssh-config install        Install or update an SSH host alias for the workspace
+                            devcontainer.
+  install-ssh-config        Alias for ssh-config install.
+  ssh-proxy                 Internal command used by the generated SSH
+                            ProxyCommand. Starts or reuses the devcontainer and
+                            bridges SSH over docker exec.
+  refresh-gh-token          Start or reuse the devcontainer, then copy host
+                            GitHub CLI auth into the container when available.
+  refresh-gh-token-running  Refresh GitHub CLI auth only if the workspace
+                            devcontainer is already running.
+
 Options:
   --workspace <path>  Target project directory. Defaults to the current directory.
   --alias <name>      SSH host alias. Defaults to <repo-name>-devcontainer.
