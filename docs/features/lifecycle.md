@@ -36,8 +36,9 @@ Boxdown cache, generated config, data directories, or SSH keys.
 
 ## Doctor
 
-`doctor` validates required host prerequisites: Node, npm, Docker CLI, Docker
-daemon access, SSH tools, and packaged devcontainer assets.
+`doctor` validates required host prerequisites: Node, Docker CLI, Docker
+daemon access, SSH tools, packaged devcontainer assets, and Boxdown's packaged
+`@devcontainers/cli` dependency.
 
 GitHub CLI auth is optional. Missing or unauthenticated `gh` is reported as a
 warning rather than a failure.

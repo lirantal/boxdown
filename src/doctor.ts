@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs'
 
+import { resolveDevcontainerCli } from './devcontainer-cli.ts'
 import type { WorkspaceContext } from './paths.ts'
 import { runBuffered } from './process.ts'
 
@@ -54,10 +55,10 @@ export async function runDoctorChecks (context: WorkspaceContext): Promise<Docto
   ))
 
   checks.push(check(
-    'npm',
-    await commandWorks('npm', ['--version']),
-    'npm is available',
-    'npm is required but was not available'
+    'devcontainers-cli',
+    await packagedDevcontainerCliWorks(context),
+    'Packaged @devcontainers/cli is available',
+    'Packaged @devcontainers/cli is required but was not available'
   ))
 
   checks.push(check(
@@ -111,6 +112,15 @@ export async function runDoctorChecks (context: WorkspaceContext): Promise<Docto
   }
 
   return checks
+}
+
+async function packagedDevcontainerCliWorks (context: WorkspaceContext): Promise<boolean> {
+  try {
+    const cli = resolveDevcontainerCli(context)
+    return await commandWorks(cli.command, [...cli.argsPrefix, '--version'])
+  } catch {
+    return false
+  }
 }
 
 export function doctorHasFailures (checks: DoctorCheck[]): boolean {

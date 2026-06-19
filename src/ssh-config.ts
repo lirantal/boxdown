@@ -19,8 +19,10 @@ export function defaultSshConfigPath (env: NodeJS.ProcessEnv = process.env): str
   return env.BOXDOWN_SSH_CONFIG ?? env.DEVCONTAINER_SSH_CONFIG ?? join(env.HOME ?? '', '.ssh', 'config')
 }
 
-export function buildProxyCommand (workspaceFolder: string, alias: string): string {
-  return `npx --yes boxdown ssh-proxy --workspace ${shellQuote(workspaceFolder)} --alias ${shellQuote(alias)}`
+export function buildProxyCommand (context: WorkspaceContext, alias: string): string {
+  const cliPath = join(context.packageRoot, 'dist', 'bin', 'cli.cjs')
+
+  return `${shellQuote(process.execPath)} ${shellQuote(cliPath)} ssh-proxy --workspace ${shellQuote(context.workspaceFolder)} --alias ${shellQuote(alias)}`
 }
 
 export function buildSshConfigBlock (context: WorkspaceContext, alias: string): string {
@@ -34,7 +36,7 @@ export function buildSshConfigBlock (context: WorkspaceContext, alias: string): 
     '  IdentityFile none',
     `  IdentityFile ${sshConfigQuote(context.sshKeyPath)}`,
     '  IdentitiesOnly yes',
-    `  ProxyCommand ${buildProxyCommand(context.workspaceFolder, alias)}`,
+    `  ProxyCommand ${buildProxyCommand(context, alias)}`,
     '  StrictHostKeyChecking no',
     '  UserKnownHostsFile /dev/null',
     '  LogLevel ERROR',

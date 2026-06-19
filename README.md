@@ -41,6 +41,8 @@ npx boxdown start
 
 Boxdown builds or reuses a Dev Container for the current directory, then opens a shell inside it. The target repository stays clean; Boxdown writes generated configuration and SSH keys under user cache/data directories instead of copying `.devcontainer/` into the project.
 
+Boxdown ships and invokes its own `@devcontainers/cli` dependency. It does not require a host/global Dev Containers CLI install.
+
 ### Portless SSH
 
 Install an SSH alias for the current project:

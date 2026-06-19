@@ -25,7 +25,6 @@ export interface WorkspaceContext {
   workspaceCacheDir: string
   workspaceDataDir: string
   generatedConfigPath: string
-  devcontainerCliNpmPrefix: string
   sshKeyDir: string
   sshKeyPath: string
   sshPublicKeyPath: string
@@ -102,7 +101,6 @@ export function createWorkspaceContext (options: WorkspaceContextOptions = {}): 
     workspaceCacheDir,
     workspaceDataDir,
     generatedConfigPath: join(workspaceCacheDir, 'devcontainer.json'),
-    devcontainerCliNpmPrefix: join(cacheRoot, 'devcontainer-cli-npm-prefix'),
     sshKeyDir: join(workspaceDataDir, 'ssh'),
     sshKeyPath: join(workspaceDataDir, 'ssh', 'id_ed25519'),
     sshPublicKeyPath: join(workspaceDataDir, 'ssh', 'id_ed25519.pub'),

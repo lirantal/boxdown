@@ -51,7 +51,8 @@ Added practical commands around the existing start flow:
   running state, SSH alias, and key paths.
 - `boxdown stop` to stop the workspace container.
 - `boxdown down` to remove the workspace container.
-- `boxdown doctor` to validate Node, npm, Docker, SSH, `gh`, and asset presence.
+- `boxdown doctor` to validate Node, Docker, SSH, packaged `@devcontainers/cli`,
+  optional `gh`, and asset presence.
 - `boxdown status --json` for machine-readable status output.
 
 Lifecycle commands keep destructive behavior explicit and conservative. They do

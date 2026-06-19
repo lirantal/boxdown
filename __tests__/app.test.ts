@@ -6,6 +6,8 @@ import { fileURLToPath } from 'node:url'
 import { describe, test } from 'node:test'
 
 import { buildGeneratedDevcontainerConfig, publishContainerPortFromConfig } from '../src/config.ts'
+import { DEVCONTAINER_CLI_VERSION } from '../src/constants.ts'
+import { resolveDevcontainerCli } from '../src/devcontainer-cli.ts'
 import { doctorHasFailures, formatDoctorText } from '../src/doctor.ts'
 import { parseJsonc } from '../src/jsonc.ts'
 import { parseCliArgs, USAGE } from '../src/main.ts'
@@ -257,7 +259,7 @@ describe('interactive shell setup', () => {
 })
 
 describe('SSH config generation', () => {
-  test('builds default alias and npx proxy command', () => {
+  test('builds default alias and packaged proxy command', () => {
     const workspace = tempDir('ssh-workspace')
     const context = createWorkspaceContext({
       workspace,
@@ -273,7 +275,8 @@ describe('SSH config generation', () => {
 
     assert.strictEqual(alias, `${context.workspaceBasename}-devcontainer`)
     assert.ok(block.includes(`Host ${alias}`))
-    assert.match(block, /ProxyCommand npx --yes boxdown ssh-proxy/)
+    assert.match(block, /ProxyCommand .*node' .*dist\/bin\/cli\.cjs' ssh-proxy/)
+    assert.ok(!block.includes('npx --yes boxdown'))
     assert.match(block, /--workspace '/)
     assert.match(block, /IdentityFile "/)
   })
@@ -303,5 +306,23 @@ describe('SSH config generation', () => {
 describe('packaged assets', () => {
   test('does not include generated SSH key material', () => {
     assert.strictEqual(existsSync(join(assetsDevcontainerDir, '.ssh')), false)
+  })
+
+  test('resolves packaged devcontainers CLI dependency', () => {
+    const workspace = tempDir('devcontainers-cli-workspace')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('devcontainers-cli-cache'),
+        BOXDOWN_DATA_HOME: tempDir('devcontainers-cli-data')
+      },
+      assetsDevcontainerDir
+    })
+    const cli = resolveDevcontainerCli(context)
+
+    assert.strictEqual(cli.command, process.execPath)
+    assert.strictEqual(cli.version, DEVCONTAINER_CLI_VERSION)
+    assert.match(cli.path, /@devcontainers[+/]cli@0\.84\.1|@devcontainers\/cli/)
+    assert.strictEqual(existsSync(cli.path), true)
   })
 })

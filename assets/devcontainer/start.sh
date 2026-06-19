@@ -3,8 +3,9 @@
 # @file start.sh
 # @summary Start the Dev Container for this workspace and attach an interactive shell or SSH proxy.
 #
-# Uses @devcontainers/cli to run `devcontainer up` then either `devcontainer exec bash`
-# or a portless SSH ProxyCommand backed by `docker exec ... sshd -i`.
+# Uses Boxdown's packaged @devcontainers/cli to run `devcontainer up` then either
+# `devcontainer exec bash` or a portless SSH ProxyCommand backed by
+# `docker exec ... sshd -i`.
 # Host port publishing comes from **runArgs** in devcontainer.json (e.g. `-p` and
 # `127.0.0.1::<containerPort>` for dynamic host binding). After `devcontainer up`, this
 # script reads that container port from runArgs and prints the mapped URL via `docker port`
@@ -46,7 +47,6 @@ export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin:${PA
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE_FOLDER="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 REPO_NAME="$(basename "$WORKSPACE_FOLDER")"
-CLI_VERSION="0.84.1"
 SSH_KEY_DIR="${DEVCONTAINER_SSH_KEY_DIR:-${SCRIPT_DIR}/.ssh}"
 SSH_KEY_PATH="${DEVCONTAINER_SSH_KEY_PATH:-${SSH_KEY_DIR}/id_ed25519}"
 MODE="shell"
@@ -106,28 +106,32 @@ die() {
 }
 
 devcontainer_cli() {
-  local npm_prefix
   local cli_bin
-  local version_file
+  local package_root
 
-  npm_prefix="${DEVCONTAINER_CLI_NPM_PREFIX:-${XDG_CACHE_HOME:-${HOME:-/tmp}/.cache}/devcontainer-cli-npm-prefix}"
-  cli_bin="${npm_prefix}/node_modules/.bin/devcontainer"
-  version_file="${npm_prefix}/.devcontainer-cli-version"
+  package_root="$(cd "$SCRIPT_DIR/../.." && pwd -P)"
+  cli_bin="$(
+    PACKAGE_ROOT="$package_root" node -e '
+      const { existsSync, readFileSync } = require("node:fs");
+      const { createRequire } = require("node:module");
+      const { dirname, resolve } = require("node:path");
 
-  mkdir -p "$npm_prefix"
+      const packageRoot = process.env.PACKAGE_ROOT;
+      const requireFromBoxdown = createRequire(`${packageRoot}/package.json`);
+      const packageJsonPath = requireFromBoxdown.resolve("@devcontainers/cli/package.json");
+      const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf8"));
+      const bin = typeof packageJson.bin === "string" ? packageJson.bin : packageJson.bin?.devcontainer;
 
-  if [ ! -x "$cli_bin" ] || [ "$(cat "$version_file" 2>/dev/null || true)" != "$CLI_VERSION" ]; then
-    npm --prefix "$npm_prefix" install \
-      --no-audit \
-      --no-fund \
-      --no-save \
-      --package-lock=false \
-      "@devcontainers/cli@${CLI_VERSION}" >/dev/null
+      if (!bin) process.exit(1);
 
-    printf '%s\n' "$CLI_VERSION" > "$version_file"
-  fi
+      const cliPath = resolve(dirname(packageJsonPath), bin);
+      if (!existsSync(cliPath)) process.exit(1);
 
-  "$cli_bin" "$@"
+      process.stdout.write(cliPath);
+    '
+  )" || die "Boxdown's packaged @devcontainers/cli dependency is missing. Reinstall boxdown."
+
+  node "$cli_bin" "$@"
 }
 
 # Container-side TCP port published via runArgs, e.g. "127.0.0.1::3000" (Docker -p host::ctr).

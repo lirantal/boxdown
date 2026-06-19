@@ -23,7 +23,7 @@ The generated SSH config block includes:
 - `User node`
 - a per-workspace host identity file
 - `IdentitiesOnly yes`
-- a `ProxyCommand` that runs `npx --yes boxdown ssh-proxy`
+- a `ProxyCommand` that runs the current Boxdown installation's built CLI
 
 The block is wrapped in Boxdown markers so repeated installs replace the managed
 block instead of duplicating it.

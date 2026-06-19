@@ -39,7 +39,7 @@ From the **repository root** on your host:
 bash .devcontainer/start.sh
 ```
 
-Requires Docker running. Caches the pinned `@devcontainers/cli` in an isolated npm prefix, then uses that binary to `up` the workspace and `exec` into `bash`.
+Requires Docker running. The script resolves Boxdown's packaged `@devcontainers/cli` dependency and uses that binary to `up` the workspace and `exec` into `bash`; it does not install or use a host/global Dev Containers CLI package.
 
 ### GitHub CLI auth from host `gh`
 

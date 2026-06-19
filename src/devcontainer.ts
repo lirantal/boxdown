@@ -1,10 +1,8 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-
 import {
-  BOXDOWN_CONTAINER_DEVCONTAINER_DIR,
-  DEVCONTAINER_CLI_VERSION
+  BOXDOWN_CONTAINER_DEVCONTAINER_DIR
 } from './constants.ts'
 import { buildGeneratedDevcontainerConfig, publishContainerPortFromConfig, writeGeneratedDevcontainerConfig } from './config.ts'
+import { resolveDevcontainerCli } from './devcontainer-cli.ts'
 import type { WorkspaceContext } from './paths.ts'
 import { runBuffered, runInteractive } from './process.ts'
 import { interactiveShellEnvArgs, interactiveShellScript } from './shell.ts'
@@ -56,38 +54,6 @@ export async function findWorkspaceContainer (context: WorkspaceContext): Promis
   }
 
   return parseDockerPsJsonLines(result.stdout)[0]
-}
-
-export async function ensureDevcontainerCli (context: WorkspaceContext): Promise<string> {
-  const cliBin = `${context.devcontainerCliNpmPrefix}/node_modules/.bin/devcontainer`
-  const versionFile = `${context.devcontainerCliNpmPrefix}/.devcontainer-cli-version`
-
-  if (existsSync(cliBin) && existsSync(versionFile) && readFileSync(versionFile, 'utf8').trim() === DEVCONTAINER_CLI_VERSION) {
-    return cliBin
-  }
-
-  mkdirSync(context.devcontainerCliNpmPrefix, { recursive: true })
-
-  const result = await runBuffered('npm', [
-    '--prefix',
-    context.devcontainerCliNpmPrefix,
-    'install',
-    '--no-audit',
-    '--no-fund',
-    '--no-save',
-    '--package-lock=false',
-    `@devcontainers/cli@${DEVCONTAINER_CLI_VERSION}`
-  ], {
-    mirrorStdout: 'stderr',
-    mirrorStderr: 'stderr'
-  })
-
-  if (result.code !== 0) {
-    throw new Error(`Failed to install @devcontainers/cli@${DEVCONTAINER_CLI_VERSION}`)
-  }
-
-  writeFileSync(versionFile, `${DEVCONTAINER_CLI_VERSION}\n`)
-  return cliBin
 }
 
 export async function findRunningContainerId (context: WorkspaceContext): Promise<string | undefined> {
@@ -167,7 +133,7 @@ export async function startDevcontainer (context: WorkspaceContext, options: Sta
     }
   }
 
-  const cliBin = await ensureDevcontainerCli(context)
+  const cli = resolveDevcontainerCli(context)
   log(`Starting devcontainer for: ${context.workspaceFolder}`, options.proxyMode)
 
   const args = [
@@ -180,7 +146,7 @@ export async function startDevcontainer (context: WorkspaceContext, options: Sta
     log('Removing existing dev container so create-time settings apply.', options.proxyMode)
   }
 
-  const result = await runBuffered(cliBin, args, {
+  const result = await runBuffered(cli.command, [...cli.argsPrefix, ...args], {
     mirrorStdout: options.proxyMode === true ? 'stderr' : 'stdout',
     mirrorStderr: 'stderr'
   })
@@ -222,10 +188,11 @@ export async function printPortHint (context: WorkspaceContext, containerId: str
 }
 
 export async function openShell (context: WorkspaceContext): Promise<number> {
-  const cliBin = await ensureDevcontainerCli(context)
+  const cli = resolveDevcontainerCli(context)
   process.stdout.write('Dropping into container shell...\n')
 
-  return runInteractive(cliBin, [
+  return runInteractive(cli.command, [
+    ...cli.argsPrefix,
     'exec',
     ...devcontainerWorkspaceArgs(context),
     '--',
@@ -238,8 +205,9 @@ export async function openShell (context: WorkspaceContext): Promise<number> {
 }
 
 export async function ensureContainerSshRuntime (context: WorkspaceContext): Promise<void> {
-  const cliBin = await ensureDevcontainerCli(context)
-  const result = await runBuffered(cliBin, [
+  const cli = resolveDevcontainerCli(context)
+  const result = await runBuffered(cli.command, [
+    ...cli.argsPrefix,
     'exec',
     ...devcontainerWorkspaceArgs(context),
     '--',
@@ -303,8 +271,9 @@ export async function refreshContainerGhAuth (context: WorkspaceContext): Promis
     return
   }
 
-  const cliBin = await ensureDevcontainerCli(context)
-  const login = await runBuffered(cliBin, [
+  const cli = resolveDevcontainerCli(context)
+  const login = await runBuffered(cli.command, [
+    ...cli.argsPrefix,
     'exec',
     ...devcontainerWorkspaceArgs(context),
     '--',
@@ -328,7 +297,8 @@ export async function refreshContainerGhAuth (context: WorkspaceContext): Promis
     return
   }
 
-  await runBuffered(cliBin, [
+  await runBuffered(cli.command, [
+    ...cli.argsPrefix,
     'exec',
     ...devcontainerWorkspaceArgs(context),
     '--',
@@ -340,7 +310,8 @@ export async function refreshContainerGhAuth (context: WorkspaceContext): Promis
     mirrorStderr: false
   })
 
-  const verify = await runBuffered(cliBin, [
+  const verify = await runBuffered(cli.command, [
+    ...cli.argsPrefix,
     'exec',
     ...devcontainerWorkspaceArgs(context),
     '--',
