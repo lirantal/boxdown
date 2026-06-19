@@ -9,6 +9,7 @@ import { buildGeneratedDevcontainerConfig, publishContainerPortFromConfig } from
 import { parseJsonc } from '../src/jsonc.ts'
 import { parseCliArgs } from '../src/main.ts'
 import { createWorkspaceContext } from '../src/paths.ts'
+import { DEFAULT_TTY_MAX_COLUMNS, interactiveShellEnvArgs, interactiveShellScript } from '../src/shell.ts'
 import { buildSshConfigBlock, defaultSshAlias, replaceSshConfigBlock } from '../src/ssh-config.ts'
 
 const assetsDevcontainerDir = fileURLToPath(new URL('../assets/devcontainer', import.meta.url))
@@ -93,6 +94,39 @@ describe('devcontainer config generation', () => {
   test('parses JSONC without stripping URLs inside strings', () => {
     const parsed = parseJsonc<{ url: string }>('{ "url": "https://example.com/path" // keep string URL\n }')
     assert.strictEqual(parsed.url, 'https://example.com/path')
+  })
+})
+
+describe('interactive shell setup', () => {
+  test('defaults to conservative TTY width normalization', () => {
+    assert.deepStrictEqual(interactiveShellEnvArgs({ TERM: 'xterm-kitty' }), [
+      'TERM=xterm-kitty',
+      'COLORTERM=truecolor',
+      'BOXDOWN_TTY_NORMALIZE=1',
+      `BOXDOWN_TTY_MAX_COLUMNS=${DEFAULT_TTY_MAX_COLUMNS}`
+    ])
+  })
+
+  test('allows terminal width normalization overrides', () => {
+    assert.deepStrictEqual(interactiveShellEnvArgs({
+      TERM: 'xterm-256color',
+      BOXDOWN_TTY_NORMALIZE: '0',
+      BOXDOWN_TTY_MAX_COLUMNS: '180'
+    }), [
+      'TERM=xterm-256color',
+      'COLORTERM=truecolor',
+      'BOXDOWN_TTY_NORMALIZE=0',
+      'BOXDOWN_TTY_MAX_COLUMNS=180'
+    ])
+  })
+
+  test('clamps only oversized interactive TTY columns before opening bash', () => {
+    const script = interactiveShellScript()
+
+    assert.match(script, /stty size/)
+    assert.match(script, /stty cols "\$max_columns"/)
+    assert.match(script, /BOXDOWN_TTY_NORMALIZE/)
+    assert.match(script, /exec bash -i/)
   })
 })
 

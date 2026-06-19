@@ -7,6 +7,7 @@ import {
 import { buildGeneratedDevcontainerConfig, publishContainerPortFromConfig, writeGeneratedDevcontainerConfig } from './config.ts'
 import type { WorkspaceContext } from './paths.ts'
 import { runBuffered, runInteractive } from './process.ts'
+import { interactiveShellEnvArgs, interactiveShellScript } from './shell.ts'
 import { ensureHostSshKey } from './ssh-key.ts'
 
 export interface StartOptions {
@@ -156,7 +157,6 @@ export async function printPortHint (context: WorkspaceContext, containerId: str
 
 export async function openShell (context: WorkspaceContext): Promise<number> {
   const cliBin = await ensureDevcontainerCli(context)
-  const term = process.env.TERM ?? 'xterm-256color'
   process.stdout.write('Dropping into container shell...\n')
 
   return runInteractive(cliBin, [
@@ -164,9 +164,10 @@ export async function openShell (context: WorkspaceContext): Promise<number> {
     ...devcontainerWorkspaceArgs(context),
     '--',
     'env',
-    `TERM=${term}`,
-    'COLORTERM=truecolor',
-    'bash'
+    ...interactiveShellEnvArgs(),
+    'bash',
+    '-c',
+    interactiveShellScript()
   ])
 }
 
