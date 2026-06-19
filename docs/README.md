@@ -19,7 +19,7 @@ repository.
 ## Feature Docs
 
 - [Feature index](./features/README.md)
-- [Start and shell commands](./features/start-and-shell.md)
+- [Start command](./features/start-and-shell.md)
 - [SSH config and proxy workflow](./features/ssh-config-and-proxy.md)
 - [GitHub auth refresh](./features/github-auth-refresh.md)
 - [Generated config and state](./features/generated-config-and-state.md)

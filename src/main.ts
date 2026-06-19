@@ -22,7 +22,6 @@ export interface ParsedCli {
 export const USAGE = `Usage:
   boxdown start [--workspace <path>] [--recreate]
   boxdown ssh-config install [--workspace <path>] [--alias <name>]
-  boxdown install-ssh-config [--workspace <path>] [--alias <name>]
   boxdown ssh-proxy [--workspace <path>] [--alias <name>]
   boxdown refresh-gh-token [--workspace <path>]
   boxdown refresh-gh-token-running [--workspace <path>]
@@ -32,7 +31,6 @@ Commands:
                             an interactive shell inside it. Alias: shell.
   ssh-config install        Install or update an SSH host alias for the workspace
                             devcontainer.
-  install-ssh-config        Alias for ssh-config install.
   ssh-proxy                 Internal command used by the generated SSH
                             ProxyCommand. Starts or reuses the devcontainer and
                             bridges SSH over docker exec.
@@ -105,10 +103,6 @@ export function parseCliArgs (argv: string[]): ParsedCli {
   }
 
   if (positional[0] === 'ssh-config' && positional[1] === 'install' && positional.length === 2) {
-    return { command: 'ssh-config-install', workspace, alias, recreate }
-  }
-
-  if (positional[0] === 'install-ssh-config' && positional.length === 1) {
     return { command: 'ssh-config-install', workspace, alias, recreate }
   }
 

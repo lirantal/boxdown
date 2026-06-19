@@ -11,12 +11,12 @@
 # in shell mode.
 #
 # @usage
-#   .devcontainer/start.sh [options]
+#   .devcontainer/start.sh [command] [options]
 #
 # @options
 #   --shell     Start the dev container and attach an interactive shell (default).
 #   --ssh-proxy Start/reuse the dev container and proxy SSH over docker exec.
-#   --install-ssh-config
+#   ssh-config install
 #               Install/update the host SSH config alias and exit.
 #   --refresh-gh-token
 #               Start/reuse the dev container, then refresh container GitHub CLI
@@ -30,7 +30,7 @@
 #
 # @example
 #   .devcontainer/start.sh
-#   .devcontainer/start.sh --install-ssh-config
+#   .devcontainer/start.sh ssh-config install
 #   .devcontainer/start.sh --ssh-proxy
 #   .devcontainer/start.sh --refresh-gh-token
 #   .devcontainer/start.sh --refresh-gh-token-running
@@ -55,7 +55,7 @@ CONTAINER_ID=""
 
 usage() {
   cat <<EOF
-Usage: $(basename "$0") [options]
+Usage: $(basename "$0") [command] [options]
 
 Start the dev container for:
   $WORKSPACE_FOLDER
@@ -66,8 +66,6 @@ Options:
   --shell       Start the dev container and open an interactive shell (default).
   --ssh-proxy  Start/reuse the dev container and proxy SSH over docker exec.
                 Intended for SSH ProxyCommand; stdout is reserved for SSH traffic.
-  --install-ssh-config
-                Install/update the host SSH config alias and exit.
   --refresh-gh-token
                 Start/reuse the dev container, then refresh container GitHub CLI
                 auth from the host gh token when available.
@@ -77,6 +75,10 @@ Options:
   --recreate    Remove the existing dev container for this workspace before starting,
                 so Docker picks up new settings (e.g. runArgs / port mappings).
   --help, -h    Show this help and exit.
+
+Commands:
+  ssh-config install
+                Install/update the host SSH config alias and exit.
 
 Notes:
   Port publishing uses runArgs (Docker -p ...::<containerPort>). The script greps that
@@ -347,9 +349,10 @@ while [ $# -gt 0 ]; do
       MODE="ssh-proxy"
       shift
       ;;
-    --install-ssh-config)
-      MODE="install-ssh-config"
-      shift
+    ssh-config)
+      [ "${2:-}" = "install" ] || die "Unknown command: ssh-config ${2:-}"
+      MODE="ssh-config-install"
+      shift 2
       ;;
     --refresh-gh-token)
       MODE="refresh-gh-token"
@@ -378,7 +381,7 @@ case "$MODE" in
   ssh-proxy)
     run_ssh_proxy
     ;;
-  install-ssh-config)
+  ssh-config-install)
     install_ssh_config_alias
     ;;
   refresh-gh-token)

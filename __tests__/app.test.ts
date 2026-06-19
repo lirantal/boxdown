@@ -28,9 +28,12 @@ describe('CLI parsing', () => {
     })
   })
 
-  test('maps shell to start and install-ssh-config to ssh-config install', () => {
+  test('maps shell to start', () => {
     assert.strictEqual(parseCliArgs(['shell']).command, 'start')
-    assert.deepStrictEqual(parseCliArgs(['install-ssh-config', '--alias', 'demo-devcontainer']), {
+  })
+
+  test('parses ssh-config install', () => {
+    assert.deepStrictEqual(parseCliArgs(['ssh-config', 'install', '--alias', 'demo-devcontainer']), {
       command: 'ssh-config-install',
       workspace: undefined,
       alias: 'demo-devcontainer',
@@ -40,6 +43,7 @@ describe('CLI parsing', () => {
 
   test('rejects unknown commands', () => {
     assert.throws(() => parseCliArgs(['ssh-config', 'remove']), /Unknown command/)
+    assert.throws(() => parseCliArgs(['install-ssh-config']), /Unknown command/)
   })
 
   test('help describes available commands', () => {
@@ -49,7 +53,9 @@ describe('CLI parsing', () => {
     assert.match(USAGE, /start\s+Start or reuse the workspace devcontainer/)
     assert.match(USAGE, /Alias: shell/)
     assert.ok(!usageLines.includes('  boxdown shell [--workspace <path>] [--recreate]'))
+    assert.ok(!usageLines.includes('  boxdown install-ssh-config [--workspace <path>] [--alias <name>]'))
     assert.ok(!usageLines.some((line) => line.startsWith('  shell')))
+    assert.ok(!usageLines.some((line) => line.startsWith('  install-ssh-config')))
     assert.match(USAGE, /ssh-config install\s+Install or update an SSH host alias/)
     assert.match(USAGE, /ssh-proxy\s+Internal command used by the generated SSH/)
     assert.match(USAGE, /refresh-gh-token\s+Start or reuse the devcontainer/)

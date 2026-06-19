@@ -1,19 +1,20 @@
-# Start and Shell Commands
+# Start Command
 
 ## Commands
 
 ```sh
 boxdown start
-boxdown shell
 ```
 
-`shell` is an alias for `start`. Both commands target the current directory by
-default and accept:
+`start` targets the current directory by default and accepts:
 
 ```sh
 --workspace <path>
 --recreate
 ```
+
+`boxdown shell` remains supported as an alias for `boxdown start`, but `start`
+is the canonical command used in help and documentation.
 
 ## Flow
 

@@ -4,11 +4,9 @@
 
 ```sh
 boxdown ssh-config install
-boxdown install-ssh-config
 boxdown ssh-proxy
 ```
 
-`install-ssh-config` is a convenience alias for `ssh-config install`.
 `ssh-proxy` is primarily an internal command launched by OpenSSH as a
 `ProxyCommand`.
 

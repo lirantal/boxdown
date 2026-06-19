@@ -61,13 +61,14 @@ Use the same alias in Cursor, Claude, Codex, or any SSH-capable tool.
 
 ```sh
 boxdown start
-boxdown shell
 boxdown ssh-config install
-boxdown install-ssh-config
 boxdown ssh-proxy
 boxdown refresh-gh-token
 boxdown refresh-gh-token-running
 ```
+
+`boxdown shell` remains supported as an alias for `boxdown start`, but
+documentation uses `start` as the canonical command.
 
 Shared options:
 

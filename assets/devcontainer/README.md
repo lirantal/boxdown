@@ -84,7 +84,7 @@ first when you need to repair host GitHub auth.
 From the **repository root** on your host, install or update the SSH alias:
 
 ```bash
-bash .devcontainer/start.sh --install-ssh-config
+bash .devcontainer/start.sh ssh-config install
 ```
 
 By default, this creates:
@@ -121,7 +121,7 @@ If you are a coding agent running on the host OS, prefer the SSH alias workflow.
 From the repository root on the host:
 
 ```bash
-bash .devcontainer/start.sh --install-ssh-config
+bash .devcontainer/start.sh ssh-config install
 ssh <repo-name>-devcontainer 'whoami && pwd'
 ```
 
@@ -135,7 +135,7 @@ Use the generated host alias when configuring the agent:
 `start.sh` has two modes:
 
 - `bash .devcontainer/start.sh` starts or reuses the devcontainer and opens an interactive shell. Use this for a local terminal session.
-- `bash .devcontainer/start.sh --install-ssh-config` installs or refreshes the host SSH alias and exits.
+- `bash .devcontainer/start.sh ssh-config install` installs or refreshes the host SSH alias and exits.
 - `bash .devcontainer/start.sh --ssh-proxy` refreshes the SSH alias, starts or reuses the devcontainer, and then bridges SSH over `docker exec`. Do not keep this running manually in a terminal; it is meant to be launched by OpenSSH as the `ProxyCommand` in the generated SSH config.
 - `bash .devcontainer/start.sh --refresh-gh-token` starts or reuses the devcontainer, then refreshes container `gh` auth from host `gh` when a token is available.
 - `bash .devcontainer/start.sh --refresh-gh-token-running` refreshes container `gh` auth from host `gh` only when the devcontainer is already running.

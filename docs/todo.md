@@ -3,8 +3,8 @@
 This file is a handoff for the next Boxdown implementation session. It assumes
 v1 exists as a CLI-first package that stores reusable devcontainer assets under
 `assets/devcontainer/`, generates per-workspace override config outside target
-repositories, and supports start, shell, SSH proxy, SSH config install, and
-GitHub auth refresh commands.
+repositories, and supports start (with `shell` as an alias), SSH proxy, SSH
+config install, and GitHub auth refresh commands.
 
 ## Current Baseline
 
