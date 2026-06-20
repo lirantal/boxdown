@@ -211,8 +211,12 @@ export function parseCliArgs (argv: string[]): ParsedCli {
     return parsed('doctor')
   }
 
-  if (positional[0] === 'ssh-config' && positional[1] === 'install' && positional.length === 2) {
-    return parsed('ssh-config-install')
+  if (positional[0] === 'ssh-config') {
+    if (positional.length === 1 || (positional[1] === 'install' && positional.length === 2)) {
+      return parsed('ssh-config-install')
+    }
+
+    throw new Error(`Unknown ssh-config command: ${positional.slice(1).join(' ')}. Usage: boxdown ssh-config [install] [--workspace <path>] [--alias <name>]`)
   }
 
   if (positional[0] === 'ssh-proxy' && positional.length === 1) {

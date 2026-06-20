@@ -103,6 +103,13 @@ describe('CLI parsing', () => {
   })
 
   test('parses ssh-config install', () => {
+    assert.deepStrictEqual(parseCliArgs(['ssh-config']), {
+      command: 'ssh-config-install',
+      workspace: undefined,
+      alias: undefined,
+      recreate: false,
+      json: false
+    })
     assert.deepStrictEqual(parseCliArgs(['ssh-config', 'install', '--alias', 'demo-devcontainer']), {
       command: 'ssh-config-install',
       workspace: undefined,
@@ -133,7 +140,8 @@ describe('CLI parsing', () => {
   })
 
   test('rejects unknown commands', () => {
-    assert.throws(() => parseCliArgs(['ssh-config', 'remove']), /Unknown command/)
+    assert.throws(() => parseCliArgs(['ssh-config', 'remove']), /Unknown ssh-config command: remove/)
+    assert.throws(() => parseCliArgs(['ssh-config', 'install', 'extra']), /Unknown ssh-config command: install extra/)
     assert.throws(() => parseCliArgs(['install-ssh-config']), /Unknown command/)
     assert.throws(() => parseCliArgs(['start', '--json']), /--json is only supported with status and list/)
     assert.throws(() => parseCliArgs(['start', '--', '--ignored']), /passthrough is only supported/)

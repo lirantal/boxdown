@@ -354,9 +354,14 @@ while [ $# -gt 0 ]; do
       shift
       ;;
     ssh-config)
-      [ "${2:-}" = "install" ] || die "Unknown command: ssh-config ${2:-}"
       MODE="ssh-config-install"
-      shift 2
+      if [ "${2:-}" = "install" ]; then
+        shift 2
+      elif [ "$#" -eq 1 ] || [ "${2#-}" != "$2" ]; then
+        shift
+      else
+        die "Unknown command: ssh-config ${2}"
+      fi
       ;;
     --refresh-gh-token)
       MODE="refresh-gh-token"

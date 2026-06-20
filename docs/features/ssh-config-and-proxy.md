@@ -7,6 +7,9 @@ boxdown ssh-config install
 boxdown ssh-proxy
 ```
 
+`boxdown ssh-config` is accepted as a convenience shortcut for
+`boxdown ssh-config install`, but docs use the explicit install form.
+
 `ssh-proxy` is primarily an internal command launched by OpenSSH as a
 `ProxyCommand`.
 
