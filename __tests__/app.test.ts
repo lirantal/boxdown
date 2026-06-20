@@ -12,6 +12,7 @@ import { DEVCONTAINER_CLI_VERSION } from '../src/constants.ts'
 import { codingAgentDevcontainerExecArgs } from '../src/devcontainer.ts'
 import { resolveDevcontainerCli } from '../src/devcontainer-cli.ts'
 import { doctorHasFailures, formatDoctorText } from '../src/doctor.ts'
+import { canonicalGithubRemoteUrl, configureWorkspaceGithubGitAuth } from '../src/github-git-auth.ts'
 import { parseJsonc } from '../src/jsonc.ts'
 import { createWorkspaceListEntries, formatWorkspaceListText } from '../src/list.ts'
 import { parseCliArgs, USAGE } from '../src/main.ts'
@@ -481,6 +482,56 @@ describe('interactive shell setup', () => {
     assert.match(script, /stty cols "\$max_columns"/)
     assert.match(script, /BOXDOWN_TTY_NORMALIZE/)
     assert.match(script, /exec bash -i/)
+  })
+})
+
+describe('GitHub Git auth setup', () => {
+  test('canonicalizes supported GitHub remote URL forms', () => {
+    assert.strictEqual(canonicalGithubRemoteUrl('git@github.com:lirantal/lirantaldotcom.git'), 'https://github.com/lirantal/lirantaldotcom.git')
+    assert.strictEqual(canonicalGithubRemoteUrl('ssh://git@github.com/lirantal/lirantaldotcom.git'), 'https://github.com/lirantal/lirantaldotcom.git')
+    assert.strictEqual(canonicalGithubRemoteUrl('https://github.com/lirantal/lirantaldotcom'), 'https://github.com/lirantal/lirantaldotcom.git')
+    assert.strictEqual(canonicalGithubRemoteUrl('https://x-access-token@github.com/lirantal/lirantaldotcom.git'), 'https://github.com/lirantal/lirantaldotcom.git')
+    assert.strictEqual(canonicalGithubRemoteUrl('git@example.com:lirantal/lirantaldotcom.git'), undefined)
+  })
+
+  test('configures GitHub remotes for gh-backed HTTPS Git operations', async () => {
+    const workspace = tempDir('github-git-auth')
+
+    execFileSync('git', ['init'], { cwd: workspace })
+    execFileSync('git', ['remote', 'add', 'origin', 'git@github.com:lirantal/lirantaldotcom.git'], { cwd: workspace })
+    execFileSync('git', ['remote', 'add', 'upstream', 'https://x-access-token@github.com/lirantal/boxdown.git'], { cwd: workspace })
+    execFileSync('git', ['remote', 'add', 'example', 'ssh://git@example.com/lirantal/example.git'], { cwd: workspace })
+
+    assert.strictEqual(await configureWorkspaceGithubGitAuth(workspace), true)
+
+    assert.strictEqual(execFileSync('git', ['remote', 'get-url', 'origin'], { cwd: workspace }).toString('utf8').trim(), 'https://github.com/lirantal/lirantaldotcom.git')
+    assert.strictEqual(execFileSync('git', ['remote', 'get-url', '--push', 'origin'], { cwd: workspace }).toString('utf8').trim(), 'https://github.com/lirantal/lirantaldotcom.git')
+    assert.strictEqual(execFileSync('git', ['remote', 'get-url', 'upstream'], { cwd: workspace }).toString('utf8').trim(), 'https://github.com/lirantal/boxdown.git')
+    assert.strictEqual(execFileSync('git', ['remote', 'get-url', 'example'], { cwd: workspace }).toString('utf8').trim(), 'ssh://git@example.com/lirantal/example.git')
+
+    const helpers = execFileSync('git', ['config', '--local', '--get-all', 'credential.https://github.com.helper'], { cwd: workspace })
+      .toString('utf8')
+      .replace(/\r?\n$/, '')
+      .split(/\r?\n/)
+    assert.deepStrictEqual(helpers, ['', '!gh auth git-credential'])
+
+    assert.strictEqual(
+      execFileSync('git', ['config', '--local', '--get', 'url.https://github.com/lirantal/lirantaldotcom.git.insteadOf'], { cwd: workspace }).toString('utf8').trim(),
+      'https://github.com/lirantal/lirantaldotcom.git'
+    )
+
+    assert.strictEqual(
+      execFileSync('git', ['-c', 'url.git@github.com:.insteadOf=https://github.com/', 'ls-remote', '--get-url', 'https://github.com/lirantal/lirantaldotcom.git'], { cwd: workspace }).toString('utf8').trim(),
+      'https://github.com/lirantal/lirantaldotcom.git'
+    )
+  })
+
+  test('does not refresh GitHub auth during ssh-proxy startup', () => {
+    const mainSource = readFileSync(fileURLToPath(new URL('../src/main.ts', import.meta.url)), 'utf8')
+    const sshProxyBlock = /if \(parsed\.command === 'ssh-proxy'\) {([\s\S]*?)\n\s{4}if \(parsed\.command === 'refresh-gh-token-running'\)/.exec(mainSource)?.[1]
+
+    assert.ok(sshProxyBlock !== undefined)
+    assert.doesNotMatch(sshProxyBlock, /refreshContainerGhAuth/)
   })
 })
 

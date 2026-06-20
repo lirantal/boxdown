@@ -4,6 +4,7 @@ import {
 import { buildGeneratedDevcontainerConfig, publishContainerPortFromConfig, writeGeneratedDevcontainerConfig } from './config.ts'
 import { codingAgentBinary, type CodingAgentCli } from './coding-agents.ts'
 import { resolveDevcontainerCli } from './devcontainer-cli.ts'
+import { configureWorkspaceGithubGitAuth } from './github-git-auth.ts'
 import type { WorkspaceContext } from './paths.ts'
 import { runBuffered, runInteractive } from './process.ts'
 import { interactiveCommandScript, interactiveShellEnvArgs, interactiveShellScript } from './shell.ts'
@@ -365,18 +366,10 @@ export async function refreshContainerGhAuth (context: WorkspaceContext): Promis
     return
   }
 
-  await runBuffered(cli.command, [
-    ...cli.argsPrefix,
-    'exec',
-    ...devcontainerWorkspaceArgs(context),
-    '--',
-    'bash',
-    '-lc',
-    'if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then git config --local credential.https://github.com.helper "!gh auth git-credential"; fi'
-  ], {
-    mirrorStdout: false,
-    mirrorStderr: false
-  })
+  const gitAuthConfigured = await configureWorkspaceGithubGitAuth(context.workspaceFolder)
+  if (!gitAuthConfigured) {
+    process.stderr.write('Warning: GitHub CLI auth refreshed, but GitHub Git auth was not configured for this workspace.\n')
+  }
 
   const verify = await runBuffered(cli.command, [
     ...cli.argsPrefix,

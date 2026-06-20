@@ -256,9 +256,9 @@ refresh_container_gh_auth() {
     return 0
   fi
 
-  devcontainer_cli exec \
-    --workspace-folder "$WORKSPACE_FOLDER" \
-    -- bash -lc 'if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then git config --local credential.https://github.com.helper "!gh auth git-credential"; fi' >/dev/null 2>&1 || true
+  if ! configure_container_github_git_auth; then
+    log "Warning: GitHub CLI auth refreshed, but GitHub Git auth was not configured for this workspace."
+  fi
 
   if devcontainer_cli exec \
     --workspace-folder "$WORKSPACE_FOLDER" \
@@ -267,6 +267,89 @@ refresh_container_gh_auth() {
   else
     log "Warning: GitHub CLI auth refresh completed, but verification failed."
   fi
+}
+
+configure_container_github_git_auth() {
+  devcontainer_cli exec \
+    --workspace-folder "$WORKSPACE_FOLDER" \
+    -- bash -s >/dev/null 2>&1 <<'EOF'
+set -euo pipefail
+
+canonical_github_remote_url() {
+  local remote_url="$1"
+  local owner repo rest
+
+  case "$remote_url" in
+    git@github.com:*)
+      rest="${remote_url#git@github.com:}"
+      owner="${rest%%/*}"
+      repo="${rest#*/}"
+      ;;
+    ssh://git@github.com/*)
+      rest="${remote_url#ssh://git@github.com/}"
+      owner="${rest%%/*}"
+      repo="${rest#*/}"
+      ;;
+    https://github.com/*)
+      rest="${remote_url#https://github.com/}"
+      owner="${rest%%/*}"
+      repo="${rest#*/}"
+      ;;
+    https://*@github.com/*)
+      rest="${remote_url#https://*@github.com/}"
+      owner="${rest%%/*}"
+      repo="${rest#*/}"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+
+  repo="${repo%/}"
+  repo="${repo%.git}"
+
+  if [ -z "$owner" ] || [ -z "$repo" ] || [ "$owner" = "$repo" ] || [[ "$repo" == */* ]]; then
+    return 1
+  fi
+
+  printf 'https://github.com/%s/%s.git\n' "$owner" "$repo"
+}
+
+if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  exit 0
+fi
+
+remote_lines="$(git config --local --get-regexp '^remote\..*\.url$' || true)"
+if [ -z "$remote_lines" ]; then
+  exit 0
+fi
+
+configured_urls=()
+while IFS= read -r line; do
+  key="${line%% *}"
+  raw_url="${line#* }"
+  remote_name="${key#remote.}"
+  remote_name="${remote_name%.url}"
+
+  if canonical_url="$(canonical_github_remote_url "$raw_url")"; then
+    git remote set-url "$remote_name" "$canonical_url"
+    git remote set-url --push "$remote_name" "$canonical_url"
+    configured_urls+=("$canonical_url")
+  fi
+done <<< "$remote_lines"
+
+if [ "${#configured_urls[@]}" -eq 0 ]; then
+  exit 0
+fi
+
+git config --local --unset-all credential.https://github.com.helper >/dev/null 2>&1 || true
+git config --local --add credential.https://github.com.helper ''
+git config --local --add credential.https://github.com.helper '!gh auth git-credential'
+
+for canonical_url in "${configured_urls[@]}"; do
+  git config --local --replace-all "url.${canonical_url}.insteadOf" "$canonical_url"
+done
+EOF
 }
 
 run_refresh_gh_token() {

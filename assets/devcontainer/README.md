@@ -66,8 +66,15 @@ gh auth status
 gh pr status
 ```
 
-The refresh also configures this repository's Git credentials so HTTPS GitHub remotes
-can ask `gh` for credentials during `git fetch`, `git pull`, and `git push`.
+The refresh also configures this repository's local Git config so GitHub remotes
+use HTTPS and ask the container's `gh` for credentials during `git fetch`,
+`git pull`, and `git push`. This is intentionally tied to the explicit refresh
+command; regular SSH remote connections do not copy GitHub credentials.
+
+If your host `.gitconfig` is mounted into the container, Boxdown adds local
+repository settings that neutralize incompatible host-only helpers such as
+`/opt/homebrew/bin/gh` and broad rewrites such as
+`url.git@github.com:.insteadOf=https://github.com/`.
 
 If the container is already running and you only want to refresh its GitHub auth:
 
@@ -153,6 +160,9 @@ export SNYK_TOKEN=...
 ```
 
 They are wired in `devcontainer.json` under `containerEnv` via `localEnv`.
+
+If `OP_SERVICE_ACCOUNT_TOKEN` is present, it authenticates the 1Password CLI.
+It is not a GitHub token and does not authenticate `gh` or GitHub Git remotes.
 
 ## Optional customization
 
