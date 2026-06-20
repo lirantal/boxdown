@@ -31,6 +31,11 @@ The generated SSH config block includes:
 The block is wrapped in Boxdown markers so repeated installs replace the managed
 block instead of duplicating it.
 
+`boxdown status` reports whether that Boxdown-managed block is `installed`,
+`missing`, or `outdated`. It only recognizes blocks wrapped in Boxdown's marker
+comments; an unrelated OpenSSH `Host` entry with the same alias is not treated
+as an installed Boxdown alias.
+
 ## Proxy Flow
 
 When OpenSSH launches `boxdown ssh-proxy`, Boxdown:

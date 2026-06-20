@@ -86,6 +86,17 @@ Options:
   --help, -h          Show help.
 `
 
+export function commandWritesWorkspaceMetadata (command: BoxdownCommand): boolean {
+  return [
+    'start',
+    'ssh-config-install',
+    'ssh-proxy',
+    'refresh-gh-token',
+    'refresh-gh-token-running',
+    'coding-agent'
+  ].includes(command)
+}
+
 export function parseCliArgs (argv: string[]): ParsedCli {
   const args = [...argv]
   let workspace: string | undefined
@@ -259,16 +270,9 @@ export async function runCli (argv: string[] = process.argv.slice(2)): Promise<n
 
     const context = createWorkspaceContext({ workspace: parsed.workspace })
     const alias = parsed.alias ?? defaultSshAlias(context.workspaceBasename)
+    const aliasSource = parsed.alias === undefined ? 'default' : 'provided'
 
-    if ([
-      'start',
-      'status',
-      'ssh-config-install',
-      'ssh-proxy',
-      'refresh-gh-token',
-      'refresh-gh-token-running',
-      'coding-agent'
-    ].includes(parsed.command)) {
+    if (commandWritesWorkspaceMetadata(parsed.command)) {
       writeWorkspaceMetadata(context, alias)
     }
 
@@ -279,7 +283,7 @@ export async function runCli (argv: string[] = process.argv.slice(2)): Promise<n
 
     if (parsed.command === 'status') {
       const container = await findWorkspaceContainer(context)
-      const status = createStatusInfo(context, alias, container, existsSync)
+      const status = createStatusInfo(context, alias, container, existsSync, { aliasSource })
 
       if (parsed.json) {
         process.stdout.write(`${JSON.stringify(status, null, 2)}\n`)

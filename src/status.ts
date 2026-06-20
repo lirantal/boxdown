@@ -1,4 +1,10 @@
+import { readFileSync } from 'node:fs'
+
 import type { WorkspaceContext } from './paths.ts'
+import { buildSshConfigBlock, defaultSshConfigPath } from './ssh-config.ts'
+
+export type SshAliasSource = 'default' | 'provided'
+export type SshManagedBlockState = 'missing' | 'installed' | 'outdated'
 
 export interface ContainerSummary {
   id: string
@@ -16,6 +22,10 @@ export interface StatusInfo {
   }
   ssh: {
     alias: string
+    aliasSource: SshAliasSource
+    configPath: string
+    configExists: boolean
+    managedBlockState: SshManagedBlockState
     keyPath: string
     keyExists: boolean
     publicKeyPath: string
@@ -41,6 +51,12 @@ export interface StatusInfo {
     state?: string
     status?: string
   }
+}
+
+export interface SshConfigStatus {
+  configPath: string
+  configExists: boolean
+  managedBlockState: SshManagedBlockState
 }
 
 interface DockerPsJson {
@@ -88,13 +104,91 @@ export function parseDockerPsJsonLines (output: string): ContainerSummary[] {
   })
 }
 
+function readFileUtf8 (path: string): string {
+  return readFileSync(path, 'utf8')
+}
+
+function managedSshBlockMarkers (alias: string): { begin: string, end: string } {
+  return {
+    begin: `# BEGIN ${alias} boxdown devcontainer ssh`,
+    end: `# END ${alias} boxdown devcontainer ssh`
+  }
+}
+
+function findManagedSshConfigBlock (config: string, alias: string): string | undefined {
+  const { begin, end } = managedSshBlockMarkers(alias)
+  const beginIndex = config.indexOf(begin)
+
+  if (beginIndex === -1) {
+    return undefined
+  }
+
+  const endIndex = config.indexOf(end, beginIndex)
+
+  if (endIndex === -1) {
+    return ''
+  }
+
+  const afterEndMarkerIndex = endIndex + end.length
+  const afterEndLineIndex = config[afterEndMarkerIndex] === '\n' ? afterEndMarkerIndex + 1 : afterEndMarkerIndex
+
+  return config.slice(beginIndex, afterEndLineIndex)
+}
+
+export function inspectSshConfigStatus (
+  context: WorkspaceContext,
+  alias: string,
+  configPath: string,
+  exists: (path: string) => boolean,
+  readFile: (path: string) => string = readFileUtf8
+): SshConfigStatus {
+  const configExists = exists(configPath)
+
+  if (!configExists) {
+    return {
+      configPath,
+      configExists,
+      managedBlockState: 'missing'
+    }
+  }
+
+  const config = readFile(configPath)
+  const managedBlock = findManagedSshConfigBlock(config, alias)
+
+  if (managedBlock === undefined) {
+    return {
+      configPath,
+      configExists,
+      managedBlockState: 'missing'
+    }
+  }
+
+  return {
+    configPath,
+    configExists,
+    managedBlockState: managedBlock === buildSshConfigBlock(context, alias) ? 'installed' : 'outdated'
+  }
+}
+
 export function createStatusInfo (
   context: WorkspaceContext,
   alias: string,
   container: ContainerSummary | undefined,
-  exists: (path: string) => boolean
+  exists: (path: string) => boolean,
+  options: {
+    aliasSource?: SshAliasSource
+    sshConfigPath?: string
+    readFile?: (path: string) => string
+  } = {}
 ): StatusInfo {
   const state = container?.state?.toLowerCase()
+  const sshConfig = inspectSshConfigStatus(
+    context,
+    alias,
+    options.sshConfigPath ?? defaultSshConfigPath(),
+    exists,
+    options.readFile
+  )
 
   return {
     workspace: {
@@ -104,6 +198,10 @@ export function createStatusInfo (
     },
     ssh: {
       alias,
+      aliasSource: options.aliasSource ?? 'provided',
+      configPath: sshConfig.configPath,
+      configExists: sshConfig.configExists,
+      managedBlockState: sshConfig.managedBlockState,
       keyPath: context.sshKeyPath,
       keyExists: exists(context.sshKeyPath),
       publicKeyPath: context.sshPublicKeyPath,
@@ -156,8 +254,24 @@ function colorize (value: string, colorName: 'green' | 'red', enabled: boolean):
   return `${color[colorName]}${value}${color.reset}`
 }
 
-function yesNo (value: boolean, colorEnabled: boolean): string {
+function existenceText (value: boolean, colorEnabled: boolean): string {
+  return colorize(value ? 'exists' : 'missing', value ? 'green' : 'red', colorEnabled)
+}
+
+function runningText (value: boolean, colorEnabled: boolean): string {
   return colorize(value ? 'yes' : 'no', value ? 'green' : 'red', colorEnabled)
+}
+
+function managedBlockText (state: SshManagedBlockState, colorEnabled: boolean): string {
+  return colorize(state, state === 'installed' ? 'green' : 'red', colorEnabled)
+}
+
+function aliasSourceText (source: SshAliasSource): string {
+  return source === 'default' ? 'computed default' : 'provided'
+}
+
+function installedText (state: SshManagedBlockState): string {
+  return state === 'installed' ? 'installed' : 'not installed'
 }
 
 function stateText (state: string, healthy: boolean, colorEnabled: boolean): string {
@@ -175,24 +289,26 @@ export function formatStatusText (status: StatusInfo, options: { color?: boolean
     `  Path: ${status.workspace.folder}`,
     `  Name: ${status.workspace.basename}`,
     `  ID: ${status.workspace.id}`,
-    `  SSH alias: ${status.ssh.alias}`,
+    `  SSH alias: ${status.ssh.alias} (${aliasSourceText(status.ssh.aliasSource)}; ${installedText(status.ssh.managedBlockState)})`,
     '',
     'Paths:',
     `  Cache root: ${status.paths.cacheRoot}`,
     `  Data root: ${status.paths.dataRoot}`,
     `  Workspace cache: ${status.paths.workspaceCacheDir}`,
     `  Workspace data: ${status.paths.workspaceDataDir}`,
-    `  Generated config: ${status.paths.generatedConfigPath} (${yesNo(status.paths.generatedConfigExists, colorEnabled)})`,
-    `  Devcontainer assets: ${status.paths.assetsDevcontainerDir} (${yesNo(status.paths.assetsDevcontainerExists, colorEnabled)})`,
+    `  Generated config: ${status.paths.generatedConfigPath} (${existenceText(status.paths.generatedConfigExists, colorEnabled)})`,
+    `  Devcontainer assets: ${status.paths.assetsDevcontainerDir} (${existenceText(status.paths.assetsDevcontainerExists, colorEnabled)})`,
     '',
     'SSH:',
-    `  Private key: ${status.ssh.keyPath} (${yesNo(status.ssh.keyExists, colorEnabled)})`,
-    `  Public key: ${status.ssh.publicKeyPath} (${yesNo(status.ssh.publicKeyExists, colorEnabled)})`,
-    `  Runtime public key: ${status.ssh.publicKeyRuntimePath} (${yesNo(status.ssh.publicKeyRuntimeExists, colorEnabled)})`,
+    `  SSH config: ${status.ssh.configPath} (${existenceText(status.ssh.configExists, colorEnabled)})`,
+    `  Boxdown SSH block: ${managedBlockText(status.ssh.managedBlockState, colorEnabled)}`,
+    `  Private key: ${status.ssh.keyPath} (${existenceText(status.ssh.keyExists, colorEnabled)})`,
+    `  Public key: ${status.ssh.publicKeyPath} (${existenceText(status.ssh.publicKeyExists, colorEnabled)})`,
+    `  Runtime public key: ${status.ssh.publicKeyRuntimePath} (${existenceText(status.ssh.publicKeyRuntimeExists, colorEnabled)})`,
     '',
     'Container:',
     `  State: ${stateText(containerState, healthy, colorEnabled)}`,
-    `  Running: ${yesNo(status.container.running, colorEnabled)}`
+    `  Running: ${runningText(status.container.running, colorEnabled)}`
   ]
 
   if (status.container.id !== undefined) {

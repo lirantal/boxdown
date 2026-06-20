@@ -15,12 +15,12 @@ import { doctorHasFailures, formatDoctorText } from '../src/doctor.ts'
 import { canonicalGithubRemoteUrl, configureWorkspaceGithubGitAuth } from '../src/github-git-auth.ts'
 import { parseJsonc } from '../src/jsonc.ts'
 import { createWorkspaceListEntries, formatWorkspaceListText } from '../src/list.ts'
-import { parseCliArgs, USAGE } from '../src/main.ts'
+import { commandWritesWorkspaceMetadata, parseCliArgs, USAGE } from '../src/main.ts'
 import { listWorkspaceMetadata, writeWorkspaceMetadata } from '../src/metadata.ts'
 import { createWorkspaceContext } from '../src/paths.ts'
 import { DEFAULT_TTY_MAX_COLUMNS, interactiveShellEnvArgs, interactiveShellScript } from '../src/shell.ts'
 import { buildSshConfigBlock, defaultSshAlias, replaceSshConfigBlock } from '../src/ssh-config.ts'
-import { createStatusInfo, formatStatusText, parseDockerPsJsonLines, statusIsHealthy } from '../src/status.ts'
+import { createStatusInfo, formatStatusText, inspectSshConfigStatus, parseDockerPsJsonLines, statusIsHealthy } from '../src/status.ts'
 
 const assetsDevcontainerDir = fileURLToPath(new URL('../assets/devcontainer', import.meta.url))
 
@@ -241,6 +241,17 @@ describe('workspace metadata', () => {
     assert.strictEqual(second.sshAlias, 'second-alias')
     assert.deepStrictEqual(listed, second)
   })
+
+  test('status does not record workspace metadata', () => {
+    assert.strictEqual(commandWritesWorkspaceMetadata('status'), false)
+    assert.strictEqual(commandWritesWorkspaceMetadata('list'), false)
+    assert.strictEqual(commandWritesWorkspaceMetadata('start'), true)
+    assert.strictEqual(commandWritesWorkspaceMetadata('ssh-config-install'), true)
+    assert.strictEqual(commandWritesWorkspaceMetadata('ssh-proxy'), true)
+    assert.strictEqual(commandWritesWorkspaceMetadata('refresh-gh-token'), true)
+    assert.strictEqual(commandWritesWorkspaceMetadata('refresh-gh-token-running'), true)
+    assert.strictEqual(commandWritesWorkspaceMetadata('coding-agent'), true)
+  })
 })
 
 describe('workspace state', () => {
@@ -286,6 +297,47 @@ describe('status output', () => {
     assert.throws(() => parseDockerPsJsonLines('{"Names":"demo"}'), /missing container ID/)
   })
 
+  test('inspects only Boxdown-managed SSH config blocks', () => {
+    const workspace = tempDir('status-ssh-workspace')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('status-ssh-cache'),
+        BOXDOWN_DATA_HOME: tempDir('status-ssh-data')
+      },
+      assetsDevcontainerDir
+    })
+    const configDir = tempDir('status-ssh-config')
+    const sshConfigPath = join(configDir, 'config')
+
+    assert.deepStrictEqual(inspectSshConfigStatus(context, 'demo-devcontainer', sshConfigPath, existsSync), {
+      configPath: sshConfigPath,
+      configExists: false,
+      managedBlockState: 'missing'
+    })
+
+    writeFileSync(sshConfigPath, buildSshConfigBlock(context, 'demo-devcontainer'))
+    assert.deepStrictEqual(inspectSshConfigStatus(context, 'demo-devcontainer', sshConfigPath, existsSync), {
+      configPath: sshConfigPath,
+      configExists: true,
+      managedBlockState: 'installed'
+    })
+
+    writeFileSync(sshConfigPath, buildSshConfigBlock(context, 'demo-devcontainer').replace('  User node', '  User root'))
+    assert.deepStrictEqual(inspectSshConfigStatus(context, 'demo-devcontainer', sshConfigPath, existsSync), {
+      configPath: sshConfigPath,
+      configExists: true,
+      managedBlockState: 'outdated'
+    })
+
+    writeFileSync(sshConfigPath, 'Host demo-devcontainer\n  HostName localhost\n')
+    assert.deepStrictEqual(inspectSshConfigStatus(context, 'demo-devcontainer', sshConfigPath, existsSync), {
+      configPath: sshConfigPath,
+      configExists: true,
+      managedBlockState: 'missing'
+    })
+  })
+
   test('formats status for running and absent containers', () => {
     const workspace = tempDir('status-workspace')
     const context = createWorkspaceContext({
@@ -296,7 +348,10 @@ describe('status output', () => {
       },
       assetsDevcontainerDir
     })
+    const sshConfigPath = join(tempDir('status-config'), 'config')
+    writeFileSync(sshConfigPath, buildSshConfigBlock(context, 'demo-devcontainer'))
     const exists = (path: string): boolean => [
+      sshConfigPath,
       context.generatedConfigPath,
       context.assetsDevcontainerDir,
       context.sshKeyPath,
@@ -308,14 +363,17 @@ describe('status output', () => {
       name: 'demo',
       state: 'running',
       status: 'Up 2 minutes'
-    }, exists)
+    }, exists, { aliasSource: 'default', sshConfigPath })
     const stopped = createStatusInfo(context, 'demo-devcontainer', {
       id: 'def456',
       name: 'demo',
       state: 'exited',
       status: 'Exited (0) 1 minute ago'
-    }, exists)
-    const absent = createStatusInfo(context, 'demo-devcontainer', undefined, () => false)
+    }, exists, { aliasSource: 'provided', sshConfigPath })
+    const absent = createStatusInfo(context, 'demo-devcontainer', undefined, () => false, {
+      aliasSource: 'default',
+      sshConfigPath
+    })
 
     assert.strictEqual(running.container.running, true)
     assert.strictEqual(statusIsHealthy(running), true)
@@ -323,11 +381,21 @@ describe('status output', () => {
     assert.strictEqual(statusIsHealthy(stopped), false)
     assert.strictEqual(absent.container.found, false)
     assert.strictEqual(statusIsHealthy(absent), false)
+    assert.strictEqual(running.ssh.aliasSource, 'default')
+    assert.strictEqual(running.ssh.managedBlockState, 'installed')
+    assert.strictEqual(absent.ssh.managedBlockState, 'missing')
+    assert.match(formatStatusText(running), /SSH alias: demo-devcontainer \(computed default; installed\)/)
+    assert.match(formatStatusText(stopped), /SSH alias: demo-devcontainer \(provided; installed\)/)
     assert.match(formatStatusText(running), /State: running/)
     assert.match(formatStatusText(stopped), /State: exited/)
-    assert.match(formatStatusText(running), /Generated config: .* \(yes\)/)
+    assert.match(formatStatusText(running), /Generated config: .* \(exists\)/)
+    assert.match(formatStatusText(absent), /Generated config: .* \(missing\)/)
+    assert.match(formatStatusText(running), /SSH config: .* \(exists\)/)
+    assert.match(formatStatusText(running), /Boxdown SSH block: installed/)
     assert.match(formatStatusText(absent), /State: absent/)
-    assert.match(formatStatusText(absent, { color: true }), /\u001B\[31mno\u001B\[0m/)
+    assert.match(formatStatusText(absent, { color: true }), /\u001B\[31mmissing\u001B\[0m/)
+    assert.match(formatStatusText(running, { color: true }), /\u001B\[32mexists\u001B\[0m/)
+    assert.match(formatStatusText(running, { color: true }), /\u001B\[32minstalled\u001B\[0m/)
     assert.match(formatStatusText(running, { color: true }), /\u001B\[32myes\u001B\[0m/)
   })
 })
