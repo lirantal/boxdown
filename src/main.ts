@@ -1,7 +1,8 @@
 import { existsSync } from 'node:fs'
 
+import { codingAgentFromCommand, type CodingAgentCli } from './coding-agents.ts'
 import { doctorHasFailures, formatDoctorText, runDoctorChecks } from './doctor.ts'
-import { startDevcontainer, printPortHint, openShell, ensureContainerSshRuntime, runSshdProxy, refreshContainerGhAuth, refreshContainerCodingAgentClis, findRunningContainerId, findWorkspaceContainer, stopWorkspaceContainer, removeWorkspaceContainer, listWorkspaceContainers } from './devcontainer.ts'
+import { startDevcontainer, printPortHint, openShell, openCodingAgentCli, ensureContainerSshRuntime, runSshdProxy, refreshContainerGhAuth, refreshContainerCodingAgentClis, findRunningContainerId, findWorkspaceContainer, stopWorkspaceContainer, removeWorkspaceContainer, listWorkspaceContainers } from './devcontainer.ts'
 import { createWorkspaceListEntries, formatWorkspaceListText } from './list.ts'
 import { listWorkspaceMetadata, writeWorkspaceMetadata } from './metadata.ts'
 import { createWorkspaceContext, defaultDataRoot } from './paths.ts'
@@ -20,9 +21,12 @@ export type BoxdownCommand =
   | 'ssh-proxy'
   | 'refresh-gh-token'
   | 'refresh-gh-token-running'
+  | 'coding-agent'
 
 export interface ParsedCli {
   command: BoxdownCommand
+  agent?: CodingAgentCli
+  agentArgs?: string[]
   workspace?: string
   alias?: string
   recreate: boolean
@@ -31,6 +35,11 @@ export interface ParsedCli {
 
 export const USAGE = `Usage:
   boxdown start [--workspace <path>] [--recreate]
+  boxdown codex [--workspace <path>] [--recreate] [-- <codex args...>]
+  boxdown claude [--workspace <path>] [--recreate] [-- <claude args...>]
+  boxdown cc [--workspace <path>] [--recreate] [-- <claude args...>]
+  boxdown opencode [--workspace <path>] [--recreate] [-- <opencode args...>]
+  boxdown antigravity [--workspace <path>] [--recreate] [-- <agy args...>]
   boxdown list [--json]
   boxdown status [--workspace <path>] [--alias <name>] [--json]
   boxdown stop [--workspace <path>]
@@ -44,6 +53,13 @@ export const USAGE = `Usage:
 Commands:
   start                     Start or reuse the workspace devcontainer, then open
                             an interactive shell inside it. Alias: shell.
+  codex                     Start or reuse the devcontainer, then launch Codex.
+  claude                    Start or reuse the devcontainer, then launch Claude
+                            Code. Alias: cc.
+  opencode                  Start or reuse the devcontainer, then launch
+                            OpenCode.
+  antigravity               Start or reuse the devcontainer, then launch
+                            Antigravity CLI (agy).
   list                      List Boxdown-known devcontainer workspaces from any
                             directory.
   status                    Show workspace state, generated paths, SSH key paths,
@@ -76,6 +92,7 @@ export function parseCliArgs (argv: string[]): ParsedCli {
   let alias: string | undefined
   let recreate = false
   let json = false
+  let passthroughArgs: string[] | undefined
   const positional: string[] = []
 
   function parsed (command: BoxdownCommand): ParsedCli {
@@ -83,13 +100,38 @@ export function parseCliArgs (argv: string[]): ParsedCli {
       throw new Error('--json is only supported with status and list')
     }
 
+    if (passthroughArgs !== undefined) {
+      throw new Error('-- passthrough is only supported with coding-agent commands')
+    }
+
     return { command, workspace, alias, recreate, json }
+  }
+
+  function parsedCodingAgent (agent: CodingAgentCli): ParsedCli {
+    if (json) {
+      throw new Error('--json is only supported with status and list')
+    }
+
+    return {
+      command: 'coding-agent',
+      agent,
+      agentArgs: passthroughArgs ?? [],
+      workspace,
+      alias,
+      recreate,
+      json
+    }
   }
 
   while (args.length > 0) {
     const arg = args.shift()
 
     if (arg === undefined) {
+      break
+    }
+
+    if (arg === '--') {
+      passthroughArgs = args.splice(0)
       break
     }
 
@@ -138,6 +180,15 @@ export function parseCliArgs (argv: string[]): ParsedCli {
 
   if (positional[0] === 'start' || positional[0] === 'shell') {
     return parsed('start')
+  }
+
+  const codingAgent = codingAgentFromCommand(positional[0] ?? '')
+  if (codingAgent !== undefined) {
+    if (positional.length > 1) {
+      throw new Error('Coding-agent CLI arguments must come after --')
+    }
+
+    return parsedCodingAgent(codingAgent)
   }
 
   if (positional[0] === 'list' && positional.length === 1) {
@@ -211,7 +262,8 @@ export async function runCli (argv: string[] = process.argv.slice(2)): Promise<n
       'ssh-config-install',
       'ssh-proxy',
       'refresh-gh-token',
-      'refresh-gh-token-running'
+      'refresh-gh-token-running',
+      'coding-agent'
     ].includes(parsed.command)) {
       writeWorkspaceMetadata(context, alias)
     }
@@ -279,6 +331,17 @@ export async function runCli (argv: string[] = process.argv.slice(2)): Promise<n
       await startDevcontainer(context)
       await refreshContainerGhAuth(context)
       return 0
+    }
+
+    if (parsed.command === 'coding-agent') {
+      const agent = parsed.agent
+      if (agent === undefined) {
+        throw new Error('Missing coding-agent command')
+      }
+
+      await startDevcontainer(context, { recreate: parsed.recreate })
+      await refreshContainerCodingAgentClis(context, false, [agent])
+      return openCodingAgentCli(context, agent, parsed.agentArgs ?? [])
     }
 
     const containerId = await startDevcontainer(context, { recreate: parsed.recreate })

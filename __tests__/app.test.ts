@@ -6,8 +6,10 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, test } from 'node:test'
 
+import { codingAgentBinary, codingAgentFromCommand } from '../src/coding-agents.ts'
 import { buildGeneratedDevcontainerConfig, publishContainerPortFromConfig } from '../src/config.ts'
 import { DEVCONTAINER_CLI_VERSION } from '../src/constants.ts'
+import { codingAgentDevcontainerExecArgs } from '../src/devcontainer.ts'
 import { resolveDevcontainerCli } from '../src/devcontainer-cli.ts'
 import { doctorHasFailures, formatDoctorText } from '../src/doctor.ts'
 import { parseJsonc } from '../src/jsonc.ts'
@@ -38,6 +40,66 @@ describe('CLI parsing', () => {
 
   test('maps shell to start', () => {
     assert.strictEqual(parseCliArgs(['shell']).command, 'start')
+  })
+
+  test('parses coding-agent launch aliases', () => {
+    assert.deepStrictEqual(parseCliArgs(['codex']), {
+      command: 'coding-agent',
+      agent: 'codex',
+      agentArgs: [],
+      workspace: undefined,
+      alias: undefined,
+      recreate: false,
+      json: false
+    })
+    assert.deepStrictEqual(parseCliArgs(['claude']), {
+      command: 'coding-agent',
+      agent: 'claude',
+      agentArgs: [],
+      workspace: undefined,
+      alias: undefined,
+      recreate: false,
+      json: false
+    })
+    assert.deepStrictEqual(parseCliArgs(['cc']), {
+      command: 'coding-agent',
+      agent: 'claude',
+      agentArgs: [],
+      workspace: undefined,
+      alias: undefined,
+      recreate: false,
+      json: false
+    })
+    assert.deepStrictEqual(parseCliArgs(['opencode']), {
+      command: 'coding-agent',
+      agent: 'opencode',
+      agentArgs: [],
+      workspace: undefined,
+      alias: undefined,
+      recreate: false,
+      json: false
+    })
+    assert.deepStrictEqual(parseCliArgs(['antigravity']), {
+      command: 'coding-agent',
+      agent: 'antigravity',
+      agentArgs: [],
+      workspace: undefined,
+      alias: undefined,
+      recreate: false,
+      json: false
+    })
+  })
+
+  test('parses coding-agent passthrough args after delimiter', () => {
+    assert.deepStrictEqual(parseCliArgs(['claude', '--workspace', '/tmp/project', '--recreate', '--', '--continue', '--model', 'sonnet']), {
+      command: 'coding-agent',
+      agent: 'claude',
+      agentArgs: ['--continue', '--model', 'sonnet'],
+      workspace: '/tmp/project',
+      alias: undefined,
+      recreate: true,
+      json: false
+    })
   })
 
   test('parses ssh-config install', () => {
@@ -74,6 +136,9 @@ describe('CLI parsing', () => {
     assert.throws(() => parseCliArgs(['ssh-config', 'remove']), /Unknown command/)
     assert.throws(() => parseCliArgs(['install-ssh-config']), /Unknown command/)
     assert.throws(() => parseCliArgs(['start', '--json']), /--json is only supported with status and list/)
+    assert.throws(() => parseCliArgs(['start', '--', '--ignored']), /passthrough is only supported/)
+    assert.throws(() => parseCliArgs(['claude', 'resume']), /must come after --/)
+    assert.throws(() => parseCliArgs(['claude', '--continue']), /Unknown option: --continue/)
   })
 
   test('help describes available commands', () => {
@@ -82,6 +147,11 @@ describe('CLI parsing', () => {
     assert.match(USAGE, /Commands:/)
     assert.match(USAGE, /start\s+Start or reuse the workspace devcontainer/)
     assert.match(USAGE, /Alias: shell/)
+    assert.match(USAGE, /codex\s+Start or reuse the devcontainer, then launch Codex/)
+    assert.match(USAGE, /claude\s+Start or reuse the devcontainer, then launch Claude/)
+    assert.match(USAGE, /Alias: cc/)
+    assert.match(USAGE, /opencode\s+Start or reuse the devcontainer, then launch/)
+    assert.match(USAGE, /antigravity\s+Start or reuse the devcontainer, then launch/)
     assert.match(USAGE, /list\s+List Boxdown-known devcontainer workspaces/)
     assert.match(USAGE, /status\s+Show workspace state/)
     assert.match(USAGE, /stop\s+Stop the workspace devcontainer/)
@@ -95,6 +165,48 @@ describe('CLI parsing', () => {
     assert.match(USAGE, /ssh-proxy\s+Internal command used by the generated SSH/)
     assert.match(USAGE, /refresh-gh-token\s+Start or reuse the devcontainer/)
     assert.match(USAGE, /refresh-gh-token-running\s+Refresh GitHub CLI auth only if/)
+  })
+})
+
+describe('coding-agent command mapping', () => {
+  test('maps public command aliases to updater profiles and binaries', () => {
+    assert.strictEqual(codingAgentFromCommand('codex'), 'codex')
+    assert.strictEqual(codingAgentFromCommand('opencode'), 'opencode')
+    assert.strictEqual(codingAgentFromCommand('claude'), 'claude')
+    assert.strictEqual(codingAgentFromCommand('cc'), 'claude')
+    assert.strictEqual(codingAgentFromCommand('antigravity'), 'antigravity')
+    assert.strictEqual(codingAgentFromCommand('unknown'), undefined)
+
+    assert.strictEqual(codingAgentBinary('codex'), 'codex')
+    assert.strictEqual(codingAgentBinary('opencode'), 'opencode')
+    assert.strictEqual(codingAgentBinary('claude'), 'claude')
+    assert.strictEqual(codingAgentBinary('antigravity'), 'agy')
+  })
+
+  test('builds devcontainer exec args for direct coding-agent launch', () => {
+    const workspace = tempDir('agent-launch-workspace')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('agent-launch-cache'),
+        BOXDOWN_DATA_HOME: tempDir('agent-launch-data')
+      },
+      assetsDevcontainerDir
+    })
+    const args = codingAgentDevcontainerExecArgs(context, 'antigravity', ['--help'])
+
+    assert.deepStrictEqual(args.slice(0, 5), [
+      'exec',
+      '--workspace-folder',
+      context.workspaceFolder,
+      '--override-config',
+      context.generatedConfigPath
+    ])
+    assert.ok(args.includes('COLORTERM=truecolor'))
+    assert.ok(args.includes('bash'))
+    assert.ok(args.includes('-c'))
+    assert.match(args.join('\n'), /exec "\$@"/)
+    assert.deepStrictEqual(args.slice(-3), ['boxdown-agent', 'agy', '--help'])
   })
 })
 

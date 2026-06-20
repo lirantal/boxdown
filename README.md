@@ -63,6 +63,11 @@ Use the same alias in Cursor, Claude, Codex, or any SSH-capable tool.
 
 ```sh
 boxdown start
+boxdown codex
+boxdown claude
+boxdown cc
+boxdown opencode
+boxdown antigravity
 boxdown list
 boxdown status
 boxdown stop
@@ -76,6 +81,14 @@ boxdown refresh-gh-token-running
 
 `boxdown shell` remains supported as an alias for `boxdown start`, but
 documentation uses `start` as the canonical command.
+
+The coding-agent commands start or reuse the devcontainer, refresh the selected
+CLI, then launch it directly inside the container. Use `--` to pass arguments to
+the agent:
+
+```sh
+boxdown claude -- --continue
+```
 
 List Boxdown-known devcontainer environments from any directory:
 

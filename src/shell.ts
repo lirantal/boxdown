@@ -21,7 +21,7 @@ export function interactiveShellEnvArgs (env: NodeJS.ProcessEnv = process.env): 
   ]
 }
 
-export function interactiveShellScript (): string {
+function interactiveTtySetupScript (): string {
   return [
     'if [ -t 0 ]; then',
     '  case "${BOXDOWN_TTY_NORMALIZE:-1}" in',
@@ -42,6 +42,19 @@ export function interactiveShellScript (): string {
     '      ;;',
     '  esac',
     'fi',
+  ].join('\n')
+}
+
+export function interactiveShellScript (): string {
+  return [
+    interactiveTtySetupScript(),
     'exec bash -i'
+  ].join('\n')
+}
+
+export function interactiveCommandScript (): string {
+  return [
+    interactiveTtySetupScript(),
+    'exec "$@"'
   ].join('\n')
 }

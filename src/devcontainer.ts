@@ -2,10 +2,11 @@ import {
   BOXDOWN_CONTAINER_DEVCONTAINER_DIR
 } from './constants.ts'
 import { buildGeneratedDevcontainerConfig, publishContainerPortFromConfig, writeGeneratedDevcontainerConfig } from './config.ts'
+import { codingAgentBinary, type CodingAgentCli } from './coding-agents.ts'
 import { resolveDevcontainerCli } from './devcontainer-cli.ts'
 import type { WorkspaceContext } from './paths.ts'
 import { runBuffered, runInteractive } from './process.ts'
-import { interactiveShellEnvArgs, interactiveShellScript } from './shell.ts'
+import { interactiveCommandScript, interactiveShellEnvArgs, interactiveShellScript } from './shell.ts'
 import { ensureHostSshKey } from './ssh-key.ts'
 import { type ContainerSummary, parseDockerPsJsonLines } from './status.ts'
 
@@ -224,6 +225,32 @@ export async function openShell (context: WorkspaceContext): Promise<number> {
   ])
 }
 
+export function codingAgentDevcontainerExecArgs (context: WorkspaceContext, agent: CodingAgentCli, agentArgs: string[] = []): string[] {
+  return [
+    'exec',
+    ...devcontainerWorkspaceArgs(context),
+    '--',
+    'env',
+    ...interactiveShellEnvArgs(),
+    'bash',
+    '-c',
+    interactiveCommandScript(),
+    'boxdown-agent',
+    codingAgentBinary(agent),
+    ...agentArgs
+  ]
+}
+
+export async function openCodingAgentCli (context: WorkspaceContext, agent: CodingAgentCli, agentArgs: string[] = []): Promise<number> {
+  const cli = resolveDevcontainerCli(context)
+  process.stdout.write(`Dropping into ${codingAgentBinary(agent)} inside the devcontainer...\n`)
+
+  return runInteractive(cli.command, [
+    ...cli.argsPrefix,
+    ...codingAgentDevcontainerExecArgs(context, agent, agentArgs)
+  ])
+}
+
 export async function ensureContainerSshRuntime (context: WorkspaceContext): Promise<void> {
   const cli = resolveDevcontainerCli(context)
   const result = await runBuffered(cli.command, [
@@ -244,7 +271,7 @@ export async function ensureContainerSshRuntime (context: WorkspaceContext): Pro
   }
 }
 
-export async function refreshContainerCodingAgentClis (context: WorkspaceContext, proxyMode = false): Promise<void> {
+export async function refreshContainerCodingAgentClis (context: WorkspaceContext, proxyMode = false, agents: CodingAgentCli[] = []): Promise<void> {
   const cli = resolveDevcontainerCli(context)
   const result = await runBuffered(cli.command, [
     ...cli.argsPrefix,
@@ -253,7 +280,8 @@ export async function refreshContainerCodingAgentClis (context: WorkspaceContext
     '--',
     'bash',
     `${BOXDOWN_CONTAINER_DEVCONTAINER_DIR}/utils/coding-agent-cli-update.sh`,
-    'maybe-update'
+    'maybe-update',
+    ...agents
   ], {
     mirrorStdout: proxyMode ? 'stderr' : 'stdout',
     mirrorStderr: 'stderr'

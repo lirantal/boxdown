@@ -4,6 +4,11 @@
 
 ```sh
 boxdown start
+boxdown codex
+boxdown claude
+boxdown cc
+boxdown opencode
+boxdown antigravity
 ```
 
 `start` targets the current directory by default and accepts:
@@ -16,6 +21,20 @@ boxdown start
 `boxdown shell` remains supported as an alias for `boxdown start`, but `start`
 is the canonical command used in help and documentation.
 
+The coding-agent aliases start or reuse the same workspace devcontainer and
+launch the selected CLI directly:
+
+- `boxdown codex` launches `codex`.
+- `boxdown claude` and `boxdown cc` launch `claude`.
+- `boxdown opencode` launches `opencode`.
+- `boxdown antigravity` launches `agy`.
+
+Pass agent-specific arguments after `--` so Boxdown options stay unambiguous:
+
+```sh
+boxdown claude -- --continue
+```
+
 ## Flow
 
 1. Resolve the workspace to a real absolute path.
@@ -26,6 +45,10 @@ is the canonical command used in help and documentation.
 6. Run container lifecycle hooks, including a best-effort coding-agent CLI refresh.
 7. Print a dynamic port hint when the configured published port is mapped.
 8. Run `devcontainer exec ... bash` to open an interactive shell.
+
+Coding-agent aliases use the same startup flow but skip the port hint, run a
+best-effort refresh for the selected agent, and exec the agent binary instead of
+opening `bash`.
 
 ## Terminal Width
 
