@@ -23,8 +23,9 @@ is the canonical command used in help and documentation.
 3. Generate a Boxdown-owned devcontainer config.
 4. Install or reuse the pinned Dev Containers CLI.
 5. Run `devcontainer up --workspace-folder <repo> --override-config <config>`.
-6. Print a dynamic port hint when the configured published port is mapped.
-7. Run `devcontainer exec ... bash` to open an interactive shell.
+6. Run container lifecycle hooks, including a best-effort Codex CLI refresh.
+7. Print a dynamic port hint when the configured published port is mapped.
+8. Run `devcontainer exec ... bash` to open an interactive shell.
 
 ## Terminal Width
 

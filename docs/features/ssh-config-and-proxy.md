@@ -36,10 +36,15 @@ When OpenSSH launches `boxdown ssh-proxy`, Boxdown:
 2. Ensures the per-workspace host key exists.
 3. Reuses a running devcontainer when possible.
 4. Starts the devcontainer when needed.
-5. Runs the container SSH bootstrap runtime.
-6. Bridges OpenSSH to `/usr/sbin/sshd -i` through `docker exec -i`.
+5. Runs a throttled Codex CLI update preflight inside the container.
+6. Runs the container SSH bootstrap runtime.
+7. Bridges OpenSSH to `/usr/sbin/sshd -i` through `docker exec -i`.
 
 This does not publish an SSH port. The SSH stream travels through Docker exec.
+
+The Codex CLI update preflight covers already-running containers, where
+`postStartCommand` does not necessarily run before a new SSH session. Its output
+is routed to stderr so stdout remains reserved for SSH traffic.
 
 ## Key Boundary
 

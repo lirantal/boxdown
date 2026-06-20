@@ -244,6 +244,26 @@ export async function ensureContainerSshRuntime (context: WorkspaceContext): Pro
   }
 }
 
+export async function refreshContainerCodexCli (context: WorkspaceContext, proxyMode = false): Promise<void> {
+  const cli = resolveDevcontainerCli(context)
+  const result = await runBuffered(cli.command, [
+    ...cli.argsPrefix,
+    'exec',
+    ...devcontainerWorkspaceArgs(context),
+    '--',
+    'bash',
+    `${BOXDOWN_CONTAINER_DEVCONTAINER_DIR}/utils/codex-cli-update.sh`,
+    'maybe-update'
+  ], {
+    mirrorStdout: proxyMode ? 'stderr' : 'stdout',
+    mirrorStderr: 'stderr'
+  })
+
+  if (result.code !== 0) {
+    process.stderr.write('Warning: could not refresh Codex CLI inside the devcontainer.\n')
+  }
+}
+
 export async function runSshdProxy (containerId: string): Promise<number> {
   return runInteractive('docker', [
     'exec',

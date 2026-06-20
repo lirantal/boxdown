@@ -1,5 +1,5 @@
 import assert from 'node:assert'
-import { existsSync, mkdtempSync, realpathSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, realpathSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -411,6 +411,17 @@ describe('SSH config generation', () => {
 describe('packaged assets', () => {
   test('does not include generated SSH key material', () => {
     assert.strictEqual(existsSync(join(assetsDevcontainerDir, '.ssh')), false)
+  })
+
+  test('refreshes Codex CLI from lifecycle hooks through updater utility', () => {
+    const postCreate = readFileSync(join(assetsDevcontainerDir, 'hooks', 'post-create.sh'), 'utf8')
+    const postStart = readFileSync(join(assetsDevcontainerDir, 'hooks', 'post-start.sh'), 'utf8')
+    const updater = readFileSync(join(assetsDevcontainerDir, 'utils', 'codex-cli-update.sh'), 'utf8')
+
+    assert.match(postCreate, /install_or_update_codex_cli/)
+    assert.match(postCreate, /codex-cli-update\.sh" install/)
+    assert.match(postStart, /codex-cli-update\.sh" update-now/)
+    assert.match(updater, /maybe-update/)
   })
 
   test('resolves packaged devcontainers CLI dependency', () => {

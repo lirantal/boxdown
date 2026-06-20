@@ -8,7 +8,7 @@ main() {
   configure_local_git
   install_openssh_server
   install_apm
-  install_codex_cli
+  install_or_update_codex_cli
   # install_opencode_cli
   install_1password_cli
   install_snyk_cli
@@ -29,8 +29,10 @@ install_apm() {
   curl -sSL https://aka.ms/apm-unix | sh
 }
 
-install_codex_cli() {
-  curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_NON_INTERACTIVE=1 sh
+install_or_update_codex_cli() {
+  # Keep Codex CLI install/update behavior in one utility so post-create,
+  # post-start, and SSH proxy preflight all use the same path.
+  bash "${DEVCONTAINER_DIR}/utils/codex-cli-update.sh" install
 }
 
 install_opencode_cli() {
