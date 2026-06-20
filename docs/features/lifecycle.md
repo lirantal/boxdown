@@ -28,16 +28,23 @@ shown as `missing`.
 
 ## Status
 
-`status` reports the resolved workspace, generated config path, cache/data
-paths, SSH key paths, SSH alias, and the matching Docker container state. Human
-output color-codes healthy values in green and missing or unhealthy values in
-red.
+`status` is read-only. It reports the resolved workspace, intended cache/data
+paths, generated config path, SSH key paths, SSH alias, and the matching Docker
+container state without recording the workspace in Boxdown metadata.
+
+Human output distinguishes intended values from detected state. For example, an
+SSH alias can be shown as a computed default even when the matching Boxdown SSH
+config block has not been installed. Existing paths are labeled `exists`,
+missing paths are labeled `missing`, and managed SSH config blocks are labeled
+`installed`, `missing`, or `outdated`. Healthy values are color-coded green and
+missing or unhealthy values are color-coded red.
 
 `status --json` prints the same information as structured JSON for scripts.
 `status` exits 0 only when the generated config exists, devcontainer assets
 exist, SSH key material exists, the runtime public key exists, and the
 workspace container is running. Missing setup or a stopped/absent container is
-reported in the output and exits nonzero.
+reported in the output and exits nonzero. Installing an SSH alias is optional
+and is not required for a healthy status exit.
 
 ## Stop and Down
 
