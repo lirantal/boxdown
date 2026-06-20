@@ -10,7 +10,9 @@ import { DEVCONTAINER_CLI_VERSION } from '../src/constants.ts'
 import { resolveDevcontainerCli } from '../src/devcontainer-cli.ts'
 import { doctorHasFailures, formatDoctorText } from '../src/doctor.ts'
 import { parseJsonc } from '../src/jsonc.ts'
+import { createWorkspaceListEntries, formatWorkspaceListText } from '../src/list.ts'
 import { parseCliArgs, USAGE } from '../src/main.ts'
+import { listWorkspaceMetadata, writeWorkspaceMetadata } from '../src/metadata.ts'
 import { createWorkspaceContext } from '../src/paths.ts'
 import { DEFAULT_TTY_MAX_COLUMNS, interactiveShellEnvArgs, interactiveShellScript } from '../src/shell.ts'
 import { buildSshConfigBlock, defaultSshAlias, replaceSshConfigBlock } from '../src/ssh-config.ts'
@@ -48,6 +50,13 @@ describe('CLI parsing', () => {
   })
 
   test('parses lifecycle commands', () => {
+    assert.deepStrictEqual(parseCliArgs(['list', '--json']), {
+      command: 'list',
+      workspace: undefined,
+      alias: undefined,
+      recreate: false,
+      json: true
+    })
     assert.deepStrictEqual(parseCliArgs(['status', '--workspace', '/tmp/project', '--alias', 'demo-devcontainer', '--json']), {
       command: 'status',
       workspace: '/tmp/project',
@@ -63,7 +72,7 @@ describe('CLI parsing', () => {
   test('rejects unknown commands', () => {
     assert.throws(() => parseCliArgs(['ssh-config', 'remove']), /Unknown command/)
     assert.throws(() => parseCliArgs(['install-ssh-config']), /Unknown command/)
-    assert.throws(() => parseCliArgs(['start', '--json']), /--json is only supported with status/)
+    assert.throws(() => parseCliArgs(['start', '--json']), /--json is only supported with status and list/)
   })
 
   test('help describes available commands', () => {
@@ -72,6 +81,7 @@ describe('CLI parsing', () => {
     assert.match(USAGE, /Commands:/)
     assert.match(USAGE, /start\s+Start or reuse the workspace devcontainer/)
     assert.match(USAGE, /Alias: shell/)
+    assert.match(USAGE, /list\s+List Boxdown-known devcontainer workspaces/)
     assert.match(USAGE, /status\s+Show workspace state/)
     assert.match(USAGE, /stop\s+Stop the workspace devcontainer/)
     assert.match(USAGE, /down\s+Remove the workspace devcontainer/)
@@ -84,6 +94,30 @@ describe('CLI parsing', () => {
     assert.match(USAGE, /ssh-proxy\s+Internal command used by the generated SSH/)
     assert.match(USAGE, /refresh-gh-token\s+Start or reuse the devcontainer/)
     assert.match(USAGE, /refresh-gh-token-running\s+Refresh GitHub CLI auth only if/)
+  })
+})
+
+describe('workspace metadata', () => {
+  test('writes stable metadata and preserves firstSeenAt', () => {
+    const workspace = tempDir('metadata-workspace')
+    const data = tempDir('metadata-data')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('metadata-cache'),
+        BOXDOWN_DATA_HOME: data
+      },
+      assetsDevcontainerDir
+    })
+    const first = writeWorkspaceMetadata(context, 'first-alias', new Date('2026-01-01T00:00:00.000Z'))
+    const second = writeWorkspaceMetadata(context, 'second-alias', new Date('2026-01-02T00:00:00.000Z'))
+    const [listed] = listWorkspaceMetadata(data)
+
+    assert.strictEqual(first.firstSeenAt, '2026-01-01T00:00:00.000Z')
+    assert.strictEqual(second.firstSeenAt, first.firstSeenAt)
+    assert.strictEqual(second.lastSeenAt, '2026-01-02T00:00:00.000Z')
+    assert.strictEqual(second.sshAlias, 'second-alias')
+    assert.deepStrictEqual(listed, second)
   })
 })
 
@@ -112,12 +146,13 @@ describe('workspace state', () => {
 
 describe('status output', () => {
   test('parses docker ps JSON lines', () => {
-    assert.deepStrictEqual(parseDockerPsJsonLines('{"ID":"abc123","Names":"demo","State":"running","Status":"Up 2 minutes"}\n'), [
+    assert.deepStrictEqual(parseDockerPsJsonLines('{"ID":"abc123","Names":"demo","State":"running","Status":"Up 2 minutes","Labels":"devcontainer.local_folder=/tmp/demo,other=value"}\n'), [
       {
         id: 'abc123',
         name: 'demo',
         state: 'running',
-        status: 'Up 2 minutes'
+        status: 'Up 2 minutes',
+        localFolder: '/tmp/demo'
       }
     ])
 
@@ -172,6 +207,76 @@ describe('status output', () => {
     assert.match(formatStatusText(absent), /State: absent/)
     assert.match(formatStatusText(absent, { color: true }), /\u001B\[31mno\u001B\[0m/)
     assert.match(formatStatusText(running, { color: true }), /\u001B\[32myes\u001B\[0m/)
+  })
+})
+
+describe('workspace list output', () => {
+  test('formats empty list output', () => {
+    assert.strictEqual(formatWorkspaceListText([]), 'Boxdown list\n\nNo Boxdown workspaces found.\n')
+  })
+
+  test('sorts workspaces and joins container state', () => {
+    const alphaWorkspace = tempDir('alpha-workspace')
+    const betaWorkspace = '/tmp/boxdown-missing-beta-workspace'
+    const entries = createWorkspaceListEntries([
+      {
+        version: 1,
+        workspaceId: 'beta-id',
+        workspaceFolder: betaWorkspace,
+        workspaceBasename: 'beta',
+        sshAlias: 'beta-devcontainer',
+        firstSeenAt: '2026-01-01T00:00:00.000Z',
+        lastSeenAt: '2026-01-02T00:00:00.000Z'
+      },
+      {
+        version: 1,
+        workspaceId: 'alpha-id',
+        workspaceFolder: alphaWorkspace,
+        workspaceBasename: 'alpha',
+        sshAlias: 'alpha-devcontainer',
+        firstSeenAt: '2026-01-01T00:00:00.000Z',
+        lastSeenAt: '2026-01-02T00:00:00.000Z'
+      }
+    ], [
+      {
+        id: 'abc123',
+        name: 'alpha-container',
+        state: 'running',
+        status: 'Up 2 minutes',
+        localFolder: alphaWorkspace
+      }
+    ], (path) => path === alphaWorkspace)
+
+    assert.strictEqual(entries[0]?.workspaceBasename, 'alpha')
+    assert.strictEqual(entries[0]?.repoExists, true)
+    assert.strictEqual(entries[0]?.state, 'running')
+    assert.strictEqual(entries[0]?.container.running, true)
+    assert.strictEqual(entries[1]?.workspaceBasename, 'beta')
+    assert.strictEqual(entries[1]?.repoExists, false)
+    assert.strictEqual(entries[1]?.state, 'missing')
+    assert.match(formatWorkspaceListText(entries), /STATE\s+REPO\s+PATH\s+SSH ALIAS\s+CONTAINER/)
+    assert.match(formatWorkspaceListText(entries), /running\s+alpha/)
+    assert.match(formatWorkspaceListText(entries), /missing\s+beta/)
+  })
+
+  test('marks container state unknown when Docker is unavailable', () => {
+    const workspace = tempDir('unknown-docker-workspace')
+    const [entry] = createWorkspaceListEntries([
+      {
+        version: 1,
+        workspaceId: 'unknown-id',
+        workspaceFolder: workspace,
+        workspaceBasename: 'unknown',
+        sshAlias: 'unknown-devcontainer',
+        firstSeenAt: '2026-01-01T00:00:00.000Z',
+        lastSeenAt: '2026-01-02T00:00:00.000Z'
+      }
+    ], undefined, (path) => path === workspace)
+
+    assert.strictEqual(entry?.state, 'unknown')
+    assert.strictEqual(entry?.container.found, false)
+    assert.strictEqual(entry?.container.running, false)
+    assert.strictEqual(entry?.container.state, 'unknown')
   })
 })
 

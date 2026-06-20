@@ -63,6 +63,7 @@ Use the same alias in Cursor, Claude, Codex, or any SSH-capable tool.
 
 ```sh
 boxdown start
+boxdown list
 boxdown status
 boxdown stop
 boxdown down
@@ -76,13 +77,20 @@ boxdown refresh-gh-token-running
 `boxdown shell` remains supported as an alias for `boxdown start`, but
 documentation uses `start` as the canonical command.
 
+List Boxdown-known devcontainer environments from any directory:
+
+```sh
+boxdown list
+boxdown list --json
+```
+
 Shared options:
 
 ```sh
 --workspace <path>  # target project directory, defaults to cwd
 --alias <name>      # SSH alias, defaults to <repo-name>-devcontainer
 --recreate          # recreate the devcontainer before starting
---json              # JSON output for status
+--json              # JSON output for status and list
 ```
 
 ## Contributing

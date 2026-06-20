@@ -5,6 +5,7 @@ export interface ContainerSummary {
   name?: string
   state?: string
   status?: string
+  localFolder?: string
 }
 
 export interface StatusInfo {
@@ -47,6 +48,18 @@ interface DockerPsJson {
   Names?: unknown
   State?: unknown
   Status?: unknown
+  Labels?: unknown
+}
+
+function dockerLabelsFromString (labels: string): Record<string, string> {
+  return Object.fromEntries(labels
+    .split(',')
+    .map((label) => label.trim())
+    .filter((label) => label.length > 0)
+    .map((label) => {
+      const separator = label.indexOf('=')
+      return separator === -1 ? [label, ''] : [label.slice(0, separator), label.slice(separator + 1)]
+    }))
 }
 
 export function parseDockerPsJsonLines (output: string): ContainerSummary[] {
@@ -69,7 +82,8 @@ export function parseDockerPsJsonLines (output: string): ContainerSummary[] {
       id: parsed.ID,
       name: typeof parsed.Names === 'string' && parsed.Names.length > 0 ? parsed.Names : undefined,
       state: typeof parsed.State === 'string' && parsed.State.length > 0 ? parsed.State : undefined,
-      status: typeof parsed.Status === 'string' && parsed.Status.length > 0 ? parsed.Status : undefined
+      status: typeof parsed.Status === 'string' && parsed.Status.length > 0 ? parsed.Status : undefined,
+      localFolder: typeof parsed.Labels === 'string' ? dockerLabelsFromString(parsed.Labels)['devcontainer.local_folder'] : undefined
     }
   })
 }

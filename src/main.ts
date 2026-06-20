@@ -1,14 +1,17 @@
 import { existsSync } from 'node:fs'
 
 import { doctorHasFailures, formatDoctorText, runDoctorChecks } from './doctor.ts'
-import { startDevcontainer, printPortHint, openShell, ensureContainerSshRuntime, runSshdProxy, refreshContainerGhAuth, findRunningContainerId, findWorkspaceContainer, stopWorkspaceContainer, removeWorkspaceContainer } from './devcontainer.ts'
-import { createWorkspaceContext } from './paths.ts'
+import { startDevcontainer, printPortHint, openShell, ensureContainerSshRuntime, runSshdProxy, refreshContainerGhAuth, findRunningContainerId, findWorkspaceContainer, stopWorkspaceContainer, removeWorkspaceContainer, listWorkspaceContainers } from './devcontainer.ts'
+import { createWorkspaceListEntries, formatWorkspaceListText } from './list.ts'
+import { listWorkspaceMetadata, writeWorkspaceMetadata } from './metadata.ts'
+import { createWorkspaceContext, defaultDataRoot } from './paths.ts'
 import { defaultSshAlias, installSshConfig } from './ssh-config.ts'
 import { createStatusInfo, formatStatusText, statusIsHealthy } from './status.ts'
 
 export type BoxdownCommand =
   | 'help'
   | 'start'
+  | 'list'
   | 'status'
   | 'stop'
   | 'down'
@@ -28,6 +31,7 @@ export interface ParsedCli {
 
 export const USAGE = `Usage:
   boxdown start [--workspace <path>] [--recreate]
+  boxdown list [--json]
   boxdown status [--workspace <path>] [--alias <name>] [--json]
   boxdown stop [--workspace <path>]
   boxdown down [--workspace <path>]
@@ -40,6 +44,8 @@ export const USAGE = `Usage:
 Commands:
   start                     Start or reuse the workspace devcontainer, then open
                             an interactive shell inside it. Alias: shell.
+  list                      List Boxdown-known devcontainer workspaces from any
+                            directory.
   status                    Show workspace state, generated paths, SSH key paths,
                             and the matching devcontainer state.
   stop                      Stop the workspace devcontainer if it is running.
@@ -60,7 +66,7 @@ Options:
   --workspace <path>  Target project directory. Defaults to the current directory.
   --alias <name>      SSH host alias. Defaults to <repo-name>-devcontainer.
   --recreate          Remove the existing devcontainer before starting.
-  --json              Print JSON output. Supported by status only.
+  --json              Print JSON output. Supported by status and list.
   --help, -h          Show help.
 `
 
@@ -73,8 +79,8 @@ export function parseCliArgs (argv: string[]): ParsedCli {
   const positional: string[] = []
 
   function parsed (command: BoxdownCommand): ParsedCli {
-    if (json && command !== 'status') {
-      throw new Error('--json is only supported with status')
+    if (json && command !== 'status' && command !== 'list') {
+      throw new Error('--json is only supported with status and list')
     }
 
     return { command, workspace, alias, recreate, json }
@@ -134,6 +140,10 @@ export function parseCliArgs (argv: string[]): ParsedCli {
     return parsed('start')
   }
 
+  if (positional[0] === 'list' && positional.length === 1) {
+    return parsed('list')
+  }
+
   if (positional[0] === 'status' && positional.length === 1) {
     return parsed('status')
   }
@@ -178,8 +188,33 @@ export async function runCli (argv: string[] = process.argv.slice(2)): Promise<n
       return 0
     }
 
+    if (parsed.command === 'list') {
+      const metadata = listWorkspaceMetadata(defaultDataRoot())
+      const containers = await listWorkspaceContainers()
+      const entries = createWorkspaceListEntries(metadata, containers, existsSync)
+
+      if (parsed.json) {
+        process.stdout.write(`${JSON.stringify(entries, null, 2)}\n`)
+      } else {
+        process.stdout.write(formatWorkspaceListText(entries))
+      }
+
+      return 0
+    }
+
     const context = createWorkspaceContext({ workspace: parsed.workspace })
     const alias = parsed.alias ?? defaultSshAlias(context.workspaceBasename)
+
+    if ([
+      'start',
+      'status',
+      'ssh-config-install',
+      'ssh-proxy',
+      'refresh-gh-token',
+      'refresh-gh-token-running'
+    ].includes(parsed.command)) {
+      writeWorkspaceMetadata(context, alias)
+    }
 
     if (parsed.command === 'ssh-config-install') {
       await installSshConfig(context, alias)

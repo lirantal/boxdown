@@ -56,6 +56,26 @@ export async function findWorkspaceContainer (context: WorkspaceContext): Promis
   return parseDockerPsJsonLines(result.stdout)[0]
 }
 
+export async function listWorkspaceContainers (): Promise<ContainerSummary[] | undefined> {
+  const result = await runBuffered('docker', [
+    'ps',
+    '-a',
+    '--filter',
+    'label=devcontainer.local_folder',
+    '--format',
+    '{{json .}}'
+  ], {
+    mirrorStdout: false,
+    mirrorStderr: false
+  })
+
+  if (result.code !== 0) {
+    return undefined
+  }
+
+  return parseDockerPsJsonLines(result.stdout)
+}
+
 export async function findRunningContainerId (context: WorkspaceContext): Promise<string | undefined> {
   const result = await runBuffered('docker', [
     'ps',

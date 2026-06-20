@@ -3,6 +3,8 @@
 ## Commands
 
 ```sh
+boxdown list
+boxdown list --json
 boxdown status
 boxdown status --json
 boxdown stop
@@ -10,8 +12,19 @@ boxdown down
 boxdown doctor
 ```
 
-All commands accept `--workspace <path>`. `status` also accepts `--alias <name>`
-so its output can match a custom SSH host alias.
+Workspace-targeting commands accept `--workspace <path>`. `status` also accepts
+`--alias <name>` so its output can match a custom SSH host alias.
+
+## List
+
+`list` shows every workspace with Boxdown metadata under the data root,
+regardless of the directory where the command is run. Human output includes
+`STATE`, `REPO`, `PATH`, `SSH ALIAS`, and `CONTAINER` columns.
+
+`list --json` prints the same inventory as structured JSON. Docker state is
+best-effort: if Docker is unavailable, entries still print and their container
+state is `unknown`. If a recorded repository path no longer exists, the entry is
+shown as `missing`.
 
 ## Status
 

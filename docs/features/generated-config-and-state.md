@@ -35,6 +35,15 @@ Boxdown-specific override is not set.
 SSH private keys live in persistent data. A public-key-only runtime directory is
 used for the container mount.
 
+Each touched workspace also records inventory metadata at:
+
+```text
+~/.local/share/boxdown/workspaces/<workspace-hash>/metadata.json
+```
+
+`boxdown list` reads these metadata files as its source of truth, then enriches
+entries with best-effort Docker state.
+
 ## Generated Changes
 
 Boxdown starts from `assets/devcontainer/devcontainer.json` and rewrites:
