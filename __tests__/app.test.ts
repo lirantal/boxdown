@@ -1,5 +1,6 @@
 import assert from 'node:assert'
-import { existsSync, mkdtempSync, readFileSync, realpathSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -413,15 +414,48 @@ describe('packaged assets', () => {
     assert.strictEqual(existsSync(join(assetsDevcontainerDir, '.ssh')), false)
   })
 
-  test('refreshes Codex CLI from lifecycle hooks through updater utility', () => {
+  test('refreshes coding-agent CLIs from lifecycle hooks through updater utility', () => {
     const postCreate = readFileSync(join(assetsDevcontainerDir, 'hooks', 'post-create.sh'), 'utf8')
     const postStart = readFileSync(join(assetsDevcontainerDir, 'hooks', 'post-start.sh'), 'utf8')
+    const updater = readFileSync(join(assetsDevcontainerDir, 'utils', 'coding-agent-cli-update.sh'), 'utf8')
+    const codexWrapper = readFileSync(join(assetsDevcontainerDir, 'utils', 'codex-cli-update.sh'), 'utf8')
+
+    assert.match(postCreate, /install_or_update_coding_agent_clis/)
+    assert.match(postCreate, /coding-agent-cli-update\.sh" install/)
+    assert.match(postStart, /coding-agent-cli-update\.sh" maybe-update/)
+    assert.match(updater, /DEFAULT_AGENTS=\(codex opencode claude antigravity\)/)
+    assert.match(updater, /codex update/)
+    assert.match(updater, /opencode upgrade --method curl/)
+    assert.match(updater, /claude update/)
+    assert.match(updater, /antigravity\.google\/cli\/install\.sh/)
+    assert.match(codexWrapper, /coding-agent-cli-update\.sh" "\$\{1:-maybe-update\}" codex/)
+  })
+
+  test('skips coding-agent CLI refresh when all stamps are fresh', () => {
+    const updaterPath = join(assetsDevcontainerDir, 'utils', 'coding-agent-cli-update.sh')
+    const stateDir = tempDir('coding-agent-update-state')
+    mkdirSync(stateDir, { recursive: true })
+
+    for (const agent of ['codex', 'opencode', 'claude', 'antigravity']) {
+      writeFileSync(join(stateDir, `${agent}.stamp`), '')
+    }
+
+    execFileSync('bash', [updaterPath, 'maybe-update'], {
+      env: {
+        ...process.env,
+        BOXDOWN_CODING_AGENT_UPDATE_STATE_DIR: stateDir,
+        BOXDOWN_CODING_AGENT_UPDATE_INTERVAL_SECONDS: '999999'
+      },
+      stdio: 'pipe'
+    })
+  })
+
+  test('keeps Codex updater compatibility wrapper', () => {
     const updater = readFileSync(join(assetsDevcontainerDir, 'utils', 'codex-cli-update.sh'), 'utf8')
 
-    assert.match(postCreate, /install_or_update_codex_cli/)
-    assert.match(postCreate, /codex-cli-update\.sh" install/)
-    assert.match(postStart, /codex-cli-update\.sh" update-now/)
-    assert.match(updater, /maybe-update/)
+    assert.match(updater, /Compatibility wrapper/)
+    assert.match(updater, /coding-agent-cli-update\.sh/)
+    assert.match(updater, /codex/)
   })
 
   test('resolves packaged devcontainers CLI dependency', () => {

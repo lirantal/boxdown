@@ -244,7 +244,7 @@ export async function ensureContainerSshRuntime (context: WorkspaceContext): Pro
   }
 }
 
-export async function refreshContainerCodexCli (context: WorkspaceContext, proxyMode = false): Promise<void> {
+export async function refreshContainerCodingAgentClis (context: WorkspaceContext, proxyMode = false): Promise<void> {
   const cli = resolveDevcontainerCli(context)
   const result = await runBuffered(cli.command, [
     ...cli.argsPrefix,
@@ -252,7 +252,7 @@ export async function refreshContainerCodexCli (context: WorkspaceContext, proxy
     ...devcontainerWorkspaceArgs(context),
     '--',
     'bash',
-    `${BOXDOWN_CONTAINER_DEVCONTAINER_DIR}/utils/codex-cli-update.sh`,
+    `${BOXDOWN_CONTAINER_DEVCONTAINER_DIR}/utils/coding-agent-cli-update.sh`,
     'maybe-update'
   ], {
     mirrorStdout: proxyMode ? 'stderr' : 'stdout',
@@ -260,7 +260,7 @@ export async function refreshContainerCodexCli (context: WorkspaceContext, proxy
   })
 
   if (result.code !== 0) {
-    process.stderr.write('Warning: could not refresh Codex CLI inside the devcontainer.\n')
+    process.stderr.write('Warning: could not refresh one or more coding-agent CLIs inside the devcontainer.\n')
   }
 }
 

@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs'
 
 import { doctorHasFailures, formatDoctorText, runDoctorChecks } from './doctor.ts'
-import { startDevcontainer, printPortHint, openShell, ensureContainerSshRuntime, runSshdProxy, refreshContainerGhAuth, refreshContainerCodexCli, findRunningContainerId, findWorkspaceContainer, stopWorkspaceContainer, removeWorkspaceContainer, listWorkspaceContainers } from './devcontainer.ts'
+import { startDevcontainer, printPortHint, openShell, ensureContainerSshRuntime, runSshdProxy, refreshContainerGhAuth, refreshContainerCodingAgentClis, findRunningContainerId, findWorkspaceContainer, stopWorkspaceContainer, removeWorkspaceContainer, listWorkspaceContainers } from './devcontainer.ts'
 import { createWorkspaceListEntries, formatWorkspaceListText } from './list.ts'
 import { listWorkspaceMetadata, writeWorkspaceMetadata } from './metadata.ts'
 import { createWorkspaceContext, defaultDataRoot } from './paths.ts'
@@ -261,7 +261,7 @@ export async function runCli (argv: string[] = process.argv.slice(2)): Promise<n
         proxyMode: true,
         reuseRunning: true
       })
-      await refreshContainerCodexCli(context, true)
+      await refreshContainerCodingAgentClis(context, true)
       await ensureContainerSshRuntime(context)
       return runSshdProxy(containerId)
     }

@@ -9,7 +9,7 @@ DEVCONTAINER_DIR="$(cd "${HOOKS_DIR}/.." && pwd)"
 
 main() {
   configure_sshd_runtime
-  refresh_codex_cli
+  refresh_coding_agent_clis
   remove_ephemeral_env_file_if_present
 }
 
@@ -17,9 +17,9 @@ configure_sshd_runtime() {
   bash "${DEVCONTAINER_DIR}/utils/ssh-bootstrap.sh" runtime
 }
 
-refresh_codex_cli() {
-  bash "${DEVCONTAINER_DIR}/utils/codex-cli-update.sh" update-now ||
-    echo "post-start: warning: could not refresh Codex CLI." >&2
+refresh_coding_agent_clis() {
+  bash "${DEVCONTAINER_DIR}/utils/coding-agent-cli-update.sh" maybe-update ||
+    echo "post-start: warning: one or more coding-agent CLI refreshes failed." >&2
 }
 
 # When initializeCommand + runArgs inject secrets via .env.development, remove the file

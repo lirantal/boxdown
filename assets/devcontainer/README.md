@@ -18,9 +18,10 @@ Run this project in a **consistent Node.js 24 + TypeScript** environment without
 | `start.sh` | Brings the dev container up with the Dev Containers CLI, then opens a shell **inside** the container or acts as an SSH `ProxyCommand`. |
 | `ssh-config-install.sh` | Installs/updates a host SSH config alias for Cursor, Claude, or plain `ssh`. |
 | `hooks/initialize.sh` | Runs on the host before container create/start; prepares the env file and optional secrets. |
-| `hooks/post-create.sh` | Runs once after the container is created — e.g. installs [APM](https://github.com/microsoft/apm) (Agent Package Manager), Codex CLI, and OpenSSH server. |
+| `hooks/post-create.sh` | Runs once after the container is created — e.g. installs [APM](https://github.com/microsoft/apm) (Agent Package Manager), coding-agent CLIs, and OpenSSH server. |
 | `hooks/post-start.sh` | Runs on each container start; refreshes runtime state such as SSH host keys and authorized keys. |
 | `utils/ssh-bootstrap.sh` | Container-side OpenSSH install/runtime helper used by lifecycle scripts. |
+| `utils/coding-agent-cli-update.sh` | Shared install/update helper for Codex, OpenCode, Claude Code, and Antigravity CLI. |
 | `utils/deps-install.sh` | Dependency installation helper used by `hooks/post-create.sh`. |
 
 ## Usage

@@ -8,8 +8,7 @@ main() {
   configure_local_git
   install_openssh_server
   install_apm
-  install_or_update_codex_cli
-  # install_opencode_cli
+  install_or_update_coding_agent_clis
   install_1password_cli
   install_snyk_cli
   run_deps_install
@@ -29,14 +28,9 @@ install_apm() {
   curl -sSL https://aka.ms/apm-unix | sh
 }
 
-install_or_update_codex_cli() {
-  # Keep Codex CLI install/update behavior in one utility so post-create,
-  # post-start, and SSH proxy preflight all use the same path.
-  bash "${DEVCONTAINER_DIR}/utils/codex-cli-update.sh" install
-}
-
-install_opencode_cli() {
-  curl -fsSL https://opencode.ai/install | bash
+install_or_update_coding_agent_clis() {
+  bash "${DEVCONTAINER_DIR}/utils/coding-agent-cli-update.sh" install ||
+    echo "post-create: warning: one or more coding-agent CLI refreshes failed." >&2
 }
 
 install_openssh_server() {

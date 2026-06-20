@@ -46,6 +46,20 @@ at `/opt/boxdown/devcontainer`.
 The container receives only a public SSH key mount. The private host key stays
 on the host and is referenced from the user's SSH config.
 
+## Container Lifecycle Tooling
+
+Boxdown-owned container assets install and refresh development tooling from
+inside the devcontainer lifecycle. Coding-agent CLIs are refreshed through a
+shared mounted utility: post-create runs an immediate install/update, while
+post-start and SSH proxy setup run throttled best-effort refreshes for
+already-running containers.
+
+Tool refreshes are container-side behavior, not generated config schema.
+Failures should warn without making the devcontainer unusable. SSH proxy
+refresh output must stay off stdout because stdout carries SSH traffic. Locking
+and throttling belong in the shared helper so individual hooks do not duplicate
+update logic.
+
 ## Important Invariants
 
 - Boxdown must not create `.devcontainer/` in target repositories.
