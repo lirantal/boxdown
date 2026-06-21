@@ -14,7 +14,7 @@
   <a href="https://www.npmjs.com/package/boxdown"><img src="https://badgen.net/npm/v/boxdown" alt="npm version"/></a>
   <a href="https://www.npmjs.com/package/boxdown"><img src="https://badgen.net/npm/license/boxdown" alt="license"/></a>
   <a href="https://www.npmjs.com/package/boxdown"><img src="https://badgen.net/npm/dt/boxdown" alt="downloads"/></a>
-  <a href="https://github.com/lirantal/boxdown/actions/workflows/main.yml"><img src="https://github.com/lirantal/boxdown/actions/workflows/main.yml/badge.svg?branch=main" alt="build"/></a>
+  <a href="https://github.com/lirantal/boxdown/actions/workflows/ci.yml"><img src="https://github.com/lirantal/boxdown/actions/workflows/ci.yml/badge.svg?branch=main" alt="build"/></a>
   <a href="https://app.codecov.io/gh/lirantal/boxdown"><img src="https://badgen.net/codecov/c/github/lirantal/boxdown" alt="codecov"/></a>
   <a href="./SECURITY.md"><img src="https://img.shields.io/badge/Security-Responsible%20Disclosure-yellow.svg" alt="Responsible Disclosure Policy" /></a>
 </p>
