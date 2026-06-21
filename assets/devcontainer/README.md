@@ -166,6 +166,9 @@ It is not a GitHub token and does not authenticate `gh` or GitHub Git remotes.
 
 ## Optional customization
 
+- **Global agent config** — Boxdown automatically mounts host `~/.agents`
+  read-only at `/home/node/.agents` when that directory exists. Recreate the
+  devcontainer after creating or removing it so the mount set is refreshed.
 - **Agent config on the host** — Uncomment the `mounts` entries in `devcontainer.json` to bind `~/.claude`, `~/.gemini`, or `~/.codex` into the container so coding agents see your existing settings.
 - **1Password / other CLIs** — Follow the commented blocks in `devcontainer.json` and `hooks/post-create.sh` if you need them; keep the image lean by default.
 

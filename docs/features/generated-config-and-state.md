@@ -52,9 +52,13 @@ Boxdown starts from `assets/devcontainer/devcontainer.json` and rewrites:
 - `initializeCommand`, to call the host asset script with the target workspace.
 - `postCreateCommand`, to call mounted container assets.
 - `postStartCommand`, to call mounted container assets.
-- `mounts`, to add the read-only asset mount and public-key mount.
+- `mounts`, to add the read-only asset mount, public-key mount, and host
+  `~/.agents` mount when that directory exists.
 - `containerEnv`, to point SSH bootstrap at the mounted public key and actual
   container workspace.
 
 The target repository is still the Dev Container workspace via
 `--workspace-folder`.
+
+Mounts are create-time container settings. Use `boxdown start --recreate` after
+creating or removing host `~/.agents` so Docker receives the updated mount set.

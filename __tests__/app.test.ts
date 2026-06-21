@@ -8,7 +8,7 @@ import { describe, test } from 'node:test'
 
 import { codingAgentBinary, codingAgentFromCommand } from '../src/coding-agents.ts'
 import { buildGeneratedDevcontainerConfig, publishContainerPortFromConfig } from '../src/config.ts'
-import { DEVCONTAINER_CLI_VERSION } from '../src/constants.ts'
+import { BOXDOWN_CONTAINER_AGENTS_DIR, DEVCONTAINER_CLI_VERSION } from '../src/constants.ts'
 import { codingAgentDevcontainerExecArgs } from '../src/devcontainer.ts'
 import { resolveDevcontainerCli } from '../src/devcontainer-cli.ts'
 import { doctorHasFailures, formatDoctorText } from '../src/doctor.ts'
@@ -495,6 +495,7 @@ describe('devcontainer config generation', () => {
     const context = createWorkspaceContext({
       workspace,
       env: {
+        HOME: tempDir('config-home'),
         BOXDOWN_CACHE_HOME: tempDir('config-cache'),
         BOXDOWN_DATA_HOME: tempDir('config-data')
       },
@@ -509,9 +510,32 @@ describe('devcontainer config generation', () => {
     assert.strictEqual(config.postStartCommand, "bash '/opt/boxdown/devcontainer/hooks/post-start.sh'")
     assert.ok(config.mounts?.some((mount) => mount.includes(`source=${assetsDevcontainerDir}`)))
     assert.ok(config.mounts?.some((mount) => mount.includes(`source=${context.sshPublicKeyRuntimeDir}`)))
+    assert.ok(!config.mounts?.some((mount) => mount.includes(`target=${BOXDOWN_CONTAINER_AGENTS_DIR}`)))
     assert.ok(!config.mounts?.some((mount) => mount.startsWith(`type=bind,source=${context.sshKeyDir},`)))
     assert.strictEqual(config.containerEnv?.DEVCONTAINER_SSH_PUBLIC_KEY_FILE, '/opt/boxdown/state/ssh/id_ed25519.pub')
     assert.strictEqual(publishContainerPortFromConfig(config), '3000')
+  })
+
+  test('mounts host global agent config when present', () => {
+    const workspace = tempDir('agents-config-workspace')
+    const home = tempDir('agents-config-home')
+    const hostAgentsDir = join(home, '.agents')
+    mkdirSync(hostAgentsDir)
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        HOME: home,
+        BOXDOWN_CACHE_HOME: tempDir('agents-config-cache'),
+        BOXDOWN_DATA_HOME: tempDir('agents-config-data')
+      },
+      assetsDevcontainerDir
+    })
+
+    const config = buildGeneratedDevcontainerConfig(context)
+
+    assert.strictEqual(context.hostAgentsDir, hostAgentsDir)
+    assert.ok(config.mounts?.includes(`type=bind,source=${hostAgentsDir},target=${BOXDOWN_CONTAINER_AGENTS_DIR},readonly`))
+    assert.ok(!config.mounts?.some((mount) => mount.startsWith(`type=bind,source=${context.sshKeyDir},`)))
   })
 
   test('parses JSONC without stripping URLs inside strings', () => {

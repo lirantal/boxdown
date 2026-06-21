@@ -25,6 +25,7 @@ export interface WorkspaceContext {
   workspaceCacheDir: string
   workspaceDataDir: string
   generatedConfigPath: string
+  hostAgentsDir: string
   sshKeyDir: string
   sshKeyPath: string
   sshPublicKeyPath: string
@@ -78,6 +79,10 @@ export function defaultDataRoot (env: NodeJS.ProcessEnv = process.env): string {
   return join(homedir(), '.local', 'share', PACKAGE_NAME)
 }
 
+export function defaultHostAgentsDir (env: NodeJS.ProcessEnv = process.env): string {
+  return join(env.HOME ?? homedir(), '.agents')
+}
+
 export function createWorkspaceContext (options: WorkspaceContextOptions = {}): WorkspaceContext {
   const env = options.env ?? process.env
   const workspaceFolder = resolveWorkspaceFolder(options.workspace, options.cwd)
@@ -87,6 +92,7 @@ export function createWorkspaceContext (options: WorkspaceContextOptions = {}): 
   const assetsDevcontainerDir = options.assetsDevcontainerDir ?? env.BOXDOWN_DEVCONTAINER_ASSETS_DIR ?? join(packageRoot, 'assets', 'devcontainer')
   const cacheRoot = defaultCacheRoot(env)
   const dataRoot = defaultDataRoot(env)
+  const hostAgentsDir = defaultHostAgentsDir(env)
   const workspaceCacheDir = join(cacheRoot, 'workspaces', workspaceId)
   const workspaceDataDir = join(dataRoot, 'workspaces', workspaceId)
 
@@ -101,6 +107,7 @@ export function createWorkspaceContext (options: WorkspaceContextOptions = {}): 
     workspaceCacheDir,
     workspaceDataDir,
     generatedConfigPath: join(workspaceCacheDir, 'devcontainer.json'),
+    hostAgentsDir,
     sshKeyDir: join(workspaceDataDir, 'ssh'),
     sshKeyPath: join(workspaceDataDir, 'ssh', 'id_ed25519'),
     sshPublicKeyPath: join(workspaceDataDir, 'ssh', 'id_ed25519.pub'),

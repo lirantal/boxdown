@@ -1,7 +1,8 @@
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import {
+  BOXDOWN_CONTAINER_AGENTS_DIR,
   BOXDOWN_CONTAINER_DEVCONTAINER_DIR,
   BOXDOWN_CONTAINER_SSH_DIR,
   BOXDOWN_CONTAINER_SSH_PUBLIC_KEY_PATH
@@ -26,6 +27,14 @@ export function readBaseDevcontainerConfig (assetsDevcontainerDir: string): Devc
   return parseJsonc<DevcontainerConfig>(readFileSync(configPath, 'utf8'))
 }
 
+function directoryExists (path: string): boolean {
+  try {
+    return statSync(path).isDirectory()
+  } catch {
+    return false
+  }
+}
+
 export function buildGeneratedDevcontainerConfig (context: WorkspaceContext): DevcontainerConfig {
   const baseConfig = readBaseDevcontainerConfig(context.assetsDevcontainerDir)
   const mounts = Array.isArray(baseConfig.mounts)
@@ -36,6 +45,13 @@ export function buildGeneratedDevcontainerConfig (context: WorkspaceContext): De
     `type=bind,source=${context.assetsDevcontainerDir},target=${BOXDOWN_CONTAINER_DEVCONTAINER_DIR},readonly`,
     `type=bind,source=${context.sshPublicKeyRuntimeDir},target=${BOXDOWN_CONTAINER_SSH_DIR},readonly`
   ]
+
+  if (
+    directoryExists(context.hostAgentsDir) &&
+    !mounts.some((mount) => mount.includes(`target=${BOXDOWN_CONTAINER_AGENTS_DIR}`))
+  ) {
+    boxdownMounts.push(`type=bind,source=${context.hostAgentsDir},target=${BOXDOWN_CONTAINER_AGENTS_DIR},readonly`)
+  }
 
   return {
     ...baseConfig,

@@ -43,6 +43,10 @@ folders.
 The generated config mounts `assets/devcontainer/` read-only into the container
 at `/opt/boxdown/devcontainer`.
 
+When the host has `~/.agents`, the generated config also mounts it read-only at
+`/home/node/.agents` so host-global agent configuration is available inside the
+container without being copied into target repositories.
+
 The container receives only a public SSH key mount. The private host key stays
 on the host and is referenced from the user's SSH config.
 
