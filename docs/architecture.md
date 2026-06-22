@@ -38,6 +38,18 @@ Per-workspace state is keyed by a hash of the resolved workspace path. This
 prevents collisions between repositories with the same basename in different
 folders.
 
+## External App Integrations
+
+External app configuration is always explicit. For example,
+`boxdown ssh-config install --target codex` writes Codex app remote project
+configuration under `~/.codex/codex-app/config.json`, but it does not make that
+file part of Boxdown workspace state.
+
+Boxdown only writes the Codex app config entry needed to point Codex at the
+Boxdown-managed SSH alias and container-side project path. It does not mutate
+Codex's global state file; Codex owns any discovered remote connection,
+sidebar ordering, and project IDs it derives after restart.
+
 ## Container Asset Mounts
 
 The generated config mounts `assets/devcontainer/` read-only into the container

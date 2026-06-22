@@ -21,12 +21,16 @@ Unit tests should avoid starting Docker. Prefer pure tests for:
 - Workspace path resolution and state directory selection.
 - Generated devcontainer config shape.
 - SSH config block creation and idempotent replacement.
+- Codex app config target parsing, merge behavior, and idempotent project
+  injection.
 - Lifecycle status and doctor output formatting.
 - Workspace metadata and list output formatting.
 - Safety invariants, such as not packaging `.ssh/` key material.
 
 Use temporary directories for workspace and state tests. Do not write to the
-user's real SSH config in unit tests.
+user's real SSH config or Codex app config in unit tests. Use
+`BOXDOWN_CODEX_APP_CONFIG` or direct helper path overrides for Codex config
+fixtures.
 
 ## Build and CLI Smoke Tests
 
@@ -56,6 +60,7 @@ boxdown status --workspace /path/to/repo
 boxdown status --workspace /path/to/repo --json
 boxdown doctor --workspace /path/to/repo
 boxdown ssh-config install --workspace /path/to/repo
+boxdown ssh-config install --workspace /path/to/repo --target codex
 ssh <repo-name>-devcontainer 'whoami && pwd'
 ```
 

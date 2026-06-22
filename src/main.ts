@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs'
 
+import { codexProjectEntryForWorkspace, installCodexAppConfigProject } from './codex-app-config.ts'
 import { codingAgentFromCommand, type CodingAgentCli } from './coding-agents.ts'
 import { doctorHasFailures, formatDoctorText, runDoctorChecks } from './doctor.ts'
 import { startDevcontainer, printPortHint, openShell, openCodingAgentCli, ensureContainerSshRuntime, runSshdProxy, refreshContainerGhAuth, refreshContainerCodingAgentClis, findRunningContainerId, findWorkspaceContainer, stopWorkspaceContainer, removeWorkspaceContainer, listWorkspaceContainers } from './devcontainer.ts'
@@ -23,12 +24,15 @@ export type BoxdownCommand =
   | 'refresh-gh-token-running'
   | 'coding-agent'
 
+export type SshConfigInstallTarget = 'codex'
+
 export interface ParsedCli {
   command: BoxdownCommand
   agent?: CodingAgentCli
   agentArgs?: string[]
   workspace?: string
   alias?: string
+  target?: SshConfigInstallTarget
   recreate: boolean
   json: boolean
 }
@@ -45,7 +49,7 @@ export const USAGE = `Usage:
   boxdown stop [--workspace <path>]
   boxdown down [--workspace <path>]
   boxdown doctor [--workspace <path>]
-  boxdown ssh-config install [--workspace <path>] [--alias <name>]
+  boxdown ssh-config install [--workspace <path>] [--alias <name>] [--target codex]
   boxdown ssh-proxy [--workspace <path>] [--alias <name>]
   boxdown refresh-gh-token [--workspace <path>]
   boxdown refresh-gh-token-running [--workspace <path>]
@@ -81,6 +85,7 @@ Commands:
 Options:
   --workspace <path>  Target project directory. Defaults to the current directory.
   --alias <name>      SSH host alias. Defaults to <repo-name>-devcontainer.
+  --target codex      Also register the SSH alias as a Codex app remote project.
   --recreate          Remove the existing devcontainer before starting.
   --json              Print JSON output. Supported by status and list.
   --help, -h          Show help.
@@ -101,6 +106,7 @@ export function parseCliArgs (argv: string[]): ParsedCli {
   const args = [...argv]
   let workspace: string | undefined
   let alias: string | undefined
+  let target: SshConfigInstallTarget | undefined
   let recreate = false
   let json = false
   let passthroughArgs: string[] | undefined
@@ -115,12 +121,27 @@ export function parseCliArgs (argv: string[]): ParsedCli {
       throw new Error('-- passthrough is only supported with coding-agent commands')
     }
 
-    return { command, workspace, alias, recreate, json }
+    if (target !== undefined && command !== 'ssh-config-install') {
+      throw new Error('--target is only supported with ssh-config install')
+    }
+
+    return {
+      command,
+      workspace,
+      alias,
+      ...(target === undefined ? {} : { target }),
+      recreate,
+      json
+    }
   }
 
   function parsedCodingAgent (agent: CodingAgentCli): ParsedCli {
     if (json) {
       throw new Error('--json is only supported with status and list')
+    }
+
+    if (target !== undefined) {
+      throw new Error('--target is only supported with ssh-config install')
     }
 
     return {
@@ -156,6 +177,20 @@ export function parseCliArgs (argv: string[]): ParsedCli {
         throw new Error('--workspace requires a value')
       }
       workspace = value
+      continue
+    }
+
+    if (arg === '--target') {
+      const value = args.shift()
+      if (value === undefined) {
+        throw new Error('--target requires a value')
+      }
+
+      if (value !== 'codex') {
+        throw new Error(`Unsupported ssh-config install target: ${value}`)
+      }
+
+      target = value
       continue
     }
 
@@ -227,7 +262,7 @@ export function parseCliArgs (argv: string[]): ParsedCli {
       return parsed('ssh-config-install')
     }
 
-    throw new Error(`Unknown ssh-config command: ${positional.slice(1).join(' ')}. Usage: boxdown ssh-config [install] [--workspace <path>] [--alias <name>]`)
+    throw new Error(`Unknown ssh-config command: ${positional.slice(1).join(' ')}. Usage: boxdown ssh-config [install] [--workspace <path>] [--alias <name>] [--target codex]`)
   }
 
   if (positional[0] === 'ssh-proxy' && positional.length === 1) {
@@ -278,6 +313,23 @@ export async function runCli (argv: string[] = process.argv.slice(2)): Promise<n
 
     if (parsed.command === 'ssh-config-install') {
       await installSshConfig(context, alias)
+
+      if (parsed.target === 'codex') {
+        const entry = codexProjectEntryForWorkspace(context, alias)
+        const result = installCodexAppConfigProject(entry)
+
+        process.stdout.write(`\nCodex app config: ${result.configPath}\n`)
+        process.stdout.write(result.changed
+          ? `Installed Codex remote project: ${entry.label} (${entry.remotePath})\n`
+          : `Codex remote project already up to date: ${entry.label} (${entry.remotePath})\n`)
+
+        if (result.backupPath !== undefined) {
+          process.stdout.write(`Codex app config backup: ${result.backupPath}\n`)
+        }
+
+        process.stdout.write('Restart Codex to apply the remote project entry.\n')
+      }
+
       return 0
     }
 

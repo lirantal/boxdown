@@ -44,6 +44,21 @@ Each touched workspace also records inventory metadata at:
 `boxdown list` reads these metadata files as its source of truth, then enriches
 entries with best-effort Docker state.
 
+## External App Config
+
+External app integration config is not Boxdown workspace state. When requested
+with `boxdown ssh-config install --target codex`, Boxdown writes Codex's app
+config at:
+
+```text
+~/.codex/codex-app/config.json
+```
+
+`BOXDOWN_CODEX_APP_CONFIG` overrides this path for tests and local development.
+The Codex entry refers to the Boxdown-managed SSH alias and the container-side
+project path `/home/node/<repo-name>`. Codex owns any later global-state records
+or sidebar entries it creates from that config.
+
 ## Generated Changes
 
 Boxdown starts from `assets/devcontainer/devcontainer.json` and rewrites:

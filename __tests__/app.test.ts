@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, test } from 'node:test'
 
+import { codexProjectEntryForWorkspace, defaultCodexAppConfigPath, installCodexAppConfigProject, mergeCodexAppProject, parseCodexAppConfig } from '../src/codex-app-config.ts'
 import { codingAgentBinary, codingAgentFromCommand } from '../src/coding-agents.ts'
 import { buildGeneratedDevcontainerConfig, publishContainerPortFromConfig } from '../src/config.ts'
 import { BOXDOWN_CONTAINER_AGENTS_DIR, DEVCONTAINER_CLI_VERSION } from '../src/constants.ts'
@@ -19,7 +20,7 @@ import { commandWritesWorkspaceMetadata, parseCliArgs, USAGE } from '../src/main
 import { listWorkspaceMetadata, writeWorkspaceMetadata } from '../src/metadata.ts'
 import { createWorkspaceContext } from '../src/paths.ts'
 import { DEFAULT_TTY_MAX_COLUMNS, interactiveShellEnvArgs, interactiveShellScript } from '../src/shell.ts'
-import { buildSshConfigBlock, defaultSshAlias, replaceSshConfigBlock } from '../src/ssh-config.ts'
+import { buildSshConfigBlock, defaultSshAlias, installSshConfig, replaceSshConfigBlock } from '../src/ssh-config.ts'
 import { createStatusInfo, formatStatusText, inspectSshConfigStatus, parseDockerPsJsonLines, statusIsHealthy } from '../src/status.ts'
 
 const assetsDevcontainerDir = fileURLToPath(new URL('../assets/devcontainer', import.meta.url))
@@ -118,6 +119,14 @@ describe('CLI parsing', () => {
       recreate: false,
       json: false
     })
+    assert.deepStrictEqual(parseCliArgs(['ssh-config', 'install', '--target', 'codex']), {
+      command: 'ssh-config-install',
+      workspace: undefined,
+      alias: undefined,
+      target: 'codex',
+      recreate: false,
+      json: false
+    })
   })
 
   test('parses lifecycle commands', () => {
@@ -145,6 +154,9 @@ describe('CLI parsing', () => {
     assert.throws(() => parseCliArgs(['ssh-config', 'install', 'extra']), /Unknown ssh-config command: install extra/)
     assert.throws(() => parseCliArgs(['install-ssh-config']), /Unknown command/)
     assert.throws(() => parseCliArgs(['start', '--json']), /--json is only supported with status and list/)
+    assert.throws(() => parseCliArgs(['ssh-config', 'install', '--target', 'cursor']), /Unsupported ssh-config install target: cursor/)
+    assert.throws(() => parseCliArgs(['start', '--target', 'codex']), /--target is only supported with ssh-config install/)
+    assert.throws(() => parseCliArgs(['codex', '--target', 'codex']), /--target is only supported with ssh-config install/)
     assert.throws(() => parseCliArgs(['start', '--', '--ignored']), /passthrough is only supported/)
     assert.throws(() => parseCliArgs(['claude', 'resume']), /must come after --/)
     assert.throws(() => parseCliArgs(['claude', '--continue']), /Unknown option: --continue/)
@@ -171,6 +183,7 @@ describe('CLI parsing', () => {
     assert.ok(!usageLines.some((line) => line.startsWith('  shell')))
     assert.ok(!usageLines.some((line) => line.startsWith('  install-ssh-config')))
     assert.match(USAGE, /ssh-config install\s+Install or update an SSH host alias/)
+    assert.match(USAGE, /--target codex\s+Also register the SSH alias/)
     assert.match(USAGE, /ssh-proxy\s+Internal command used by the generated SSH/)
     assert.match(USAGE, /refresh-gh-token\s+Start or reuse the devcontainer/)
     assert.match(USAGE, /refresh-gh-token-running\s+Refresh GitHub CLI auth only if/)
@@ -669,6 +682,261 @@ describe('SSH config generation', () => {
     assert.strictEqual(second, first)
     assert.match(second, /Host github.com/)
     assert.strictEqual(second.split(`# BEGIN ${alias} boxdown`).length - 1, 1)
+  })
+})
+
+describe('Codex app config injection', () => {
+  test('builds the default config path and workspace project entry', () => {
+    const workspace = tempDir('codex-entry-workspace')
+    const home = tempDir('codex-entry-home')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        HOME: home,
+        BOXDOWN_CACHE_HOME: tempDir('codex-entry-cache'),
+        BOXDOWN_DATA_HOME: tempDir('codex-entry-data')
+      },
+      assetsDevcontainerDir
+    })
+
+    assert.strictEqual(defaultCodexAppConfigPath({ HOME: home }), join(home, '.codex', 'codex-app', 'config.json'))
+    assert.strictEqual(defaultCodexAppConfigPath({ HOME: home, BOXDOWN_CODEX_APP_CONFIG: '/tmp/codex.json' }), '/tmp/codex.json')
+    assert.deepStrictEqual(codexProjectEntryForWorkspace(context, 'demo-devcontainer'), {
+      sshAlias: 'demo-devcontainer',
+      remotePath: `/home/node/${context.workspaceBasename}`,
+      label: context.workspaceBasename
+    })
+  })
+
+  test('merges by SSH alias and normalized remote path', () => {
+    const config = parseCodexAppConfig({
+      version: 1,
+      ignored: true,
+      remoteConnectionMaxRetryAttempts: 2,
+      sshConnectTimeoutSeconds: 30,
+      remoteConnections: [
+        {
+          sshAlias: 'demo-devcontainer',
+          ignored: true,
+          projects: [
+            {
+              remotePath: '/home/node/demo/',
+              label: 'Old demo',
+              ignored: true
+            }
+          ]
+        },
+        {
+          sshAlias: 'other-devcontainer',
+          projects: [
+            {
+              remotePath: '/home/node/other',
+              label: 'Other'
+            }
+          ]
+        }
+      ]
+    })
+
+    const first = mergeCodexAppProject(config, {
+      sshAlias: 'demo-devcontainer',
+      remotePath: '/home/node/demo',
+      label: 'Demo'
+    })
+    const second = mergeCodexAppProject(first, {
+      sshAlias: 'demo-devcontainer',
+      remotePath: '/home/node/new-demo/',
+      label: 'New demo'
+    })
+
+    assert.strictEqual(first.remoteConnectionMaxRetryAttempts, 2)
+    assert.strictEqual(first.sshConnectTimeoutSeconds, 30)
+    assert.deepStrictEqual(first.remoteConnections[0], {
+      sshAlias: 'demo-devcontainer',
+      projects: [
+        {
+          remotePath: '/home/node/demo',
+          label: 'Demo'
+        }
+      ]
+    })
+    assert.strictEqual(second.remoteConnections[0]?.projects.length, 2)
+    assert.deepStrictEqual(second.remoteConnections[1], {
+      sshAlias: 'other-devcontainer',
+      projects: [
+        {
+          remotePath: '/home/node/other',
+          label: 'Other'
+        }
+      ]
+    })
+  })
+
+  test('creates a missing Codex app config', () => {
+    const configPath = join(tempDir('codex-create'), 'codex-app', 'config.json')
+    const result = installCodexAppConfigProject({
+      sshAlias: 'demo-devcontainer',
+      remotePath: '/home/node/demo',
+      label: 'demo'
+    }, {
+      configPath,
+      now: new Date('2026-01-01T00:00:00.000Z')
+    })
+
+    assert.deepStrictEqual(result, {
+      configPath,
+      changed: true
+    })
+    assert.deepStrictEqual(JSON.parse(readFileSync(configPath, 'utf8')), {
+      version: 1,
+      remoteConnections: [
+        {
+          sshAlias: 'demo-devcontainer',
+          projects: [
+            {
+              remotePath: '/home/node/demo',
+              label: 'demo'
+            }
+          ]
+        }
+      ]
+    })
+  })
+
+  test('updates existing Codex config, strips unknown keys, and writes a backup', () => {
+    const configPath = join(tempDir('codex-update'), 'config.json')
+    writeFileSync(configPath, `${JSON.stringify({
+      version: 1,
+      unknown: true,
+      remoteConnectionMaxRetryAttempts: 3,
+      sshConnectTimeoutSeconds: 45,
+      remoteConnections: [
+        {
+          sshAlias: 'demo-devcontainer',
+          unknown: true,
+          projects: [
+            {
+              remotePath: '/home/node/demo/',
+              label: 'Old demo',
+              unknown: true
+            }
+          ]
+        },
+        {
+          sshAlias: 'other-devcontainer',
+          projects: [
+            {
+              remotePath: '/home/node/other',
+              label: 'Other'
+            }
+          ]
+        }
+      ]
+    }, null, 2)}\n`)
+
+    const result = installCodexAppConfigProject({
+      sshAlias: 'demo-devcontainer',
+      remotePath: '/home/node/demo',
+      label: 'Demo'
+    }, {
+      configPath,
+      now: new Date('2026-01-01T00:00:00.000Z')
+    })
+    const second = installCodexAppConfigProject({
+      sshAlias: 'demo-devcontainer',
+      remotePath: '/home/node/demo',
+      label: 'Demo'
+    }, {
+      configPath,
+      now: new Date('2026-01-02T00:00:00.000Z')
+    })
+
+    assert.strictEqual(result.changed, true)
+    assert.strictEqual(result.backupPath, `${configPath}.2026-01-01T00-00-00-000Z.bak`)
+    assert.strictEqual(existsSync(result.backupPath), true)
+    assert.deepStrictEqual(second, {
+      configPath,
+      changed: false
+    })
+    assert.deepStrictEqual(JSON.parse(readFileSync(configPath, 'utf8')), {
+      version: 1,
+      remoteConnectionMaxRetryAttempts: 3,
+      sshConnectTimeoutSeconds: 45,
+      remoteConnections: [
+        {
+          sshAlias: 'demo-devcontainer',
+          projects: [
+            {
+              remotePath: '/home/node/demo',
+              label: 'Demo'
+            }
+          ]
+        },
+        {
+          sshAlias: 'other-devcontainer',
+          projects: [
+            {
+              remotePath: '/home/node/other',
+              label: 'Other'
+            }
+          ]
+        }
+      ]
+    })
+  })
+
+  test('fails without rewriting invalid or unsupported Codex app configs', () => {
+    const invalidJsonPath = join(tempDir('codex-invalid-json'), 'config.json')
+    writeFileSync(invalidJsonPath, '{ invalid json')
+
+    assert.throws(() => installCodexAppConfigProject({
+      sshAlias: 'demo-devcontainer',
+      remotePath: '/home/node/demo',
+      label: 'Demo'
+    }, { configPath: invalidJsonPath }), /Invalid Codex app config JSON/)
+    assert.strictEqual(readFileSync(invalidJsonPath, 'utf8'), '{ invalid json')
+
+    const unsupportedPath = join(tempDir('codex-unsupported'), 'config.json')
+    writeFileSync(unsupportedPath, '{"version":2,"remoteConnections":[]}\n')
+
+    assert.throws(() => installCodexAppConfigProject({
+      sshAlias: 'demo-devcontainer',
+      remotePath: '/home/node/demo',
+      label: 'Demo'
+    }, { configPath: unsupportedPath }), /Unsupported Codex app config version: 2/)
+    assert.strictEqual(readFileSync(unsupportedPath, 'utf8'), '{"version":2,"remoteConnections":[]}\n')
+  })
+
+  test('keeps plain SSH install and later Codex target install idempotent', async () => {
+    const workspace = tempDir('codex-idempotent-workspace')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('codex-idempotent-cache'),
+        BOXDOWN_DATA_HOME: tempDir('codex-idempotent-data')
+      },
+      assetsDevcontainerDir
+    })
+    const alias = defaultSshAlias(context.workspaceBasename)
+    const sshConfigPath = join(tempDir('codex-idempotent-ssh'), 'config')
+    const codexConfigPath = join(tempDir('codex-idempotent-app'), 'config.json')
+
+    await installSshConfig(context, alias, { quiet: true, configPath: sshConfigPath })
+    await installSshConfig(context, alias, { quiet: true, configPath: sshConfigPath })
+    installCodexAppConfigProject(codexProjectEntryForWorkspace(context, alias), { configPath: codexConfigPath })
+    installCodexAppConfigProject(codexProjectEntryForWorkspace(context, alias), { configPath: codexConfigPath })
+
+    const sshConfig = readFileSync(sshConfigPath, 'utf8')
+    const codexConfig = parseCodexAppConfig(JSON.parse(readFileSync(codexConfigPath, 'utf8')))
+
+    assert.strictEqual(sshConfig.split(`# BEGIN ${alias} boxdown`).length - 1, 1)
+    assert.strictEqual(codexConfig.remoteConnections.length, 1)
+    assert.strictEqual(codexConfig.remoteConnections[0]?.sshAlias, alias)
+    assert.strictEqual(codexConfig.remoteConnections[0]?.projects.length, 1)
+    assert.deepStrictEqual(codexConfig.remoteConnections[0]?.projects[0], {
+      remotePath: `/home/node/${context.workspaceBasename}`,
+      label: context.workspaceBasename
+    })
   })
 })
 

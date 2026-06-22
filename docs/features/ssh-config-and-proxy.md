@@ -4,6 +4,7 @@
 
 ```sh
 boxdown ssh-config install
+boxdown ssh-config install --target codex
 boxdown ssh-proxy
 ```
 
@@ -35,6 +36,42 @@ block instead of duplicating it.
 `missing`, or `outdated`. It only recognizes blocks wrapped in Boxdown's marker
 comments; an unrelated OpenSSH `Host` entry with the same alias is not treated
 as an installed Boxdown alias.
+
+## Codex App Target
+
+`boxdown ssh-config install --target codex` keeps the normal SSH install flow
+and also writes a Codex app remote project entry for the same alias.
+
+The Codex app config is written to:
+
+```text
+~/.codex/codex-app/config.json
+```
+
+`BOXDOWN_CODEX_APP_CONFIG` overrides this path for tests and local development.
+
+The generated Codex entry points at the container-side project symlink:
+
+```json
+{
+  "sshAlias": "<repo-name>-devcontainer",
+  "projects": [
+    {
+      "remotePath": "/home/node/<repo-name>",
+      "label": "<repo-name>"
+    }
+  ]
+}
+```
+
+Boxdown merges by SSH alias and normalized remote path, so repeated installs
+update the existing Codex project instead of duplicating it. Existing known
+Codex config keys are preserved, but unknown keys are not written back because
+Codex's app config parser is strict.
+
+Boxdown does not edit `~/.codex/.codex-global-state.json`. Restart Codex after
+installing the target so Codex applies the app config, discovers the SSH alias
+from normal OpenSSH config, and creates or updates its sidebar project entry.
 
 ## Proxy Flow
 
