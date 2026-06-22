@@ -959,7 +959,36 @@ describe('packaged assets', () => {
     assert.match(updater, /opencode upgrade --method curl/)
     assert.match(updater, /claude update/)
     assert.match(updater, /antigravity\.google\/cli\/install\.sh/)
+    assert.doesNotMatch(updater, /--skip-path/)
     assert.match(codexWrapper, /coding-agent-cli-update\.sh" "\$\{1:-maybe-update\}" codex/)
+  })
+
+  test('runs Antigravity installer without unsupported path flags', () => {
+    const updaterPath = join(assetsDevcontainerDir, 'utils', 'coding-agent-cli-update.sh')
+    const stateDir = tempDir('antigravity-update-state')
+    const installerPath = join(tempDir('antigravity-installer'), 'install.sh')
+    const argsPath = join(tempDir('antigravity-args'), 'args.txt')
+
+    writeFileSync(installerPath, [
+      '#!/usr/bin/env bash',
+      'printf "%s\\n" "$#" > "${BOXDOWN_FAKE_ANTIGRAVITY_ARGS_FILE}"',
+      'if [ "$#" -gt 0 ]; then',
+      '  printf "%s\\n" "$@" >> "${BOXDOWN_FAKE_ANTIGRAVITY_ARGS_FILE}"',
+      'fi'
+    ].join('\n'))
+
+    execFileSync('bash', [updaterPath, 'update-now', 'antigravity'], {
+      env: {
+        ...process.env,
+        BOXDOWN_ANTIGRAVITY_INSTALL_URL: `file://${installerPath}`,
+        BOXDOWN_CODING_AGENT_UPDATE_STATE_DIR: stateDir,
+        BOXDOWN_FAKE_ANTIGRAVITY_ARGS_FILE: argsPath
+      },
+      stdio: 'pipe'
+    })
+
+    assert.strictEqual(readFileSync(argsPath, 'utf8'), '0\n')
+    assert.strictEqual(existsSync(join(stateDir, 'antigravity.stamp')), true)
   })
 
   test('skips coding-agent CLI refresh when all stamps are fresh', () => {

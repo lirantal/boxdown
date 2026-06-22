@@ -238,7 +238,7 @@ install_antigravity() {
   local url
 
   url="${BOXDOWN_ANTIGRAVITY_INSTALL_URL:-https://antigravity.google/cli/install.sh}"
-  run_installer_url "${url}" bash -s -- --skip-path
+  run_installer_url "${url}" bash
 }
 
 update_antigravity() {
