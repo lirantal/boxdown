@@ -59,6 +59,10 @@ When the host has `~/.agents`, the generated config also mounts it read-only at
 `/home/node/.agents` so host-global agent configuration is available inside the
 container without being copied into target repositories.
 
+When the host has file-backed Codex auth at `~/.codex/auth.json`, the generated
+config mounts that single file read-only at `/home/node/.codex/auth.json`. It
+does not mount the full host `~/.codex` directory.
+
 The container receives only a public SSH key mount. The private host key stays
 on the host and is referenced from the user's SSH config.
 

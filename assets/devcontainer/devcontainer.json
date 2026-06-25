@@ -54,8 +54,8 @@
         "source=${localEnv:HOME}/.gitconfig,target=/home/node/.gitconfig,type=bind,consistency=cached",
         // mount host user home directories for agents:
         // "source=${localEnv:HOME}/.claude,target=/home/node/.claude,type=bind,consistency=cached",
-        // "source=${localEnv:HOME}/.gemini,target=/home/node/.claude,type=bind,consistency=cached",
-        // "source=${localEnv:HOME}/.codex,target=/home/node/.codex,type=bind,consistency=cached"
+        // "source=${localEnv:HOME}/.gemini,target=/home/node/.claude,type=bind,consistency=cached"
+        // Codex auth.json is mounted automatically by Boxdown's generated config when present.
     ],
 
     // Initialize optional host-side secrets before container create/start.

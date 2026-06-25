@@ -177,6 +177,42 @@ run_installer_url() {
   curl -fsSL "${url}" | "$@"
 }
 
+run_as_root() {
+  if [ "$(id -u)" -eq 0 ]; then
+    "$@"
+  elif command -v sudo >/dev/null 2>&1; then
+    sudo "$@"
+  else
+    "$@"
+  fi
+}
+
+prepare_codex_home() {
+  local codex_home="${CODEX_HOME:-${HOME}/.codex}"
+
+  if [ -e "${codex_home}" ] && [ ! -d "${codex_home}" ]; then
+    log "codex: ${codex_home} exists but is not a directory."
+    return 1
+  fi
+
+  if [ ! -d "${codex_home}" ]; then
+    mkdir -p "${codex_home}"
+  fi
+
+  if [ ! -w "${codex_home}" ]; then
+    run_as_root chown "$(id -u):$(id -g)" "${codex_home}" 2>/dev/null || true
+  fi
+
+  if [ ! -w "${codex_home}" ]; then
+    run_as_root chmod u+rwx "${codex_home}" 2>/dev/null || true
+  fi
+
+  if [ ! -w "${codex_home}" ]; then
+    log "codex: ${codex_home} is not writable; Codex CLI install/update may fail."
+    return 1
+  fi
+}
+
 install_codex() {
   local url
 
@@ -185,6 +221,8 @@ install_codex() {
 }
 
 update_codex() {
+  prepare_codex_home || return 1
+
   if command -v codex >/dev/null 2>&1; then
     if codex update; then
       return 0

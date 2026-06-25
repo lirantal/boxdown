@@ -9,7 +9,7 @@ import { describe, test } from 'node:test'
 import { codexDiscoveredRemoteHostId, codexProjectEntryForWorkspace, defaultCodexAppConfigPath, defaultCodexGlobalStatePath, installCodexAppConfigProject, mergeCodexAppProject, parseCodexAppConfig, removeCodexAppProject, removeCodexGlobalStateProject, uninstallCodexAppConfigProject, uninstallCodexGlobalStateProject } from '../src/codex-app-config.ts'
 import { codingAgentBinary, codingAgentFromCommand } from '../src/coding-agents.ts'
 import { buildGeneratedDevcontainerConfig, publishContainerPortFromConfig } from '../src/config.ts'
-import { BOXDOWN_CONTAINER_AGENTS_DIR, DEVCONTAINER_CLI_VERSION } from '../src/constants.ts'
+import { BOXDOWN_CONTAINER_AGENTS_DIR, BOXDOWN_CONTAINER_CODEX_AUTH_PATH, BOXDOWN_CONTAINER_CODEX_DIR, DEVCONTAINER_CLI_VERSION } from '../src/constants.ts'
 import { codingAgentDevcontainerExecArgs } from '../src/devcontainer.ts'
 import { resolveDevcontainerCli } from '../src/devcontainer-cli.ts'
 import { doctorHasFailures, formatDoctorText } from '../src/doctor.ts'
@@ -544,6 +544,7 @@ describe('devcontainer config generation', () => {
     assert.ok(config.mounts?.some((mount) => mount.includes(`source=${assetsDevcontainerDir}`)))
     assert.ok(config.mounts?.some((mount) => mount.includes(`source=${context.sshPublicKeyRuntimeDir}`)))
     assert.ok(!config.mounts?.some((mount) => mount.includes(`target=${BOXDOWN_CONTAINER_AGENTS_DIR}`)))
+    assert.ok(!config.mounts?.some((mount) => mount.includes(`target=${BOXDOWN_CONTAINER_CODEX_AUTH_PATH}`)))
     assert.ok(!config.mounts?.some((mount) => mount.startsWith(`type=bind,source=${context.sshKeyDir},`)))
     assert.strictEqual(config.containerEnv?.DEVCONTAINER_SSH_PUBLIC_KEY_FILE, '/opt/boxdown/state/ssh/id_ed25519.pub')
     assert.strictEqual(publishContainerPortFromConfig(config), '3000')
@@ -569,6 +570,59 @@ describe('devcontainer config generation', () => {
     assert.strictEqual(context.hostAgentsDir, hostAgentsDir)
     assert.ok(config.mounts?.includes(`type=bind,source=${hostAgentsDir},target=${BOXDOWN_CONTAINER_AGENTS_DIR},readonly`))
     assert.ok(!config.mounts?.some((mount) => mount.startsWith(`type=bind,source=${context.sshKeyDir},`)))
+  })
+
+  test('mounts host Codex auth cache read-only when present', () => {
+    const workspace = tempDir('codex-auth-config-workspace')
+    const home = tempDir('codex-auth-config-home')
+    const hostCodexDir = join(home, '.codex')
+    const hostCodexAuthPath = join(hostCodexDir, 'auth.json')
+    mkdirSync(hostCodexDir)
+    writeFileSync(hostCodexAuthPath, '{}\n')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        HOME: home,
+        BOXDOWN_CACHE_HOME: tempDir('codex-auth-config-cache'),
+        BOXDOWN_DATA_HOME: tempDir('codex-auth-config-data')
+      },
+      assetsDevcontainerDir
+    })
+
+    const config = buildGeneratedDevcontainerConfig(context)
+
+    assert.strictEqual(context.hostCodexAuthPath, hostCodexAuthPath)
+    assert.ok(config.mounts?.includes(`type=bind,source=${hostCodexAuthPath},target=${BOXDOWN_CONTAINER_CODEX_AUTH_PATH},readonly`))
+  })
+
+  test('does not duplicate existing Codex config mounts', () => {
+    const workspace = tempDir('codex-auth-duplicate-workspace')
+    const home = tempDir('codex-auth-duplicate-home')
+    const hostCodexDir = join(home, '.codex')
+    mkdirSync(hostCodexDir)
+    writeFileSync(join(hostCodexDir, 'auth.json'), '{}\n')
+
+    for (const existingMount of [
+      `type=bind,source=/tmp/codex,target=${BOXDOWN_CONTAINER_CODEX_DIR},readonly`,
+      `type=bind,source=/tmp/auth.json,target=${BOXDOWN_CONTAINER_CODEX_AUTH_PATH},readonly`
+    ]) {
+      const customAssetsDir = tempDir('codex-auth-duplicate-assets')
+      writeFileSync(join(customAssetsDir, 'devcontainer.json'), `${JSON.stringify({ mounts: [existingMount] })}\n`)
+      const context = createWorkspaceContext({
+        workspace,
+        env: {
+          HOME: home,
+          BOXDOWN_CACHE_HOME: tempDir('codex-auth-duplicate-cache'),
+          BOXDOWN_DATA_HOME: tempDir('codex-auth-duplicate-data')
+        },
+        assetsDevcontainerDir: customAssetsDir
+      })
+
+      const config = buildGeneratedDevcontainerConfig(context)
+
+      assert.ok(config.mounts?.includes(existingMount))
+      assert.ok(!config.mounts?.includes(`type=bind,source=${context.hostCodexAuthPath},target=${BOXDOWN_CONTAINER_CODEX_AUTH_PATH},readonly`))
+    }
   })
 
   test('parses JSONC without stripping URLs inside strings', () => {
@@ -1315,6 +1369,36 @@ describe('packaged assets', () => {
 
     assert.strictEqual(readFileSync(argsPath, 'utf8'), '0\n')
     assert.strictEqual(existsSync(join(stateDir, 'antigravity.stamp')), true)
+  })
+
+  test('prepares Codex home before running the Codex installer', () => {
+    const updaterPath = join(assetsDevcontainerDir, 'utils', 'coding-agent-cli-update.sh')
+    const stateDir = tempDir('codex-home-update-state')
+    const codexHome = join(tempDir('codex-home'), '.codex')
+    const installerPath = join(tempDir('codex-installer'), 'install.sh')
+    const resultPath = join(tempDir('codex-installer-result'), 'result.txt')
+
+    writeFileSync(installerPath, [
+      '#!/usr/bin/env sh',
+      'test -d "${CODEX_HOME}"',
+      'test -w "${CODEX_HOME}"',
+      'printf "%s\\n" "${CODEX_HOME}" > "${BOXDOWN_FAKE_CODEX_HOME_RESULT}"'
+    ].join('\n'))
+
+    execFileSync('bash', [updaterPath, 'update-now', 'codex'], {
+      env: {
+        ...process.env,
+        PATH: '/usr/bin:/bin:/usr/sbin:/sbin',
+        CODEX_HOME: codexHome,
+        BOXDOWN_CODEX_INSTALL_URL: `file://${installerPath}`,
+        BOXDOWN_CODING_AGENT_UPDATE_STATE_DIR: stateDir,
+        BOXDOWN_FAKE_CODEX_HOME_RESULT: resultPath
+      },
+      stdio: 'pipe'
+    })
+
+    assert.strictEqual(readFileSync(resultPath, 'utf8'), `${codexHome}\n`)
+    assert.strictEqual(existsSync(join(stateDir, 'codex.stamp')), true)
   })
 
   test('skips coding-agent CLI refresh when all stamps are fresh', () => {

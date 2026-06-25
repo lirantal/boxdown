@@ -3,6 +3,8 @@ import { join } from 'node:path'
 
 import {
   BOXDOWN_CONTAINER_AGENTS_DIR,
+  BOXDOWN_CONTAINER_CODEX_AUTH_PATH,
+  BOXDOWN_CONTAINER_CODEX_DIR,
   BOXDOWN_CONTAINER_DEVCONTAINER_DIR,
   BOXDOWN_CONTAINER_SSH_DIR,
   BOXDOWN_CONTAINER_SSH_PUBLIC_KEY_PATH
@@ -35,6 +37,18 @@ function directoryExists (path: string): boolean {
   }
 }
 
+function fileExists (path: string): boolean {
+  try {
+    return statSync(path).isFile()
+  } catch {
+    return false
+  }
+}
+
+function hasMountTarget (mounts: string[], target: string): boolean {
+  return mounts.some((mount) => mount.split(',').some((part) => part.trim() === `target=${target}`))
+}
+
 export function buildGeneratedDevcontainerConfig (context: WorkspaceContext): DevcontainerConfig {
   const baseConfig = readBaseDevcontainerConfig(context.assetsDevcontainerDir)
   const mounts = Array.isArray(baseConfig.mounts)
@@ -48,9 +62,17 @@ export function buildGeneratedDevcontainerConfig (context: WorkspaceContext): De
 
   if (
     directoryExists(context.hostAgentsDir) &&
-    !mounts.some((mount) => mount.includes(`target=${BOXDOWN_CONTAINER_AGENTS_DIR}`))
+    !hasMountTarget(mounts, BOXDOWN_CONTAINER_AGENTS_DIR)
   ) {
     boxdownMounts.push(`type=bind,source=${context.hostAgentsDir},target=${BOXDOWN_CONTAINER_AGENTS_DIR},readonly`)
+  }
+
+  if (
+    fileExists(context.hostCodexAuthPath) &&
+    !hasMountTarget(mounts, BOXDOWN_CONTAINER_CODEX_DIR) &&
+    !hasMountTarget(mounts, BOXDOWN_CONTAINER_CODEX_AUTH_PATH)
+  ) {
+    boxdownMounts.push(`type=bind,source=${context.hostCodexAuthPath},target=${BOXDOWN_CONTAINER_CODEX_AUTH_PATH},readonly`)
   }
 
   return {

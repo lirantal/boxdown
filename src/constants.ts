@@ -5,5 +5,7 @@ export const BOXDOWN_CONTAINER_STATE_DIR = '/opt/boxdown/state'
 export const BOXDOWN_CONTAINER_SSH_DIR = `${BOXDOWN_CONTAINER_STATE_DIR}/ssh`
 export const BOXDOWN_CONTAINER_SSH_PUBLIC_KEY_PATH = `${BOXDOWN_CONTAINER_SSH_DIR}/id_ed25519.pub`
 export const BOXDOWN_CONTAINER_AGENTS_DIR = '/home/node/.agents'
+export const BOXDOWN_CONTAINER_CODEX_DIR = '/home/node/.codex'
+export const BOXDOWN_CONTAINER_CODEX_AUTH_PATH = `${BOXDOWN_CONTAINER_CODEX_DIR}/auth.json`
 
 export const PACKAGE_NAME = 'boxdown'
