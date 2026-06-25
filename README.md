@@ -69,6 +69,13 @@ npx boxdown ssh-config install --target codex
 Restart Codex after installing the target so the app applies its updated remote
 project config.
 
+Remove Boxdown's managed SSH host block and matching Codex app project entry
+when you no longer need the alias:
+
+```sh
+npx boxdown ssh-config uninstall
+```
+
 ### Commands
 
 ```sh
@@ -84,6 +91,7 @@ boxdown stop
 boxdown down
 boxdown doctor
 boxdown ssh-config install
+boxdown ssh-config uninstall
 boxdown ssh-proxy
 boxdown refresh-gh-token
 boxdown refresh-gh-token-running

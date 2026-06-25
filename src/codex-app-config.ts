@@ -37,6 +37,12 @@ export interface InstallCodexAppConfigResult {
   changed: boolean
 }
 
+export interface UninstallCodexAppConfigResult {
+  configPath: string
+  backupPath?: string
+  changed: boolean
+}
+
 function isRecord (value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
@@ -209,6 +215,31 @@ export function mergeCodexAppProject (config: CodexAppConfig, entry: CodexAppPro
   }
 }
 
+export function removeCodexAppProject (config: CodexAppConfig, entry: CodexAppProjectEntry): CodexAppConfig {
+  const remotePath = normalizeRemotePath(entry.remotePath)
+  const remoteConnections = config.remoteConnections.flatMap((connection) => {
+    if (connection.sshAlias !== entry.sshAlias) {
+      return [connection]
+    }
+
+    const projects = connection.projects.filter((project) => normalizeRemotePath(project.remotePath) !== remotePath)
+
+    if (projects.length === 0) {
+      return []
+    }
+
+    return [{
+      sshAlias: connection.sshAlias,
+      projects
+    }]
+  })
+
+  return {
+    ...config,
+    remoteConnections
+  }
+}
+
 function readCodexAppConfigFile (configPath: string): CodexAppConfig {
   if (!existsSync(configPath)) {
     return {
@@ -274,6 +305,42 @@ export function installCodexAppConfigProject (
   return {
     configPath,
     ...(backupPath === undefined ? {} : { backupPath }),
+    changed: true
+  }
+}
+
+export function uninstallCodexAppConfigProject (
+  entry: CodexAppProjectEntry,
+  options: { configPath?: string, now?: Date } = {}
+): UninstallCodexAppConfigResult {
+  const configPath = options.configPath ?? defaultCodexAppConfigPath()
+  const existingConfigExists = existsSync(configPath)
+
+  if (!existingConfigExists) {
+    return {
+      configPath,
+      changed: false
+    }
+  }
+
+  const existingConfig = readCodexAppConfigFile(configPath)
+  const nextConfig = removeCodexAppProject(existingConfig, entry)
+
+  if (JSON.stringify(existingConfig) === JSON.stringify(nextConfig)) {
+    return {
+      configPath,
+      changed: false
+    }
+  }
+
+  const nextJson = `${JSON.stringify(nextConfig, null, 2)}\n`
+  const backupPath = backupPathFor(configPath, options.now ?? new Date())
+  copyFileSync(configPath, backupPath)
+  writeJsonAtomic(configPath, nextJson)
+
+  return {
+    configPath,
+    backupPath,
     changed: true
   }
 }

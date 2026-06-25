@@ -5,6 +5,7 @@
 ```sh
 boxdown ssh-config install
 boxdown ssh-config install --target codex
+boxdown ssh-config uninstall
 boxdown ssh-proxy
 ```
 
@@ -31,6 +32,11 @@ The generated SSH config block includes:
 
 The block is wrapped in Boxdown markers so repeated installs replace the managed
 block instead of duplicating it.
+
+`boxdown ssh-config uninstall` removes the Boxdown-managed marker block for the
+selected alias and the matching Codex app remote project entry for the
+workspace. It leaves unrelated OpenSSH config entries, unrelated Codex remote
+projects, generated state, and SSH key files in place.
 
 `boxdown status` reports whether that Boxdown-managed block is `installed`,
 `missing`, or `outdated`. It only recognizes blocks wrapped in Boxdown's marker

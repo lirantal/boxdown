@@ -1,13 +1,13 @@
 import { existsSync } from 'node:fs'
 
-import { codexProjectEntryForWorkspace, installCodexAppConfigProject } from './codex-app-config.ts'
+import { codexProjectEntryForWorkspace, installCodexAppConfigProject, uninstallCodexAppConfigProject } from './codex-app-config.ts'
 import { codingAgentFromCommand, type CodingAgentCli } from './coding-agents.ts'
 import { doctorHasFailures, formatDoctorText, runDoctorChecks } from './doctor.ts'
 import { startDevcontainer, printPortHint, openShell, openCodingAgentCli, ensureContainerSshRuntime, runSshdProxy, refreshContainerGhAuth, refreshContainerCodingAgentClis, findRunningContainerId, findWorkspaceContainer, stopWorkspaceContainer, removeWorkspaceContainer, listWorkspaceContainers } from './devcontainer.ts'
 import { createWorkspaceListEntries, formatWorkspaceListText } from './list.ts'
 import { listWorkspaceMetadata, writeWorkspaceMetadata } from './metadata.ts'
 import { createWorkspaceContext, defaultDataRoot } from './paths.ts'
-import { defaultSshAlias, installSshConfig } from './ssh-config.ts'
+import { defaultSshAlias, installSshConfig, uninstallSshConfig } from './ssh-config.ts'
 import { createStatusInfo, formatStatusText, statusIsHealthy } from './status.ts'
 
 export type BoxdownCommand =
@@ -19,6 +19,7 @@ export type BoxdownCommand =
   | 'down'
   | 'doctor'
   | 'ssh-config-install'
+  | 'ssh-config-uninstall'
   | 'ssh-proxy'
   | 'refresh-gh-token'
   | 'refresh-gh-token-running'
@@ -50,6 +51,7 @@ export const USAGE = `Usage:
   boxdown down [--workspace <path>]
   boxdown doctor [--workspace <path>]
   boxdown ssh-config install [--workspace <path>] [--alias <name>] [--target codex]
+  boxdown ssh-config uninstall [--workspace <path>] [--alias <name>]
   boxdown ssh-proxy [--workspace <path>] [--alias <name>]
   boxdown refresh-gh-token [--workspace <path>]
   boxdown refresh-gh-token-running [--workspace <path>]
@@ -74,6 +76,8 @@ Commands:
   doctor                    Check required host tools and Boxdown assets.
   ssh-config install        Install or update an SSH host alias for the workspace
                             devcontainer.
+  ssh-config uninstall      Remove Boxdown's managed SSH host alias block and
+                            matching Codex app project entry.
   ssh-proxy                 Internal command used by the generated SSH
                             ProxyCommand. Starts or reuses the devcontainer and
                             bridges SSH over docker exec.
@@ -262,7 +266,11 @@ export function parseCliArgs (argv: string[]): ParsedCli {
       return parsed('ssh-config-install')
     }
 
-    throw new Error(`Unknown ssh-config command: ${positional.slice(1).join(' ')}. Usage: boxdown ssh-config [install] [--workspace <path>] [--alias <name>] [--target codex]`)
+    if (positional[1] === 'uninstall' && positional.length === 2) {
+      return parsed('ssh-config-uninstall')
+    }
+
+    throw new Error(`Unknown ssh-config command: ${positional.slice(1).join(' ')}. Usage: boxdown ssh-config [install|uninstall] [--workspace <path>] [--alias <name>] [--target codex]`)
   }
 
   if (positional[0] === 'ssh-proxy' && positional.length === 1) {
@@ -330,6 +338,24 @@ export async function runCli (argv: string[] = process.argv.slice(2)): Promise<n
         process.stdout.write('Restart Codex to apply the remote project entry.\n')
       }
 
+      return 0
+    }
+
+    if (parsed.command === 'ssh-config-uninstall') {
+      uninstallSshConfig(alias)
+      const entry = codexProjectEntryForWorkspace(context, alias)
+      const result = uninstallCodexAppConfigProject(entry)
+
+      process.stdout.write(`\nCodex app config: ${result.configPath}\n`)
+      process.stdout.write(result.changed
+        ? `Removed Codex remote project: ${entry.label} (${entry.remotePath})\n`
+        : `Codex remote project not installed: ${entry.label} (${entry.remotePath})\n`)
+
+      if (result.backupPath !== undefined) {
+        process.stdout.write(`Codex app config backup: ${result.backupPath}\n`)
+      }
+
+      process.stdout.write('Restart Codex to apply the remote project removal.\n')
       return 0
     }
 

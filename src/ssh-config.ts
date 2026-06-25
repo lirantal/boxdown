@@ -75,6 +75,42 @@ export function replaceSshConfigBlock (existingConfig: string, alias: string, bl
   return `${nextLines.join('\n')}${nextLines.length > 0 ? '\n\n' : ''}${block}`
 }
 
+export function removeSshConfigBlock (existingConfig: string, alias: string): string {
+  const begin = `# BEGIN ${alias} boxdown devcontainer ssh`
+  const end = `# END ${alias} boxdown devcontainer ssh`
+  const lines = existingConfig.split(/\r?\n/)
+  const nextLines: string[] = []
+  let skipping = false
+  let removed = false
+
+  for (const line of lines) {
+    if (line === begin) {
+      skipping = true
+      removed = true
+      continue
+    }
+
+    if (line === end && skipping) {
+      skipping = false
+      continue
+    }
+
+    if (!skipping) {
+      nextLines.push(line)
+    }
+  }
+
+  if (!removed) {
+    return existingConfig
+  }
+
+  while (nextLines.length > 0 && nextLines[nextLines.length - 1] === '') {
+    nextLines.pop()
+  }
+
+  return nextLines.length > 0 ? `${nextLines.join('\n')}\n` : ''
+}
+
 export async function installSshConfig (context: WorkspaceContext, alias: string, options: { quiet?: boolean, configPath?: string } = {}): Promise<void> {
   validateSshAlias(alias)
   await ensureHostSshKey(context, options.quiet ?? false)
@@ -110,4 +146,37 @@ export async function installSshConfig (context: WorkspaceContext, alias: string
     process.stdout.write(`Identity file: ${context.sshKeyPath}\n\n`)
     process.stdout.write(`Validate with:\n  ssh ${alias} 'whoami && pwd'\n`)
   }
+}
+
+export function uninstallSshConfig (alias: string, options: { quiet?: boolean, configPath?: string } = {}): boolean {
+  validateSshAlias(alias)
+
+  const sshConfigPath = options.configPath ?? defaultSshConfigPath()
+
+  if (!existsSync(sshConfigPath)) {
+    if (!options.quiet) {
+      process.stdout.write(`SSH alias not installed: ${alias}\n`)
+      process.stdout.write(`SSH config: ${sshConfigPath}\n`)
+    }
+
+    return false
+  }
+
+  const existingConfig = readFileSync(sshConfigPath, 'utf8')
+  const nextConfig = removeSshConfigBlock(existingConfig, alias)
+  const changed = nextConfig !== existingConfig
+
+  if (changed) {
+    writeFileSync(sshConfigPath, nextConfig)
+    chmodSync(sshConfigPath, 0o600)
+  }
+
+  if (!options.quiet) {
+    process.stdout.write(changed
+      ? `Uninstalled SSH alias: ${alias}\n`
+      : `SSH alias not installed: ${alias}\n`)
+    process.stdout.write(`SSH config: ${sshConfigPath}\n`)
+  }
+
+  return changed
 }

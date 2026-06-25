@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, test } from 'node:test'
 
-import { codexProjectEntryForWorkspace, defaultCodexAppConfigPath, installCodexAppConfigProject, mergeCodexAppProject, parseCodexAppConfig } from '../src/codex-app-config.ts'
+import { codexProjectEntryForWorkspace, defaultCodexAppConfigPath, installCodexAppConfigProject, mergeCodexAppProject, parseCodexAppConfig, removeCodexAppProject, uninstallCodexAppConfigProject } from '../src/codex-app-config.ts'
 import { codingAgentBinary, codingAgentFromCommand } from '../src/coding-agents.ts'
 import { buildGeneratedDevcontainerConfig, publishContainerPortFromConfig } from '../src/config.ts'
 import { BOXDOWN_CONTAINER_AGENTS_DIR, DEVCONTAINER_CLI_VERSION } from '../src/constants.ts'
@@ -20,7 +20,7 @@ import { commandWritesWorkspaceMetadata, parseCliArgs, USAGE } from '../src/main
 import { listWorkspaceMetadata, writeWorkspaceMetadata } from '../src/metadata.ts'
 import { createWorkspaceContext } from '../src/paths.ts'
 import { DEFAULT_TTY_MAX_COLUMNS, interactiveShellEnvArgs, interactiveShellScript } from '../src/shell.ts'
-import { buildSshConfigBlock, defaultSshAlias, installSshConfig, replaceSshConfigBlock } from '../src/ssh-config.ts'
+import { buildSshConfigBlock, defaultSshAlias, installSshConfig, removeSshConfigBlock, replaceSshConfigBlock, uninstallSshConfig } from '../src/ssh-config.ts'
 import { createStatusInfo, formatStatusText, inspectSshConfigStatus, parseDockerPsJsonLines, statusIsHealthy } from '../src/status.ts'
 
 const assetsDevcontainerDir = fileURLToPath(new URL('../assets/devcontainer', import.meta.url))
@@ -129,6 +129,23 @@ describe('CLI parsing', () => {
     })
   })
 
+  test('parses ssh-config uninstall', () => {
+    assert.deepStrictEqual(parseCliArgs(['ssh-config', 'uninstall']), {
+      command: 'ssh-config-uninstall',
+      workspace: undefined,
+      alias: undefined,
+      recreate: false,
+      json: false
+    })
+    assert.deepStrictEqual(parseCliArgs(['ssh-config', 'uninstall', '--workspace', '/tmp/project', '--alias', 'demo-devcontainer']), {
+      command: 'ssh-config-uninstall',
+      workspace: '/tmp/project',
+      alias: 'demo-devcontainer',
+      recreate: false,
+      json: false
+    })
+  })
+
   test('parses lifecycle commands', () => {
     assert.deepStrictEqual(parseCliArgs(['list', '--json']), {
       command: 'list',
@@ -152,6 +169,7 @@ describe('CLI parsing', () => {
   test('rejects unknown commands', () => {
     assert.throws(() => parseCliArgs(['ssh-config', 'remove']), /Unknown ssh-config command: remove/)
     assert.throws(() => parseCliArgs(['ssh-config', 'install', 'extra']), /Unknown ssh-config command: install extra/)
+    assert.throws(() => parseCliArgs(['ssh-config', 'uninstall', 'extra']), /Unknown ssh-config command: uninstall extra/)
     assert.throws(() => parseCliArgs(['install-ssh-config']), /Unknown command/)
     assert.throws(() => parseCliArgs(['start', '--json']), /--json is only supported with status and list/)
     assert.throws(() => parseCliArgs(['ssh-config', 'install', '--target', 'cursor']), /Unsupported ssh-config install target: cursor/)
@@ -183,6 +201,7 @@ describe('CLI parsing', () => {
     assert.ok(!usageLines.some((line) => line.startsWith('  shell')))
     assert.ok(!usageLines.some((line) => line.startsWith('  install-ssh-config')))
     assert.match(USAGE, /ssh-config install\s+Install or update an SSH host alias/)
+    assert.match(USAGE, /ssh-config uninstall\s+Remove Boxdown's managed SSH host alias/)
     assert.match(USAGE, /--target codex\s+Also register the SSH alias/)
     assert.match(USAGE, /ssh-proxy\s+Internal command used by the generated SSH/)
     assert.match(USAGE, /refresh-gh-token\s+Start or reuse the devcontainer/)
@@ -260,6 +279,7 @@ describe('workspace metadata', () => {
     assert.strictEqual(commandWritesWorkspaceMetadata('list'), false)
     assert.strictEqual(commandWritesWorkspaceMetadata('start'), true)
     assert.strictEqual(commandWritesWorkspaceMetadata('ssh-config-install'), true)
+    assert.strictEqual(commandWritesWorkspaceMetadata('ssh-config-uninstall'), false)
     assert.strictEqual(commandWritesWorkspaceMetadata('ssh-proxy'), true)
     assert.strictEqual(commandWritesWorkspaceMetadata('refresh-gh-token'), true)
     assert.strictEqual(commandWritesWorkspaceMetadata('refresh-gh-token-running'), true)
@@ -683,6 +703,46 @@ describe('SSH config generation', () => {
     assert.match(second, /Host github.com/)
     assert.strictEqual(second.split(`# BEGIN ${alias} boxdown`).length - 1, 1)
   })
+
+  test('removes managed block without touching unrelated SSH config', () => {
+    const workspace = tempDir('ssh-remove-workspace')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('ssh-remove-cache'),
+        BOXDOWN_DATA_HOME: tempDir('ssh-remove-data')
+      },
+      assetsDevcontainerDir
+    })
+    const alias = defaultSshAlias(context.workspaceBasename)
+    const block = buildSshConfigBlock(context, alias)
+    const existing = replaceSshConfigBlock('Host github.com\n  User git\n', alias, block)
+    const removed = removeSshConfigBlock(existing, alias)
+
+    assert.strictEqual(removed, 'Host github.com\n  User git\n')
+    assert.strictEqual(removed.includes(`# BEGIN ${alias} boxdown`), false)
+    assert.strictEqual(removeSshConfigBlock(removed, alias), removed)
+  })
+
+  test('uninstalls managed SSH config block idempotently', async () => {
+    const workspace = tempDir('ssh-uninstall-workspace')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('ssh-uninstall-cache'),
+        BOXDOWN_DATA_HOME: tempDir('ssh-uninstall-data')
+      },
+      assetsDevcontainerDir
+    })
+    const alias = defaultSshAlias(context.workspaceBasename)
+    const sshConfigPath = join(tempDir('ssh-uninstall-config'), 'config')
+
+    await installSshConfig(context, alias, { quiet: true, configPath: sshConfigPath })
+
+    assert.strictEqual(uninstallSshConfig(alias, { quiet: true, configPath: sshConfigPath }), true)
+    assert.strictEqual(readFileSync(sshConfigPath, 'utf8'), '')
+    assert.strictEqual(uninstallSshConfig(alias, { quiet: true, configPath: sshConfigPath }), false)
+  })
 })
 
 describe('Codex app config injection', () => {
@@ -770,6 +830,81 @@ describe('Codex app config injection', () => {
         }
       ]
     })
+  })
+
+  test('removes by SSH alias and normalized remote path', () => {
+    const config = parseCodexAppConfig({
+      version: 1,
+      remoteConnectionMaxRetryAttempts: 2,
+      sshConnectTimeoutSeconds: 30,
+      remoteConnections: [
+        {
+          sshAlias: 'demo-devcontainer',
+          projects: [
+            {
+              remotePath: '/home/node/demo/',
+              label: 'Demo'
+            },
+            {
+              remotePath: '/home/node/other-demo',
+              label: 'Other demo'
+            }
+          ]
+        },
+        {
+          sshAlias: 'other-devcontainer',
+          projects: [
+            {
+              remotePath: '/home/node/demo',
+              label: 'Other connection demo'
+            }
+          ]
+        }
+      ]
+    })
+
+    const first = removeCodexAppProject(config, {
+      sshAlias: 'demo-devcontainer',
+      remotePath: '/home/node/demo',
+      label: 'Demo'
+    })
+    const second = removeCodexAppProject(first, {
+      sshAlias: 'demo-devcontainer',
+      remotePath: '/home/node/other-demo',
+      label: 'Other demo'
+    })
+
+    assert.strictEqual(first.remoteConnectionMaxRetryAttempts, 2)
+    assert.strictEqual(first.sshConnectTimeoutSeconds, 30)
+    assert.deepStrictEqual(first.remoteConnections[0], {
+      sshAlias: 'demo-devcontainer',
+      projects: [
+        {
+          remotePath: '/home/node/other-demo',
+          label: 'Other demo'
+        }
+      ]
+    })
+    assert.deepStrictEqual(first.remoteConnections[1], {
+      sshAlias: 'other-devcontainer',
+      projects: [
+        {
+          remotePath: '/home/node/demo',
+          label: 'Other connection demo'
+        }
+      ]
+    })
+    assert.deepStrictEqual(second.remoteConnections, [
+      {
+        sshAlias: 'other-devcontainer',
+        projects: [
+          {
+            remotePath: '/home/node/demo',
+            label: 'Other connection demo'
+          }
+        ]
+      }
+    ])
   })
 
   test('creates a missing Codex app config', () => {
@@ -878,6 +1013,85 @@ describe('Codex app config injection', () => {
             {
               remotePath: '/home/node/other',
               label: 'Other'
+            }
+          ]
+        }
+      ]
+    })
+  })
+
+  test('uninstalls existing Codex project config and writes a backup', () => {
+    const configPath = join(tempDir('codex-uninstall'), 'config.json')
+    writeFileSync(configPath, `${JSON.stringify({
+      version: 1,
+      remoteConnections: [
+        {
+          sshAlias: 'demo-devcontainer',
+          projects: [
+            {
+              remotePath: '/home/node/demo/',
+              label: 'Demo'
+            },
+            {
+              remotePath: '/home/node/other-demo',
+              label: 'Other demo'
+            }
+          ]
+        },
+        {
+          sshAlias: 'other-devcontainer',
+          projects: [
+            {
+              remotePath: '/home/node/demo',
+              label: 'Other connection demo'
+            }
+          ]
+        }
+      ]
+    }, null, 2)}\n`)
+
+    const result = uninstallCodexAppConfigProject({
+      sshAlias: 'demo-devcontainer',
+      remotePath: '/home/node/demo',
+      label: 'Demo'
+    }, {
+      configPath,
+      now: new Date('2026-01-01T00:00:00.000Z')
+    })
+    const second = uninstallCodexAppConfigProject({
+      sshAlias: 'demo-devcontainer',
+      remotePath: '/home/node/demo',
+      label: 'Demo'
+    }, {
+      configPath,
+      now: new Date('2026-01-02T00:00:00.000Z')
+    })
+
+    assert.strictEqual(result.changed, true)
+    assert.strictEqual(result.backupPath, `${configPath}.2026-01-01T00-00-00-000Z.bak`)
+    assert.strictEqual(existsSync(result.backupPath), true)
+    assert.deepStrictEqual(second, {
+      configPath,
+      changed: false
+    })
+    assert.deepStrictEqual(JSON.parse(readFileSync(configPath, 'utf8')), {
+      version: 1,
+      remoteConnections: [
+        {
+          sshAlias: 'demo-devcontainer',
+          projects: [
+            {
+              remotePath: '/home/node/other-demo',
+              label: 'Other demo'
+            }
+          ]
+        },
+        {
+          sshAlias: 'other-devcontainer',
+          projects: [
+            {
+              remotePath: '/home/node/demo',
+              label: 'Other connection demo'
             }
           ]
         }
