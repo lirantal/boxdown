@@ -34,9 +34,10 @@ The block is wrapped in Boxdown markers so repeated installs replace the managed
 block instead of duplicating it.
 
 `boxdown ssh-config uninstall` removes the Boxdown-managed marker block for the
-selected alias and the matching Codex app remote project entry for the
-workspace. It leaves unrelated OpenSSH config entries, unrelated Codex remote
-projects, generated state, and SSH key files in place.
+selected alias, the matching Codex app remote project entry, and the matching
+Codex persisted sidebar state for the workspace. It leaves unrelated OpenSSH
+config entries, unrelated Codex remote projects, generated state, and SSH key
+files in place.
 
 `boxdown status` reports whether that Boxdown-managed block is `installed`,
 `missing`, or `outdated`. It only recognizes blocks wrapped in Boxdown's marker

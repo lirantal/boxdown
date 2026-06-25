@@ -45,10 +45,10 @@ External app configuration is always explicit. For example,
 configuration under `~/.codex/codex-app/config.json`, but it does not make that
 file part of Boxdown workspace state.
 
-Boxdown only writes the Codex app config entry needed to point Codex at the
-Boxdown-managed SSH alias and container-side project path. It does not mutate
-Codex's global state file; Codex owns any discovered remote connection,
-sidebar ordering, and project IDs it derives after restart.
+Boxdown writes the Codex app config entry needed to point Codex at the
+Boxdown-managed SSH alias and container-side project path. On uninstall, it also
+removes the matching Codex global-state sidebar cache entry that Codex derived
+from that app config. Other Codex global state remains Codex-owned.
 
 ## Container Asset Mounts
 

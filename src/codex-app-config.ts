@@ -7,6 +7,7 @@ import type { WorkspaceContext } from './paths.ts'
 export const CODEX_APP_CONFIG_VERSION = 1
 export const CODEX_APP_CONFIG_DIRNAME = 'codex-app'
 export const CODEX_APP_CONFIG_FILENAME = 'config.json'
+export const CODEX_GLOBAL_STATE_FILENAME = '.codex-global-state.json'
 
 export interface CodexAppProjectConfig {
   remotePath: string
@@ -39,6 +40,12 @@ export interface InstallCodexAppConfigResult {
 
 export interface UninstallCodexAppConfigResult {
   configPath: string
+  backupPath?: string
+  changed: boolean
+}
+
+export interface UninstallCodexGlobalStateResult {
+  statePath: string
   backupPath?: string
   changed: boolean
 }
@@ -141,6 +148,10 @@ export function defaultCodexAppConfigPath (env: NodeJS.ProcessEnv = process.env)
   return env.BOXDOWN_CODEX_APP_CONFIG ?? join(env.HOME ?? homedir(), '.codex', CODEX_APP_CONFIG_DIRNAME, CODEX_APP_CONFIG_FILENAME)
 }
 
+export function defaultCodexGlobalStatePath (env: NodeJS.ProcessEnv = process.env): string {
+  return env.BOXDOWN_CODEX_GLOBAL_STATE ?? join(env.HOME ?? homedir(), '.codex', CODEX_GLOBAL_STATE_FILENAME)
+}
+
 export function codexRemotePathForWorkspace (context: WorkspaceContext): string {
   return `/home/node/${context.workspaceBasename}`
 }
@@ -161,6 +172,10 @@ export function normalizeRemotePath (remotePath: string): string {
   }
 
   return trimmed.replace(/\/+$/u, '')
+}
+
+export function codexDiscoveredRemoteHostId (sshAlias: string): string {
+  return `remote-ssh-discovered:${sshAlias}`
 }
 
 export function mergeCodexAppProject (config: CodexAppConfig, entry: CodexAppProjectEntry): CodexAppConfig {
@@ -238,6 +253,105 @@ export function removeCodexAppProject (config: CodexAppConfig, entry: CodexAppPr
     ...config,
     remoteConnections
   }
+}
+
+function cloneJsonObject (value: Record<string, unknown>): Record<string, unknown> {
+  return JSON.parse(JSON.stringify(value)) as Record<string, unknown>
+}
+
+function removeObjectKey (value: unknown, key: string): void {
+  if (isRecord(value)) {
+    delete value[key]
+  }
+}
+
+function removeFromStringArray (value: unknown, removedValues: Set<string>): unknown {
+  if (!Array.isArray(value)) {
+    return value
+  }
+
+  return value.filter((item) => typeof item !== 'string' || !removedValues.has(item))
+}
+
+function cleanupStringArrayField (container: Record<string, unknown>, key: string, removedValues: Set<string>): void {
+  if (Array.isArray(container[key])) {
+    container[key] = removeFromStringArray(container[key], removedValues)
+  }
+}
+
+function cleanupCodexStateContainer (container: Record<string, unknown>, hostId: string, remotePath: string): Set<string> {
+  const removedProjectIds = new Set<string>()
+  const remoteProjects = container['remote-projects']
+
+  if (Array.isArray(remoteProjects)) {
+    container['remote-projects'] = remoteProjects.filter((project) => {
+      if (!isRecord(project)) {
+        return true
+      }
+
+      const matches = project.hostId === hostId &&
+        typeof project.remotePath === 'string' &&
+        normalizeRemotePath(project.remotePath) === remotePath
+
+      if (matches && typeof project.id === 'string') {
+        removedProjectIds.add(project.id)
+      }
+
+      return !matches
+    })
+  }
+
+  const managedConnections = container['codex-managed-remote-connections']
+  if (Array.isArray(managedConnections)) {
+    container['codex-managed-remote-connections'] = managedConnections.filter((connection) => !isRecord(connection) || connection.hostId !== hostId)
+  }
+
+  for (const key of [
+    'remote-connection-analytics-id-by-host-id',
+    'remote-connection-auto-connect-by-host-id',
+    'preferred-non-full-access-agent-mode-by-host-id',
+    'agent-mode-by-host-id',
+    'unread-thread-ids-by-host-v1'
+  ]) {
+    removeObjectKey(container[key], hostId)
+  }
+
+  if (container['selected-remote-host-id'] === hostId) {
+    delete container['selected-remote-host-id']
+  }
+
+  return removedProjectIds
+}
+
+export function removeCodexGlobalStateProject (state: Record<string, unknown>, entry: CodexAppProjectEntry): Record<string, unknown> {
+  const hostId = codexDiscoveredRemoteHostId(entry.sshAlias)
+  const remotePath = normalizeRemotePath(entry.remotePath)
+  const nextState = cloneJsonObject(state)
+  const removedProjectIds = cleanupCodexStateContainer(nextState, hostId, remotePath)
+  const atomState = nextState['electron-persisted-atom-state']
+
+  if (isRecord(atomState)) {
+    for (const projectId of cleanupCodexStateContainer(atomState, hostId, remotePath)) {
+      removedProjectIds.add(projectId)
+    }
+  }
+
+  if (removedProjectIds.size > 0) {
+    cleanupStringArrayField(nextState, 'project-order', removedProjectIds)
+
+    for (const projectId of removedProjectIds) {
+      removeObjectKey(nextState['sidebar-collapsed-groups'], projectId)
+    }
+
+    if (isRecord(atomState)) {
+      cleanupStringArrayField(atomState, 'project-order', removedProjectIds)
+      for (const projectId of removedProjectIds) {
+        removeObjectKey(atomState['sidebar-collapsed-groups'], projectId)
+      }
+    }
+  }
+
+  return nextState
 }
 
 function readCodexAppConfigFile (configPath: string): CodexAppConfig {
@@ -340,6 +454,47 @@ export function uninstallCodexAppConfigProject (
 
   return {
     configPath,
+    backupPath,
+    changed: true
+  }
+}
+
+export function uninstallCodexGlobalStateProject (
+  entry: CodexAppProjectEntry,
+  options: { statePath?: string, now?: Date } = {}
+): UninstallCodexGlobalStateResult {
+  const statePath = options.statePath ?? defaultCodexGlobalStatePath()
+
+  if (!existsSync(statePath)) {
+    return {
+      statePath,
+      changed: false
+    }
+  }
+
+  const existingJson = readFileSync(statePath, 'utf8')
+  const existingState = JSON.parse(existingJson) as unknown
+
+  if (!isRecord(existingState)) {
+    throw new Error(`Invalid Codex global state JSON: ${statePath}`)
+  }
+
+  const nextState = removeCodexGlobalStateProject(existingState, entry)
+  const nextJson = `${JSON.stringify(nextState)}\n`
+
+  if (JSON.stringify(existingState) === JSON.stringify(nextState)) {
+    return {
+      statePath,
+      changed: false
+    }
+  }
+
+  const backupPath = backupPathFor(statePath, options.now ?? new Date())
+  copyFileSync(statePath, backupPath)
+  writeJsonAtomic(statePath, nextJson)
+
+  return {
+    statePath,
     backupPath,
     changed: true
   }

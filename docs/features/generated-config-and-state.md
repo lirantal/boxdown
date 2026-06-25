@@ -56,8 +56,9 @@ config at:
 
 `BOXDOWN_CODEX_APP_CONFIG` overrides this path for tests and local development.
 The Codex entry refers to the Boxdown-managed SSH alias and the container-side
-project path `/home/node/<repo-name>`. Codex owns any later global-state records
-or sidebar entries it creates from that config.
+project path `/home/node/<repo-name>`. Codex owns later global-state records and
+sidebar entries it creates from that config, but `boxdown ssh-config uninstall`
+removes the matching Codex sidebar cache entry when unregistering the project.
 
 ## Generated Changes
 

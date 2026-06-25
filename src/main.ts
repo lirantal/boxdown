@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs'
 
-import { codexProjectEntryForWorkspace, installCodexAppConfigProject, uninstallCodexAppConfigProject } from './codex-app-config.ts'
+import { codexProjectEntryForWorkspace, installCodexAppConfigProject, uninstallCodexAppConfigProject, uninstallCodexGlobalStateProject } from './codex-app-config.ts'
 import { codingAgentFromCommand, type CodingAgentCli } from './coding-agents.ts'
 import { doctorHasFailures, formatDoctorText, runDoctorChecks } from './doctor.ts'
 import { startDevcontainer, printPortHint, openShell, openCodingAgentCli, ensureContainerSshRuntime, runSshdProxy, refreshContainerGhAuth, refreshContainerCodingAgentClis, findRunningContainerId, findWorkspaceContainer, stopWorkspaceContainer, removeWorkspaceContainer, listWorkspaceContainers } from './devcontainer.ts'
@@ -353,6 +353,17 @@ export async function runCli (argv: string[] = process.argv.slice(2)): Promise<n
 
       if (result.backupPath !== undefined) {
         process.stdout.write(`Codex app config backup: ${result.backupPath}\n`)
+      }
+
+      const stateResult = uninstallCodexGlobalStateProject(entry)
+
+      process.stdout.write(`\nCodex app state: ${stateResult.statePath}\n`)
+      process.stdout.write(stateResult.changed
+        ? `Removed Codex sidebar state: ${entry.label} (${entry.remotePath})\n`
+        : `Codex sidebar state not installed: ${entry.label} (${entry.remotePath})\n`)
+
+      if (stateResult.backupPath !== undefined) {
+        process.stdout.write(`Codex app state backup: ${stateResult.backupPath}\n`)
       }
 
       process.stdout.write('Restart Codex to apply the remote project removal.\n')

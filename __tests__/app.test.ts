@@ -6,7 +6,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, test } from 'node:test'
 
-import { codexProjectEntryForWorkspace, defaultCodexAppConfigPath, installCodexAppConfigProject, mergeCodexAppProject, parseCodexAppConfig, removeCodexAppProject, uninstallCodexAppConfigProject } from '../src/codex-app-config.ts'
+import { codexDiscoveredRemoteHostId, codexProjectEntryForWorkspace, defaultCodexAppConfigPath, defaultCodexGlobalStatePath, installCodexAppConfigProject, mergeCodexAppProject, parseCodexAppConfig, removeCodexAppProject, removeCodexGlobalStateProject, uninstallCodexAppConfigProject, uninstallCodexGlobalStateProject } from '../src/codex-app-config.ts'
 import { codingAgentBinary, codingAgentFromCommand } from '../src/coding-agents.ts'
 import { buildGeneratedDevcontainerConfig, publishContainerPortFromConfig } from '../src/config.ts'
 import { BOXDOWN_CONTAINER_AGENTS_DIR, DEVCONTAINER_CLI_VERSION } from '../src/constants.ts'
@@ -1096,6 +1096,118 @@ describe('Codex app config injection', () => {
           ]
         }
       ]
+    })
+  })
+
+  test('uninstalls matching Codex global sidebar state and writes a backup', () => {
+    const statePath = join(tempDir('codex-state-uninstall'), '.codex-global-state.json')
+    const entry = {
+      sshAlias: 'demo-devcontainer',
+      remotePath: '/home/node/demo',
+      label: 'Demo'
+    }
+    const hostId = codexDiscoveredRemoteHostId(entry.sshAlias)
+    const otherHostId = codexDiscoveredRemoteHostId('other-devcontainer')
+    const state = {
+      'remote-connection-analytics-id-by-host-id': {
+        [hostId]: 'demo-analytics',
+        [otherHostId]: 'other-analytics'
+      },
+      'codex-managed-remote-connections': [
+        {
+          hostId,
+          displayName: entry.sshAlias,
+          alias: entry.sshAlias
+        },
+        {
+          hostId: otherHostId,
+          displayName: 'other-devcontainer',
+          alias: 'other-devcontainer'
+        }
+      ],
+      'selected-remote-host-id': hostId,
+      'remote-connection-auto-connect-by-host-id': {
+        [hostId]: true,
+        [otherHostId]: false
+      },
+      'project-order': ['demo-project-id', 'other-project-id'],
+      'sidebar-collapsed-groups': {
+        'demo-project-id': true,
+        'other-project-id': true
+      },
+      'remote-projects': [
+        {
+          id: 'demo-project-id',
+          hostId,
+          remotePath: '/home/node/demo/',
+          label: 'Demo'
+        },
+        {
+          id: 'other-project-id',
+          hostId: otherHostId,
+          remotePath: '/home/node/other',
+          label: 'Other'
+        }
+      ],
+      'electron-persisted-atom-state': {
+        'agent-mode-by-host-id': {
+          [hostId]: 'auto',
+          [otherHostId]: 'full-access'
+        }
+      }
+    }
+
+    writeFileSync(statePath, `${JSON.stringify(state)}\n`)
+
+    const pure = removeCodexGlobalStateProject(state, entry)
+    const result = uninstallCodexGlobalStateProject(entry, {
+      statePath,
+      now: new Date('2026-01-01T00:00:00.000Z')
+    })
+    const second = uninstallCodexGlobalStateProject(entry, {
+      statePath,
+      now: new Date('2026-01-02T00:00:00.000Z')
+    })
+    const nextState = JSON.parse(readFileSync(statePath, 'utf8'))
+
+    assert.strictEqual(defaultCodexGlobalStatePath({ HOME: '/tmp/home' }), '/tmp/home/.codex/.codex-global-state.json')
+    assert.strictEqual(defaultCodexGlobalStatePath({ HOME: '/tmp/home', BOXDOWN_CODEX_GLOBAL_STATE: '/tmp/state.json' }), '/tmp/state.json')
+    assert.deepStrictEqual(pure, nextState)
+    assert.strictEqual(result.changed, true)
+    assert.strictEqual(result.backupPath, `${statePath}.2026-01-01T00-00-00-000Z.bak`)
+    assert.strictEqual(existsSync(result.backupPath), true)
+    assert.deepStrictEqual(second, {
+      statePath,
+      changed: false
+    })
+    assert.deepStrictEqual(nextState['remote-projects'], [
+      {
+        id: 'other-project-id',
+        hostId: otherHostId,
+        remotePath: '/home/node/other',
+        label: 'Other'
+      }
+    ])
+    assert.deepStrictEqual(nextState['codex-managed-remote-connections'], [
+      {
+        hostId: otherHostId,
+        displayName: 'other-devcontainer',
+        alias: 'other-devcontainer'
+      }
+    ])
+    assert.deepStrictEqual(nextState['project-order'], ['other-project-id'])
+    assert.deepStrictEqual(nextState['sidebar-collapsed-groups'], {
+      'other-project-id': true
+    })
+    assert.deepStrictEqual(nextState['remote-connection-analytics-id-by-host-id'], {
+      [otherHostId]: 'other-analytics'
+    })
+    assert.deepStrictEqual(nextState['remote-connection-auto-connect-by-host-id'], {
+      [otherHostId]: false
+    })
+    assert.strictEqual(nextState['selected-remote-host-id'], undefined)
+    assert.deepStrictEqual(nextState['electron-persisted-atom-state']['agent-mode-by-host-id'], {
+      [otherHostId]: 'full-access'
     })
   })
 
