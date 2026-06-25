@@ -149,6 +149,55 @@ IPv6 loopback (`[::1]:<port>`), the random forwarded URL can reset even though a
 listener exists. In that case, either use `boxdown tunnel --port <port>`, or
 start the dev server with a host flag such as `--host 0.0.0.0`.
 
+## IPv4 and IPv6 Loopback Options
+
+The Codex detected-port issue is not an `/etc/hosts` problem. `/etc/hosts` maps
+names such as `localhost` to addresses, but a generated SSH forward that targets
+remote `127.0.0.1:<port>` uses a numeric IP literal. No name lookup happens, so
+changing the container's `localhost` entry would not make `127.0.0.1` reach a
+server that is listening only on `[::1]`.
+
+Potential Boxdown-side approaches:
+
+1. Inject a Node.js IPv4 preference.
+
+   Boxdown could add this to the generated devcontainer environment:
+
+   ```sh
+   NODE_OPTIONS=--dns-result-order=ipv4first
+   ```
+
+   This would likely make Node-based dev servers such as Vite and Slidev resolve
+   `localhost` to `127.0.0.1` first, causing Codex's generated
+   `127.0.0.1:<port>` forward to work without app-specific flags.
+
+   This is the smallest built-in fix to evaluate, but it mainly helps Node.js
+   tools. It would not normalize loopback behavior for dev servers written in
+   other runtimes.
+
+2. Run a Boxdown-managed loopback bridge inside the container.
+
+   A background helper could detect a listener on `[::1]:<port>` where
+   `127.0.0.1:<port>` is not listening, then bind `127.0.0.1:<port>` and proxy
+   traffic to `[::1]:<port>`.
+
+   This would be runtime-agnostic and would let Codex's generated
+   `127.0.0.1:<port>` forwards work for more tools. The tradeoff is a more
+   complex container-side service: it would need port discovery, race handling,
+   conflict handling, lifecycle cleanup, and clear diagnostics.
+
+3. Keep `boxdown tunnel` as the explicit escape hatch.
+
+   The current `boxdown tunnel --port <port>` command creates Boxdown's own SSH
+   local forward and targets remote `localhost:<port>` rather than remote
+   `127.0.0.1:<port>`. That covers dev servers bound to IPv6 loopback,
+   IPv4 loopback, or all interfaces, as long as the remote `localhost` name
+   resolves to a reachable address for that server.
+
+   This is reliable and fully under Boxdown's control, but it requires an extra
+   foreground command. It is useful as a debugging and fallback path, not a
+   fully automatic browser-forwarding experience.
+
 ## Key Boundary
 
 The private key stays on the host. The container receives only the public key,
