@@ -81,3 +81,14 @@ Docker `runArgs`.
 The v1 asset config publishes container port `3000` with a dynamic host port.
 After `up`, Boxdown asks Docker for the mapped host binding and prints the
 result as an HTTP URL when available.
+
+For dev servers that choose another port after the container is already running,
+use the SSH tunnel command instead:
+
+```sh
+boxdown tunnel --port 3030
+boxdown tunnel --workspace /path/to/project --port 3030
+```
+
+This is the preferred path for host browsers and the Codex in-app browser when a
+server is listening on container-local `localhost`.

@@ -69,6 +69,24 @@ npx boxdown ssh-config install --target codex
 Restart Codex after installing the target so the app applies its updated remote
 project config.
 
+From the target project directory, forward a dev server running inside the
+container to your host browser:
+
+```sh
+npx boxdown tunnel --port 3030
+```
+
+This keeps a foreground SSH tunnel open until you press Ctrl-C. The host and
+Codex in-app browser can then open `http://localhost:3030/`. Repeat `--port`
+or use `<local:remote>` mappings when needed:
+
+```sh
+npx boxdown tunnel --port 3030 --port 8080:3031
+```
+
+Use `--workspace <path>` only when running the command from a different
+directory.
+
 Remove Boxdown's managed SSH host block and matching Codex app project entry
 when you no longer need the alias:
 
@@ -93,6 +111,7 @@ boxdown doctor
 boxdown ssh-config install
 boxdown ssh-config uninstall
 boxdown ssh-proxy
+boxdown tunnel --port 3030
 boxdown refresh-gh-token
 boxdown refresh-gh-token-running
 ```
@@ -121,6 +140,7 @@ Shared options:
 --workspace <path>  # target project directory, defaults to cwd
 --alias <name>      # SSH alias, defaults to <repo-name>-devcontainer
 --target codex      # also register the SSH alias as a Codex remote project
+--port <port>       # tunnel port for `boxdown tunnel`; repeatable
 --recreate          # recreate the devcontainer before starting
 --json              # JSON output for status and list
 ```

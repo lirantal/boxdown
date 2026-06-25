@@ -7,6 +7,7 @@ boxdown ssh-config install
 boxdown ssh-config install --target codex
 boxdown ssh-config uninstall
 boxdown ssh-proxy
+boxdown tunnel --port 3030
 ```
 
 `boxdown ssh-config` is accepted as a convenience shortcut for
@@ -97,6 +98,56 @@ This does not publish an SSH port. The SSH stream travels through Docker exec.
 The coding-agent CLI update preflight covers already-running containers, where
 `postStartCommand` does not necessarily run before a new SSH session. Its output
 is routed to stderr so stdout remains reserved for SSH traffic.
+
+## Local Web Tunnels
+
+The SSH proxy supports TCP forwarding, so Boxdown can expose a web server that is
+listening only inside the devcontainer.
+
+From the target project directory:
+
+```sh
+boxdown tunnel --port 3030
+```
+
+From another directory:
+
+```sh
+boxdown tunnel --workspace /path/to/project --port 3030
+```
+
+This starts or reuses the devcontainer, ensures the SSH alias exists, and then
+keeps a foreground SSH tunnel open:
+
+```text
+127.0.0.1:3030 -> localhost:3030
+```
+
+While the tunnel is running, host browsers and the Codex in-app browser can open
+`http://localhost:3030/`.
+
+Repeat `--port` for multiple forwards. Use `<local:remote>` when the host port
+should differ from the container port:
+
+```sh
+boxdown tunnel --port 3030 --port 8080:3031
+```
+
+The tunnel targets remote `localhost` rather than `127.0.0.1` so servers that
+bind to the container's IPv6 loopback, such as some Slidev dev sessions, still
+work.
+
+Devcontainer `forwardPorts` is an editor hint, not a host listener in the Codex
+desktop app. Docker `runArgs` / `appPort` publishing can also expose services,
+but it requires the server to bind to an externally reachable container address
+such as `0.0.0.0` and may require recreating the container.
+
+Codex's own detected-port forwarding may create a random host URL such as
+`http://localhost:52548/`. That is expected, but the generated SSH forward may
+target remote `127.0.0.1:<port>`. If the dev server is only listening on remote
+IPv6 loopback (`[::1]:<port>`), the random forwarded URL can reset even though a
+listener exists. In that case, either use `boxdown tunnel --port <port>`, or
+start the dev server with a host flag such as `--host 0.0.0.0`.
 
 ## Key Boundary
 

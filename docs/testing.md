@@ -64,5 +64,14 @@ boxdown ssh-config install --workspace /path/to/repo --target codex
 ssh <repo-name>-devcontainer 'whoami && pwd'
 ```
 
+When checking browser access, start a dev server inside the container and keep a
+foreground tunnel open from the host:
+
+```sh
+boxdown tunnel --workspace /path/to/repo --port 3030
+```
+
+Confirm `http://localhost:3030/` works, then stop the tunnel with Ctrl-C.
+
 Run this from at least two repositories when changing workspace isolation,
 container lookup, SSH config generation, or generated config behavior.

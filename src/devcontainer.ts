@@ -17,6 +17,16 @@ export interface StartOptions {
   reuseRunning?: boolean
 }
 
+export interface TunnelPortForward {
+  localPort: number
+  remotePort: number
+}
+
+export interface SshTunnelOptions {
+  bindAddress?: string
+  remoteHost?: string
+}
+
 function devcontainerWorkspaceArgs (context: WorkspaceContext): string[] {
   return [
     '--workspace-folder',
@@ -315,6 +325,26 @@ export async function runSshdProxy (containerId: string): Promise<number> {
     '-o',
     'PermitTTY=yes'
   ])
+}
+
+export function sshTunnelArgs (alias: string, ports: TunnelPortForward[], options: SshTunnelOptions = {}): string[] {
+  const bindAddress = options.bindAddress ?? '127.0.0.1'
+  const remoteHost = options.remoteHost ?? 'localhost'
+
+  return [
+    '-N',
+    '-o',
+    'ExitOnForwardFailure=yes',
+    ...ports.flatMap((port) => [
+      '-L',
+      `${bindAddress}:${port.localPort}:${remoteHost}:${port.remotePort}`
+    ]),
+    alias
+  ]
+}
+
+export async function openSshTunnel (alias: string, ports: TunnelPortForward[], options: SshTunnelOptions = {}): Promise<number> {
+  return runInteractive('ssh', sshTunnelArgs(alias, ports, options))
 }
 
 async function hostGhTokenOrEmpty (): Promise<string> {

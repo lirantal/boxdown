@@ -10,13 +10,13 @@ import { codexDiscoveredRemoteHostId, codexProjectEntryForWorkspace, defaultCode
 import { codingAgentBinary, codingAgentFromCommand } from '../src/coding-agents.ts'
 import { buildGeneratedDevcontainerConfig, publishContainerPortFromConfig } from '../src/config.ts'
 import { BOXDOWN_CONTAINER_AGENTS_DIR, BOXDOWN_CONTAINER_CODEX_AUTH_PATH, BOXDOWN_CONTAINER_CODEX_DIR, DEVCONTAINER_CLI_VERSION } from '../src/constants.ts'
-import { codingAgentDevcontainerExecArgs } from '../src/devcontainer.ts'
+import { codingAgentDevcontainerExecArgs, sshTunnelArgs } from '../src/devcontainer.ts'
 import { resolveDevcontainerCli } from '../src/devcontainer-cli.ts'
 import { doctorHasFailures, formatDoctorText } from '../src/doctor.ts'
 import { canonicalGithubRemoteUrl, configureWorkspaceGithubGitAuth } from '../src/github-git-auth.ts'
 import { parseJsonc } from '../src/jsonc.ts'
 import { createWorkspaceListEntries, formatWorkspaceListText } from '../src/list.ts'
-import { commandWritesWorkspaceMetadata, parseCliArgs, USAGE } from '../src/main.ts'
+import { commandWritesWorkspaceMetadata, parseCliArgs, parseTunnelPort, USAGE } from '../src/main.ts'
 import { listWorkspaceMetadata, writeWorkspaceMetadata } from '../src/metadata.ts'
 import { createWorkspaceContext } from '../src/paths.ts'
 import { DEFAULT_TTY_MAX_COLUMNS, interactiveShellEnvArgs, interactiveShellScript } from '../src/shell.ts'
@@ -146,6 +146,47 @@ describe('CLI parsing', () => {
     })
   })
 
+  test('parses tunnel ports', () => {
+    assert.deepStrictEqual(parseTunnelPort('3030'), {
+      localPort: 3030,
+      remotePort: 3030
+    })
+    assert.deepStrictEqual(parseTunnelPort('8080:3030'), {
+      localPort: 8080,
+      remotePort: 3030
+    })
+    assert.deepStrictEqual(parseCliArgs(['tunnel', '--port', '3030']), {
+      command: 'tunnel',
+      workspace: undefined,
+      alias: undefined,
+      tunnelPorts: [
+        {
+          localPort: 3030,
+          remotePort: 3030
+        }
+      ],
+      recreate: false,
+      json: false
+    })
+    assert.deepStrictEqual(parseCliArgs(['tunnel', '--workspace', '/tmp/project', '--port', '3030', '--port', '8080:3031']), {
+      command: 'tunnel',
+      workspace: '/tmp/project',
+      alias: undefined,
+      tunnelPorts: [
+        {
+          localPort: 3030,
+          remotePort: 3030
+        },
+        {
+          localPort: 8080,
+          remotePort: 3031
+        }
+      ],
+      recreate: false,
+      json: false
+    })
+  })
+
   test('parses lifecycle commands', () => {
     assert.deepStrictEqual(parseCliArgs(['list', '--json']), {
       command: 'list',
@@ -174,10 +215,15 @@ describe('CLI parsing', () => {
     assert.throws(() => parseCliArgs(['start', '--json']), /--json is only supported with status and list/)
     assert.throws(() => parseCliArgs(['ssh-config', 'install', '--target', 'cursor']), /Unsupported ssh-config install target: cursor/)
     assert.throws(() => parseCliArgs(['start', '--target', 'codex']), /--target is only supported with ssh-config install/)
+    assert.throws(() => parseCliArgs(['start', '--port', '3030']), /--port is only supported with tunnel/)
     assert.throws(() => parseCliArgs(['codex', '--target', 'codex']), /--target is only supported with ssh-config install/)
+    assert.throws(() => parseCliArgs(['codex', '--port', '3030']), /--port is only supported with tunnel/)
     assert.throws(() => parseCliArgs(['start', '--', '--ignored']), /passthrough is only supported/)
     assert.throws(() => parseCliArgs(['claude', 'resume']), /must come after --/)
     assert.throws(() => parseCliArgs(['claude', '--continue']), /Unknown option: --continue/)
+    assert.throws(() => parseCliArgs(['tunnel', '--port', '0']), /Invalid tunnel port: 0/)
+    assert.throws(() => parseCliArgs(['tunnel', '--port', '65536']), /Invalid tunnel port: 65536/)
+    assert.throws(() => parseCliArgs(['tunnel', '--port', '3030:3031:3032']), /Invalid tunnel port: 3030:3031:3032/)
   })
 
   test('help describes available commands', () => {
@@ -204,6 +250,8 @@ describe('CLI parsing', () => {
     assert.match(USAGE, /ssh-config uninstall\s+Remove Boxdown's managed SSH host alias/)
     assert.match(USAGE, /--target codex\s+Also register the SSH alias/)
     assert.match(USAGE, /ssh-proxy\s+Internal command used by the generated SSH/)
+    assert.match(USAGE, /tunnel\s+Start or reuse the devcontainer/)
+    assert.match(USAGE, /--port <port>\s+Tunnel a local port/)
     assert.match(USAGE, /refresh-gh-token\s+Start or reuse the devcontainer/)
     assert.match(USAGE, /refresh-gh-token-running\s+Refresh GitHub CLI auth only if/)
   })
@@ -281,6 +329,7 @@ describe('workspace metadata', () => {
     assert.strictEqual(commandWritesWorkspaceMetadata('ssh-config-install'), true)
     assert.strictEqual(commandWritesWorkspaceMetadata('ssh-config-uninstall'), false)
     assert.strictEqual(commandWritesWorkspaceMetadata('ssh-proxy'), true)
+    assert.strictEqual(commandWritesWorkspaceMetadata('tunnel'), true)
     assert.strictEqual(commandWritesWorkspaceMetadata('refresh-gh-token'), true)
     assert.strictEqual(commandWritesWorkspaceMetadata('refresh-gh-token-running'), true)
     assert.strictEqual(commandWritesWorkspaceMetadata('coding-agent'), true)
@@ -735,6 +784,28 @@ describe('SSH config generation', () => {
     assert.ok(!block.includes('npx --yes boxdown'))
     assert.match(block, /--workspace '/)
     assert.match(block, /IdentityFile "/)
+  })
+
+  test('builds SSH local tunnel args against remote localhost', () => {
+    assert.deepStrictEqual(sshTunnelArgs('demo-devcontainer', [
+      {
+        localPort: 3030,
+        remotePort: 3030
+      },
+      {
+        localPort: 8080,
+        remotePort: 3031
+      }
+    ]), [
+      '-N',
+      '-o',
+      'ExitOnForwardFailure=yes',
+      '-L',
+      '127.0.0.1:3030:localhost:3030',
+      '-L',
+      '127.0.0.1:8080:localhost:3031',
+      'demo-devcontainer'
+    ])
   })
 
   test('replaces managed block idempotently', () => {

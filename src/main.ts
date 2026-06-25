@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs'
 import { codexProjectEntryForWorkspace, installCodexAppConfigProject, uninstallCodexAppConfigProject, uninstallCodexGlobalStateProject } from './codex-app-config.ts'
 import { codingAgentFromCommand, type CodingAgentCli } from './coding-agents.ts'
 import { doctorHasFailures, formatDoctorText, runDoctorChecks } from './doctor.ts'
-import { startDevcontainer, printPortHint, openShell, openCodingAgentCli, ensureContainerSshRuntime, runSshdProxy, refreshContainerGhAuth, refreshContainerCodingAgentClis, findRunningContainerId, findWorkspaceContainer, stopWorkspaceContainer, removeWorkspaceContainer, listWorkspaceContainers } from './devcontainer.ts'
+import { startDevcontainer, printPortHint, openShell, openCodingAgentCli, ensureContainerSshRuntime, runSshdProxy, refreshContainerGhAuth, refreshContainerCodingAgentClis, findRunningContainerId, findWorkspaceContainer, stopWorkspaceContainer, removeWorkspaceContainer, listWorkspaceContainers, openSshTunnel, type TunnelPortForward } from './devcontainer.ts'
 import { createWorkspaceListEntries, formatWorkspaceListText } from './list.ts'
 import { listWorkspaceMetadata, writeWorkspaceMetadata } from './metadata.ts'
 import { createWorkspaceContext, defaultDataRoot } from './paths.ts'
@@ -21,6 +21,7 @@ export type BoxdownCommand =
   | 'ssh-config-install'
   | 'ssh-config-uninstall'
   | 'ssh-proxy'
+  | 'tunnel'
   | 'refresh-gh-token'
   | 'refresh-gh-token-running'
   | 'coding-agent'
@@ -34,6 +35,7 @@ export interface ParsedCli {
   workspace?: string
   alias?: string
   target?: SshConfigInstallTarget
+  tunnelPorts?: TunnelPortForward[]
   recreate: boolean
   json: boolean
 }
@@ -53,6 +55,7 @@ export const USAGE = `Usage:
   boxdown ssh-config install [--workspace <path>] [--alias <name>] [--target codex]
   boxdown ssh-config uninstall [--workspace <path>] [--alias <name>]
   boxdown ssh-proxy [--workspace <path>] [--alias <name>]
+  boxdown tunnel --port <port> [--port <local:remote>] [--workspace <path>] [--alias <name>]
   boxdown refresh-gh-token [--workspace <path>]
   boxdown refresh-gh-token-running [--workspace <path>]
 
@@ -81,6 +84,8 @@ Commands:
   ssh-proxy                 Internal command used by the generated SSH
                             ProxyCommand. Starts or reuses the devcontainer and
                             bridges SSH over docker exec.
+  tunnel                    Start or reuse the devcontainer, then keep an SSH
+                            local port tunnel open for host/browser access.
   refresh-gh-token          Start or reuse the devcontainer, then copy host
                             GitHub CLI auth into the container when available.
   refresh-gh-token-running  Refresh GitHub CLI auth only if the workspace
@@ -90,6 +95,8 @@ Options:
   --workspace <path>  Target project directory. Defaults to the current directory.
   --alias <name>      SSH host alias. Defaults to <repo-name>-devcontainer.
   --target codex      Also register the SSH alias as a Codex app remote project.
+  --port <port>       Tunnel a local port to the same remote port, or use
+                      <local:remote>. Repeatable. Supported by tunnel.
   --recreate          Remove the existing devcontainer before starting.
   --json              Print JSON output. Supported by status and list.
   --help, -h          Show help.
@@ -100,6 +107,7 @@ export function commandWritesWorkspaceMetadata (command: BoxdownCommand): boolea
     'start',
     'ssh-config-install',
     'ssh-proxy',
+    'tunnel',
     'refresh-gh-token',
     'refresh-gh-token-running',
     'coding-agent'
@@ -111,6 +119,7 @@ export function parseCliArgs (argv: string[]): ParsedCli {
   let workspace: string | undefined
   let alias: string | undefined
   let target: SshConfigInstallTarget | undefined
+  const tunnelPorts: TunnelPortForward[] = []
   let recreate = false
   let json = false
   let passthroughArgs: string[] | undefined
@@ -129,11 +138,16 @@ export function parseCliArgs (argv: string[]): ParsedCli {
       throw new Error('--target is only supported with ssh-config install')
     }
 
+    if (tunnelPorts.length > 0 && command !== 'tunnel') {
+      throw new Error('--port is only supported with tunnel')
+    }
+
     return {
       command,
       workspace,
       alias,
       ...(target === undefined ? {} : { target }),
+      ...(tunnelPorts.length === 0 ? {} : { tunnelPorts }),
       recreate,
       json
     }
@@ -146,6 +160,10 @@ export function parseCliArgs (argv: string[]): ParsedCli {
 
     if (target !== undefined) {
       throw new Error('--target is only supported with ssh-config install')
+    }
+
+    if (tunnelPorts.length > 0) {
+      throw new Error('--port is only supported with tunnel')
     }
 
     return {
@@ -195,6 +213,15 @@ export function parseCliArgs (argv: string[]): ParsedCli {
       }
 
       target = value
+      continue
+    }
+
+    if (arg === '--port') {
+      const value = args.shift()
+      if (value === undefined) {
+        throw new Error('--port requires a value')
+      }
+      tunnelPorts.push(parseTunnelPort(value))
       continue
     }
 
@@ -277,6 +304,10 @@ export function parseCliArgs (argv: string[]): ParsedCli {
     return parsed('ssh-proxy')
   }
 
+  if (positional[0] === 'tunnel' && positional.length === 1) {
+    return parsed('tunnel')
+  }
+
   if (positional[0] === 'refresh-gh-token' && positional.length === 1) {
     return parsed('refresh-gh-token')
   }
@@ -286,6 +317,40 @@ export function parseCliArgs (argv: string[]): ParsedCli {
   }
 
   throw new Error(`Unknown command: ${positional.join(' ')}`)
+}
+
+function parsePortNumber (value: string): number {
+  if (!/^[0-9]+$/.test(value)) {
+    throw new Error(`Invalid tunnel port: ${value}`)
+  }
+
+  const port = Number(value)
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    throw new Error(`Invalid tunnel port: ${value}`)
+  }
+
+  return port
+}
+
+export function parseTunnelPort (value: string): TunnelPortForward {
+  const parts = value.split(':')
+
+  if (parts.length === 1) {
+    const port = parsePortNumber(parts[0] ?? '')
+    return {
+      localPort: port,
+      remotePort: port
+    }
+  }
+
+  if (parts.length === 2) {
+    return {
+      localPort: parsePortNumber(parts[0] ?? ''),
+      remotePort: parsePortNumber(parts[1] ?? '')
+    }
+  }
+
+  throw new Error(`Invalid tunnel port: ${value}`)
 }
 
 export async function runCli (argv: string[] = process.argv.slice(2)): Promise<number> {
@@ -413,6 +478,28 @@ export async function runCli (argv: string[] = process.argv.slice(2)): Promise<n
       await refreshContainerCodingAgentClis(context, true)
       await ensureContainerSshRuntime(context)
       return runSshdProxy(containerId)
+    }
+
+    if (parsed.command === 'tunnel') {
+      const tunnelPorts = parsed.tunnelPorts ?? []
+      if (tunnelPorts.length === 0) {
+        throw new Error('tunnel requires at least one --port value')
+      }
+
+      await installSshConfig(context, alias, { quiet: true })
+      await startDevcontainer(context, {
+        recreate: parsed.recreate,
+        reuseRunning: true
+      })
+
+      const forwards = tunnelPorts
+        .map((port) => `127.0.0.1:${port.localPort} -> localhost:${port.remotePort}`)
+        .join(', ')
+
+      process.stdout.write(`Forwarding ${forwards}\n`)
+      process.stdout.write('Press Ctrl-C to stop the tunnel.\n')
+
+      return openSshTunnel(alias, tunnelPorts)
     }
 
     if (parsed.command === 'refresh-gh-token-running') {
