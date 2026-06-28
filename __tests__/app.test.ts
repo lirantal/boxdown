@@ -19,7 +19,7 @@ import { createWorkspaceListEntries, formatWorkspaceListText } from '../src/list
 import { commandWritesWorkspaceMetadata, parseCliArgs, parseTunnelPort, USAGE } from '../src/main.ts'
 import { listWorkspaceMetadata, writeWorkspaceMetadata } from '../src/metadata.ts'
 import { createWorkspaceContext } from '../src/paths.ts'
-import { DEFAULT_TTY_MAX_COLUMNS, interactiveShellEnvArgs, interactiveShellScript } from '../src/shell.ts'
+import { DEFAULT_TTY_MAX_COLUMNS, interactiveCommandScript, interactiveShellEnvArgs, interactiveShellScript } from '../src/shell.ts'
 import { buildSshConfigBlock, defaultSshAlias, installSshConfig, removeSshConfigBlock, replaceSshConfigBlock, uninstallSshConfig } from '../src/ssh-config.ts'
 import { createStatusInfo, formatStatusText, inspectSshConfigStatus, parseDockerPsJsonLines, statusIsHealthy } from '../src/status.ts'
 
@@ -706,10 +706,21 @@ describe('interactive shell setup', () => {
   test('clamps only oversized interactive TTY columns before opening bash', () => {
     const script = interactiveShellScript()
 
+    assert.match(script, /infocmp "\$\{TERM:-xterm-256color\}"/)
+    assert.match(script, /export TERM=xterm-256color/)
     assert.match(script, /stty size/)
     assert.match(script, /stty cols "\$max_columns"/)
     assert.match(script, /BOXDOWN_TTY_NORMALIZE/)
     assert.match(script, /exec bash -i/)
+  })
+
+  test('normalizes unknown TERM values before interactive commands', () => {
+    const script = interactiveCommandScript()
+
+    assert.match(script, /infocmp "\$\{TERM:-xterm-256color\}"/)
+    assert.match(script, /export TERM=xterm-256color/)
+    assert.match(script, /export COLORTERM="\$\{COLORTERM:-truecolor\}"/)
+    assert.match(script, /exec "\$@"/)
   })
 })
 

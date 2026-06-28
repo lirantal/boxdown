@@ -45,8 +45,18 @@ function interactiveTtySetupScript (): string {
   ].join('\n')
 }
 
+function interactiveTermSetupScript (): string {
+  return [
+    'if ! infocmp "${TERM:-xterm-256color}" >/dev/null 2>&1; then',
+    '  export TERM=xterm-256color',
+    'fi',
+    'export COLORTERM="${COLORTERM:-truecolor}"'
+  ].join('\n')
+}
+
 export function interactiveShellScript (): string {
   return [
+    interactiveTermSetupScript(),
     interactiveTtySetupScript(),
     'exec bash -i'
   ].join('\n')
@@ -54,6 +64,7 @@ export function interactiveShellScript (): string {
 
 export function interactiveCommandScript (): string {
   return [
+    interactiveTermSetupScript(),
     interactiveTtySetupScript(),
     'exec "$@"'
   ].join('\n')

@@ -57,6 +57,12 @@ PTY, especially from embedded terminals. Before opening the shell, Boxdown
 clamps interactive terminal width to 120 columns when the reported width is
 larger.
 
+Before starting the interactive shell or a coding-agent command, Boxdown also
+checks whether the container recognizes the forwarded `TERM` value. If the
+container does not have terminfo for a host-specific terminal such as Ghostty,
+Boxdown falls back to `xterm-256color` while preserving truecolor support with
+`COLORTERM=truecolor`.
+
 Override the default width when you want a wider layout:
 
 ```sh

@@ -387,13 +387,13 @@ print_port_hint() {
 
 open_shell() {
   echo "Dropping into container shell..."
-  # Resolve TERM to something the container's terminfo knows about.
-  # Terminals like kitty, ghostty, alacritty set custom TERM values the container won't have.
-  # Fall back to xterm-256color (truecolor still works via COLORTERM=truecolor).
-  if ! infocmp "${TERM:-xterm-256color}" &>/dev/null 2>&1; then
-    TERM=xterm-256color
-  fi
-  TERM="${TERM:-xterm-256color}" devcontainer_cli exec --workspace-folder "$WORKSPACE_FOLDER" -- env TERM="${TERM:-xterm-256color}" COLORTERM=truecolor bash
+  TERM="${TERM:-xterm-256color}" devcontainer_cli exec --workspace-folder "$WORKSPACE_FOLDER" -- env TERM="${TERM:-xterm-256color}" COLORTERM=truecolor bash -c '
+    if ! infocmp "${TERM:-xterm-256color}" >/dev/null 2>&1; then
+      export TERM=xterm-256color
+    fi
+    export COLORTERM="${COLORTERM:-truecolor}"
+    exec bash -i
+  '
 }
 
 ensure_container_sshd_runtime() {
