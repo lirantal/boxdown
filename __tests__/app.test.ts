@@ -1,6 +1,6 @@
 import assert from 'node:assert'
 import { execFileSync } from 'node:child_process'
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -315,7 +315,10 @@ describe('coding-agent command mapping', () => {
     assert.ok(args.includes('COLORTERM=truecolor'))
     assert.ok(args.includes('bash'))
     assert.ok(args.includes('-c'))
-    assert.match(args.join('\n'), /exec "\$@"/)
+    const commandScript = args.join('\n')
+    assert.match(commandScript, /codex_home="\$\{CODEX_HOME:-\$\{HOME\}\/\.codex\}"/)
+    assert.match(commandScript, /export PATH="\$\{HOME\}\/\.local\/bin:\$\{HOME\}\/\.opencode\/bin:\$\{codex_home\}\/packages\/standalone\/current\/bin:\$\{PATH\}"/)
+    assert.match(commandScript, /exec "\$@"/)
     assert.deepStrictEqual(args.slice(-3), ['boxdown-agent', 'agy', '--help'])
   })
 })
@@ -1536,13 +1539,63 @@ describe('packaged assets', () => {
     assert.match(postStart, /coding-agent-cli-update\.sh" maybe-update/)
     assert.match(gitConfigBootstrap, /url\.git@github\.com:\.insteadOf/)
     assert.match(gitConfigBootstrap, /credential\.https:\/\/github\.com\.helper/)
-    assert.match(updater, /DEFAULT_AGENTS=\(codex opencode claude antigravity\)/)
+    assert.match(updater, /DEFAULT_AGENTS=\(codex claude\)/)
     assert.match(updater, /codex update/)
     assert.match(updater, /opencode upgrade --method curl/)
+    assert.match(updater, /link_opencode_binary/)
+    assert.match(updater, /ln -sfn "\$\{source_path\}" "\$\{target_dir\}\/opencode"/)
     assert.match(updater, /claude update/)
     assert.match(updater, /antigravity\.google\/cli\/install\.sh/)
+    assert.match(updater, /ensure_agent\(\)/)
     assert.doesNotMatch(updater, /--skip-path/)
     assert.match(codexWrapper, /coding-agent-cli-update\.sh" "\$\{1:-maybe-update\}" codex/)
+  })
+
+  test('installs only eager coding-agent CLIs by default', () => {
+    const updaterPath = join(assetsDevcontainerDir, 'utils', 'coding-agent-cli-update.sh')
+    const stateDir = tempDir('eager-agent-update-state')
+    const home = tempDir('eager-agent-home')
+    const codexHome = join(home, '.codex')
+    const codexInstallerPath = join(tempDir('eager-codex-installer'), 'install.sh')
+    const claudeInstallerPath = join(tempDir('eager-claude-installer'), 'install.sh')
+    const failInstallerPath = join(tempDir('lazy-agent-fail-installer'), 'install.sh')
+
+    writeFileSync(codexInstallerPath, [
+      '#!/usr/bin/env sh',
+      'set -e',
+      'mkdir -p "${CODEX_HOME}/packages/standalone/current/bin"',
+      'touch "${CODEX_HOME}/packages/standalone/current/bin/codex"'
+    ].join('\n'))
+    writeFileSync(claudeInstallerPath, [
+      '#!/usr/bin/env bash',
+      'set -e',
+      'mkdir -p "${HOME}/.local/bin"',
+      'touch "${HOME}/.local/bin/claude"'
+    ].join('\n'))
+    writeFileSync(failInstallerPath, [
+      '#!/usr/bin/env bash',
+      'exit 37'
+    ].join('\n'))
+
+    execFileSync('bash', [updaterPath, 'install'], {
+      env: {
+        ...process.env,
+        HOME: home,
+        PATH: '/usr/bin:/bin:/usr/sbin:/sbin',
+        CODEX_HOME: codexHome,
+        BOXDOWN_CODEX_INSTALL_URL: `file://${codexInstallerPath}`,
+        BOXDOWN_CLAUDE_INSTALL_URL: `file://${claudeInstallerPath}`,
+        BOXDOWN_OPENCODE_INSTALL_URL: `file://${failInstallerPath}`,
+        BOXDOWN_ANTIGRAVITY_INSTALL_URL: `file://${failInstallerPath}`,
+        BOXDOWN_CODING_AGENT_UPDATE_STATE_DIR: stateDir
+      },
+      stdio: 'pipe'
+    })
+
+    assert.strictEqual(existsSync(join(stateDir, 'codex.stamp')), true)
+    assert.strictEqual(existsSync(join(stateDir, 'claude.stamp')), true)
+    assert.strictEqual(existsSync(join(stateDir, 'opencode.stamp')), false)
+    assert.strictEqual(existsSync(join(stateDir, 'antigravity.stamp')), false)
   })
 
   test('runs Antigravity installer without unsupported path flags', () => {
@@ -1692,6 +1745,7 @@ describe('packaged assets', () => {
       'set -e',
       'mkdir -p "${HOME}/.opencode/bin"',
       'touch "${HOME}/.opencode/bin/opencode"',
+      'chmod +x "${HOME}/.opencode/bin/opencode"',
       'mkdir -p "${BOXDOWN_OPENCODE_INSTALL_TMP_PARENT}/opencode_install_123"',
       'mkdir -p "${BOXDOWN_OPENCODE_INSTALL_TMP_PARENT}/opencode_install_456"'
     ].join('\n'))
@@ -1710,7 +1764,74 @@ describe('packaged assets', () => {
 
     assert.strictEqual(existsSync(join(tmpParent, 'opencode_install_123')), false)
     assert.strictEqual(existsSync(join(tmpParent, 'opencode_install_456')), false)
+    assert.strictEqual(readlinkSync(join(home, '.local', 'bin', 'opencode')), join(home, '.opencode', 'bin', 'opencode'))
     assert.strictEqual(existsSync(join(stateDir, 'opencode.stamp')), true)
+  })
+
+  test('ensures lazy OpenCode install even when the update stamp is fresh', () => {
+    const updaterPath = join(assetsDevcontainerDir, 'utils', 'coding-agent-cli-update.sh')
+    const stateDir = tempDir('opencode-ensure-state')
+    const home = tempDir('opencode-ensure-home')
+    const installerPath = join(tempDir('opencode-ensure-installer'), 'install.sh')
+    mkdirSync(stateDir, { recursive: true })
+    writeFileSync(join(stateDir, 'opencode.stamp'), '')
+
+    writeFileSync(installerPath, [
+      '#!/usr/bin/env bash',
+      'set -e',
+      'mkdir -p "${HOME}/.opencode/bin"',
+      'printf "#!/usr/bin/env bash\\nexit 0\\n" > "${HOME}/.opencode/bin/opencode"',
+      'chmod +x "${HOME}/.opencode/bin/opencode"'
+    ].join('\n'))
+
+    execFileSync('bash', [updaterPath, 'ensure', 'opencode'], {
+      env: {
+        ...process.env,
+        HOME: home,
+        PATH: '/usr/bin:/bin:/usr/sbin:/sbin',
+        BOXDOWN_OPENCODE_INSTALL_URL: `file://${installerPath}`,
+        BOXDOWN_CODING_AGENT_UPDATE_STATE_DIR: stateDir,
+        BOXDOWN_CODING_AGENT_UPDATE_INTERVAL_SECONDS: '999999'
+      },
+      stdio: 'pipe'
+    })
+
+    assert.strictEqual(existsSync(join(home, '.opencode', 'bin', 'opencode')), true)
+    assert.strictEqual(readlinkSync(join(home, '.local', 'bin', 'opencode')), join(home, '.opencode', 'bin', 'opencode'))
+    assert.strictEqual(existsSync(join(stateDir, 'opencode.stamp')), true)
+  })
+
+  test('allows lazy OpenCode launch when update fails but the binary exists', () => {
+    const updaterPath = join(assetsDevcontainerDir, 'utils', 'coding-agent-cli-update.sh')
+    const stateDir = tempDir('opencode-ensure-existing-state')
+    const home = tempDir('opencode-ensure-existing-home')
+    const installerPath = join(tempDir('opencode-ensure-fail-installer'), 'install.sh')
+    const opencodeBinDir = join(home, '.opencode', 'bin')
+    const opencodeBin = join(opencodeBinDir, 'opencode')
+    mkdirSync(opencodeBinDir, { recursive: true })
+    writeFileSync(opencodeBin, [
+      '#!/usr/bin/env bash',
+      'exit 42'
+    ].join('\n'))
+    chmodSync(opencodeBin, 0o755)
+    writeFileSync(installerPath, [
+      '#!/usr/bin/env bash',
+      'exit 37'
+    ].join('\n'))
+
+    execFileSync('bash', [updaterPath, 'ensure', 'opencode'], {
+      env: {
+        ...process.env,
+        HOME: home,
+        PATH: '/usr/bin:/bin:/usr/sbin:/sbin',
+        BOXDOWN_OPENCODE_INSTALL_URL: `file://${installerPath}`,
+        BOXDOWN_CODING_AGENT_UPDATE_STATE_DIR: stateDir,
+        BOXDOWN_CODING_AGENT_UPDATE_INTERVAL_SECONDS: '0'
+      },
+      stdio: 'pipe'
+    })
+
+    assert.strictEqual(existsSync(opencodeBin), true)
   })
 
   test('skips coding-agent CLI refresh when all stamps are fresh', () => {

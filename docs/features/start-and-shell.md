@@ -26,8 +26,14 @@ launch the selected CLI directly:
 
 - `boxdown codex` launches `codex`.
 - `boxdown claude` and `boxdown cc` launch `claude`.
-- `boxdown opencode` launches `opencode`.
-- `boxdown antigravity` launches `agy`.
+- `boxdown opencode` installs/updates OpenCode when needed, then launches
+  `opencode`.
+- `boxdown antigravity` installs/updates Antigravity when needed, then launches
+  `agy`.
+
+Container bring-up eagerly installs only Codex and Claude Code. OpenCode and
+Antigravity are lazy installs so projects that do not use them avoid the extra
+disk usage.
 
 Pass agent-specific arguments after `--` so Boxdown options stay unambiguous:
 
@@ -42,7 +48,7 @@ boxdown claude -- --continue
 3. Generate a Boxdown-owned devcontainer config.
 4. Install or reuse the pinned Dev Containers CLI.
 5. Run `devcontainer up --workspace-folder <repo> --override-config <config>`.
-6. Run container lifecycle hooks, including a best-effort coding-agent CLI refresh.
+6. Run container lifecycle hooks, including a best-effort Codex/Claude CLI refresh.
 7. Print a dynamic port hint when the configured published port is mapped.
 8. Run `devcontainer exec ... bash` to open an interactive shell.
 

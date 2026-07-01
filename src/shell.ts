@@ -54,6 +54,13 @@ function interactiveTermSetupScript (): string {
   ].join('\n')
 }
 
+function interactiveAgentPathScript (): string {
+  return [
+    'codex_home="${CODEX_HOME:-${HOME}/.codex}"',
+    'export PATH="${HOME}/.local/bin:${HOME}/.opencode/bin:${codex_home}/packages/standalone/current/bin:${PATH}"'
+  ].join('\n')
+}
+
 export function interactiveShellScript (): string {
   return [
     interactiveTermSetupScript(),
@@ -66,6 +73,7 @@ export function interactiveCommandScript (): string {
   return [
     interactiveTermSetupScript(),
     interactiveTtySetupScript(),
+    interactiveAgentPathScript(),
     'exec "$@"'
   ].join('\n')
 }

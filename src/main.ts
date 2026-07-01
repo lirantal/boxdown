@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs'
 import { codexProjectEntryForWorkspace, installCodexAppConfigProject, uninstallCodexAppConfigProject, uninstallCodexGlobalStateProject } from './codex-app-config.ts'
 import { codingAgentFromCommand, type CodingAgentCli } from './coding-agents.ts'
 import { doctorHasFailures, formatDoctorText, runDoctorChecks } from './doctor.ts'
-import { startDevcontainer, printPortHint, openShell, openCodingAgentCli, ensureContainerSshRuntime, runSshdProxy, refreshContainerGhAuth, refreshContainerCodingAgentClis, findRunningContainerId, findWorkspaceContainer, stopWorkspaceContainer, removeWorkspaceContainer, listWorkspaceContainers, openSshTunnel, type TunnelPortForward } from './devcontainer.ts'
+import { startDevcontainer, printPortHint, openShell, openCodingAgentCli, ensureContainerSshRuntime, runSshdProxy, refreshContainerGhAuth, refreshContainerCodingAgentClis, ensureContainerCodingAgentCli, findRunningContainerId, findWorkspaceContainer, stopWorkspaceContainer, removeWorkspaceContainer, listWorkspaceContainers, openSshTunnel, type TunnelPortForward } from './devcontainer.ts'
 import { createWorkspaceListEntries, formatWorkspaceListText } from './list.ts'
 import { listWorkspaceMetadata, writeWorkspaceMetadata } from './metadata.ts'
 import { createWorkspaceContext, defaultDataRoot } from './paths.ts'
@@ -66,9 +66,10 @@ Commands:
   claude                    Start or reuse the devcontainer, then launch Claude
                             Code. Alias: cc.
   opencode                  Start or reuse the devcontainer, then launch
-                            OpenCode.
+                            OpenCode, installing it first when needed.
   antigravity               Start or reuse the devcontainer, then launch
-                            Antigravity CLI (agy).
+                            Antigravity CLI (agy), installing it first when
+                            needed.
   list                      List Boxdown-known devcontainer workspaces from any
                             directory.
   status                    Show workspace state, generated paths, SSH key paths,
@@ -524,7 +525,7 @@ export async function runCli (argv: string[] = process.argv.slice(2)): Promise<n
       }
 
       await startDevcontainer(context, { recreate: parsed.recreate })
-      await refreshContainerCodingAgentClis(context, false, [agent])
+      await ensureContainerCodingAgentCli(context, agent)
       return openCodingAgentCli(context, agent, parsed.agentArgs ?? [])
     }
 

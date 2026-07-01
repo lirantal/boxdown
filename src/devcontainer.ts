@@ -303,6 +303,27 @@ export async function refreshContainerCodingAgentClis (context: WorkspaceContext
   }
 }
 
+export async function ensureContainerCodingAgentCli (context: WorkspaceContext, agent: CodingAgentCli): Promise<void> {
+  const cli = resolveDevcontainerCli(context)
+  const result = await runBuffered(cli.command, [
+    ...cli.argsPrefix,
+    'exec',
+    ...devcontainerWorkspaceArgs(context),
+    '--',
+    'bash',
+    `${BOXDOWN_CONTAINER_DEVCONTAINER_DIR}/utils/coding-agent-cli-update.sh`,
+    'ensure',
+    agent
+  ], {
+    mirrorStdout: 'stdout',
+    mirrorStderr: 'stderr'
+  })
+
+  if (result.code !== 0) {
+    throw new Error(`Could not install or refresh ${codingAgentBinary(agent)} inside the devcontainer`)
+  }
+}
+
 export async function runSshdProxy (containerId: string): Promise<number> {
   return runInteractive('docker', [
     'exec',

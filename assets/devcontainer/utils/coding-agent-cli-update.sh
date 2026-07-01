@@ -4,7 +4,7 @@
 
 set -euo pipefail
 
-DEFAULT_AGENTS=(codex opencode claude antigravity)
+DEFAULT_AGENTS=(codex claude)
 UPDATE_INTERVAL_SECONDS="${BOXDOWN_CODING_AGENT_UPDATE_INTERVAL_SECONDS:-3600}"
 UPDATE_LOCK_WAIT_SECONDS="${BOXDOWN_CODING_AGENT_UPDATE_LOCK_WAIT_SECONDS:-120}"
 STATE_DIR="${BOXDOWN_CODING_AGENT_UPDATE_STATE_DIR:-${HOME}/.cache/boxdown/coding-agent-clis}"
@@ -23,6 +23,7 @@ prepend_agent_bin_paths() {
 usage() {
   cat >&2 <<'EOF'
 Usage: coding-agent-cli-update.sh <install|update-now|maybe-update> [codex|opencode|claude|antigravity...]
+       coding-agent-cli-update.sh ensure <codex|opencode|claude|antigravity...>
 EOF
 }
 
@@ -55,6 +56,27 @@ agent_env_prefix() {
       return 1
       ;;
   esac
+}
+
+agent_binary() {
+  case "$1" in
+    codex) printf '%s\n' codex ;;
+    opencode) printf '%s\n' opencode ;;
+    claude) printf '%s\n' claude ;;
+    antigravity) printf '%s\n' agy ;;
+    *)
+      log "unknown coding-agent CLI: $1"
+      return 1
+      ;;
+  esac
+}
+
+agent_binary_available() {
+  local agent="$1"
+  local binary
+
+  binary="$(agent_binary "${agent}")" || return 1
+  command -v "${binary}" >/dev/null 2>&1
 }
 
 agent_stamp_file() {
@@ -370,11 +392,13 @@ install_opencode() {
 
   url="${BOXDOWN_OPENCODE_INSTALL_URL:-https://opencode.ai/install}"
   run_installer_url "${url}" bash -s -- --no-modify-path
+  link_opencode_binary
 }
 
 update_opencode() {
   if command -v opencode >/dev/null 2>&1; then
     if opencode upgrade --method curl; then
+      link_opencode_binary
       return 0
     fi
 
@@ -382,6 +406,18 @@ update_opencode() {
   fi
 
   install_opencode
+}
+
+link_opencode_binary() {
+  local source_path="${HOME}/.opencode/bin/opencode"
+  local target_dir="${HOME}/.local/bin"
+
+  if [ ! -x "${source_path}" ]; then
+    return 0
+  fi
+
+  mkdir -p "${target_dir}"
+  ln -sfn "${source_path}" "${target_dir}/opencode"
 }
 
 install_claude() {
@@ -482,6 +518,44 @@ maybe_update_agent() {
   return "${result}"
 }
 
+ensure_agent() {
+  local agent="$1"
+  local result=0
+
+  if agent_binary_available "${agent}"; then
+    if maybe_update_agent "${agent}"; then
+      return 0
+    fi
+
+    result=$?
+    if agent_binary_available "${agent}"; then
+      log "${agent}: update failed, but the CLI is installed; continuing."
+      return 0
+    fi
+
+    return "${result}"
+  fi
+
+  log "${agent}: CLI is missing; installing before launch."
+  if update_now_agent "${agent}"; then
+    if agent_binary_available "${agent}"; then
+      return 0
+    fi
+
+    log "${agent}: CLI is still unavailable after install/update."
+    return 1
+  fi
+
+  result=$?
+  if agent_binary_available "${agent}"; then
+    log "${agent}: install/update reported failure, but the CLI is installed; continuing."
+    return 0
+  fi
+
+  log "${agent}: CLI is still unavailable after install/update."
+  return "${result}"
+}
+
 run_action_for_agent() {
   local action="$1"
   local agent="$2"
@@ -492,6 +566,9 @@ run_action_for_agent() {
       ;;
     maybe-update)
       maybe_update_agent "${agent}"
+      ;;
+    ensure)
+      ensure_agent "${agent}"
       ;;
     *)
       usage
@@ -514,6 +591,11 @@ main() {
   prepend_agent_bin_paths
 
   if [ "$#" -eq 0 ]; then
+    if [ "${action}" = "ensure" ]; then
+      usage
+      return 1
+    fi
+
     agents=("${DEFAULT_AGENTS[@]}")
   else
     agents=("$@")

@@ -119,9 +119,9 @@ boxdown refresh-gh-token-running
 `boxdown shell` remains supported as an alias for `boxdown start`, but
 documentation uses `start` as the canonical command.
 
-The coding-agent commands start or reuse the devcontainer, refresh the selected
-CLI, then launch it directly inside the container. Use `--` to pass arguments to
-the agent:
+Container bring-up installs Codex and Claude Code by default. The OpenCode and
+Antigravity commands stay available, but install/update those CLIs only when you
+launch them. Use `--` to pass arguments to the selected agent:
 
 ```sh
 boxdown claude -- --continue

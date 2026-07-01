@@ -18,7 +18,7 @@ Run this project in a **consistent Node.js 24 + TypeScript** environment without
 | `start.sh` | Brings the dev container up with the Dev Containers CLI, then opens a shell **inside** the container or acts as an SSH `ProxyCommand`. |
 | `ssh-config-install.sh` | Installs/updates a host SSH config alias for Cursor, Claude, or plain `ssh`. |
 | `hooks/initialize.sh` | Runs on the host before container create/start; prepares the env file and optional secrets. |
-| `hooks/post-create.sh` | Runs once after the container is created — e.g. installs [APM](https://github.com/microsoft/apm) (Agent Package Manager), coding-agent CLIs, and OpenSSH server. |
+| `hooks/post-create.sh` | Runs once after the container is created — e.g. installs [APM](https://github.com/microsoft/apm) (Agent Package Manager), default coding-agent CLIs, and OpenSSH server. |
 | `hooks/post-start.sh` | Runs on each container start; refreshes runtime state such as SSH host keys and authorized keys. |
 | `utils/git-config-bootstrap.sh` | Container-side Git config copy/sanitization helper used by lifecycle scripts. |
 | `utils/ssh-bootstrap.sh` | Container-side OpenSSH install/runtime helper used by lifecycle scripts. |
@@ -180,6 +180,10 @@ It is not a GitHub token and does not authenticate `gh` or GitHub Git remotes.
 - **Other agent config on the host** — Uncomment the `mounts` entries in
   `devcontainer.json` to bind directories such as `~/.claude` or `~/.gemini`
   into the container so coding agents see your existing settings.
+- **Coding-agent defaults** — Container create/start installs or refreshes
+  Codex and Claude Code by default. OpenCode and Antigravity CLI remain
+  available through `boxdown opencode` and `boxdown antigravity`, but install
+  lazily only when those commands are launched.
 - **Agent CLI cleanup** — After a successful coding-agent CLI install/update,
   Boxdown removes stale agent artifacts: old Codex standalone releases, old
   Claude Code versions, OpenCode installer temp directories, and Antigravity
