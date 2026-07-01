@@ -4,7 +4,7 @@ Run this project in a **consistent Node.js 24 + TypeScript** environment without
 
 ## Why use it?
 
-- **Same stack for everyone** — Node 24 plus pinned features provide Git, Python, uv, ripgrep, GitHub CLI, and common shell utilities.
+- **Same stack for everyone** — Node 24 plus pinned features provide Git, uv, ripgrep, GitHub CLI, and common shell utilities; Debian Python is installed during post-create.
 - **Fast onboarding** — Open the folder in a container; dependency installation and local git tweaks run once after create. pnpm-based workspaces bootstrap `pnpm@11` when needed.
 - **Host secrets, container dev** — `ANTHROPIC_API_KEY` and `SNYK_TOKEN` are passed from your Mac/Linux session into the container when set locally (see below).
 - **Optional CLI workflow** — Use `start.sh` if you prefer a terminal-driven container instead of only the editor.
@@ -18,9 +18,10 @@ Run this project in a **consistent Node.js 24 + TypeScript** environment without
 | `start.sh` | Brings the dev container up with the Dev Containers CLI, then opens a shell **inside** the container or acts as an SSH `ProxyCommand`. |
 | `ssh-config-install.sh` | Installs/updates a host SSH config alias for Cursor, Claude, or plain `ssh`. |
 | `hooks/initialize.sh` | Runs on the host before container create/start; prepares the env file and optional secrets. |
-| `hooks/post-create.sh` | Runs once after the container is created — e.g. installs [APM](https://github.com/microsoft/apm) (Agent Package Manager), default coding-agent CLIs, and OpenSSH server. |
+| `hooks/post-create.sh` | Runs once after the container is created — e.g. installs OpenSSH server, Debian Python, [APM](https://github.com/microsoft/apm) (Agent Package Manager), and default coding-agent CLIs. |
 | `hooks/post-start.sh` | Runs on each container start; refreshes runtime state such as SSH host keys and authorized keys. |
 | `utils/git-config-bootstrap.sh` | Container-side Git config copy/sanitization helper used by lifecycle scripts. |
+| `utils/python-bootstrap.sh` | Container-side Debian Python runtime helper used by lifecycle scripts. |
 | `utils/ssh-bootstrap.sh` | Container-side OpenSSH install/runtime helper used by lifecycle scripts. |
 | `utils/coding-agent-cli-update.sh` | Shared install/update helper for Codex, OpenCode, Claude Code, and Antigravity CLI. |
 | `utils/deps-install.sh` | Dependency installation helper used by `hooks/post-create.sh`; bootstraps pnpm/yarn when the slim base does not provide them. |
@@ -29,7 +30,11 @@ Run this project in a **consistent Node.js 24 + TypeScript** environment without
 
 Boxdown uses `node:24-trixie-slim` as the base image to keep the shared image smaller than the full Dev Containers TypeScript/Node image. The devcontainer then installs the required operating-system tools through pinned Dev Container features. `common-utils` and `git` run first so later features and lifecycle hooks can rely on shell basics, `sudo`, package metadata, Git, and related utilities.
 
-The Python feature still installs Python development dependencies for now. JavaScript package managers are handled at workspace setup time: npm comes from the Node image, pnpm is installed as `pnpm@11` for pnpm projects, and Yarn is enabled through Corepack when needed.
+Python is installed during `postCreateCommand` from Debian apt packages (`python3`, `python3-venv`, `python3-pip`, and `pipx`). On Debian trixie this currently provides Python 3.13. Boxdown intentionally avoids the Dev Containers Python feature because it added a large Python runtime/dev-tooling layer, including bundled environments for tools such as mypy, black, pylint, pytest, bandit, pipenv, and flake8.
+
+uv remains a separate pinned feature. It provides `uv`/`uvx`, but it does not provide the system Python runtime by default.
+
+JavaScript package managers are handled at workspace setup time: npm comes from the Node image, pnpm is installed as `pnpm@11` for pnpm projects, and Yarn is enabled through Corepack when needed.
 
 ## Usage
 

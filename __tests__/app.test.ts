@@ -1551,6 +1551,28 @@ describe('packaged assets', () => {
     assert.match(codexWrapper, /coding-agent-cli-update\.sh" "\$\{1:-maybe-update\}" codex/)
   })
 
+  test('installs baseline Python from apt instead of the Python feature', () => {
+    const pythonFeatureRef = 'ghcr.io/devcontainers/features/python@sha256:fbcad6955caeecc5ad3f7886baf652e25cba5225a6c4c2287c536de2e5607511'
+    const devcontainerJson = readFileSync(join(assetsDevcontainerDir, 'devcontainer.json'), 'utf8')
+    const devcontainerConfig = parseJsonc<{
+      features?: Record<string, unknown>
+      overrideFeatureInstallOrder?: string[]
+    }>(devcontainerJson)
+    const postCreate = readFileSync(join(assetsDevcontainerDir, 'hooks', 'post-create.sh'), 'utf8')
+    const pythonBootstrap = readFileSync(join(assetsDevcontainerDir, 'utils', 'python-bootstrap.sh'), 'utf8')
+
+    assert.match(devcontainerJson, /roughly 900MB/)
+    assert.match(devcontainerJson, /heavy Dev Containers Python feature layer/)
+    assert.ok(!Object.keys(devcontainerConfig.features ?? {}).includes(pythonFeatureRef))
+    assert.ok(!(devcontainerConfig.overrideFeatureInstallOrder ?? []).includes(pythonFeatureRef))
+    assert.match(postCreate, /install_python_runtime/)
+    assert.ok(postCreate.indexOf('install_openssh_server') < postCreate.indexOf('install_python_runtime'))
+    assert.ok(postCreate.indexOf('install_python_runtime') < postCreate.indexOf('install_1password_cli'))
+    assert.match(postCreate, /python-bootstrap\.sh" install/)
+    assert.match(pythonBootstrap, /python3 python3-venv python3-pip pipx/)
+    assert.match(pythonBootstrap, /apt-get install -y --no-install-recommends/)
+  })
+
   test('installs only eager coding-agent CLIs by default', () => {
     const updaterPath = join(assetsDevcontainerDir, 'utils', 'coding-agent-cli-update.sh')
     const stateDir = tempDir('eager-agent-update-state')

@@ -74,6 +74,12 @@ shared mounted utility: post-create runs an immediate install/update, while
 post-start and SSH proxy setup run throttled best-effort refreshes for
 already-running containers.
 
+Baseline Python is also lifecycle-owned. The devcontainer installs Debian
+`python3`, `python3-venv`, `python3-pip`, and `pipx` during post-create instead
+of using the Dev Containers Python feature, which keeps the image layer smaller
+and avoids shipping Python dev-tool virtualenvs in every container. uv remains a
+separate feature and does not provide the system Python runtime by default.
+
 Tool refreshes are container-side behavior, not generated config schema.
 Failures should warn without making the devcontainer unusable. SSH proxy
 refresh output must stay off stdout because stdout carries SSH traffic. Locking

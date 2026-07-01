@@ -8,6 +8,7 @@ main() {
   configure_global_git
   configure_local_git
   install_openssh_server
+  install_python_runtime
   install_apm
   install_or_update_coding_agent_clis
   install_1password_cli
@@ -40,6 +41,10 @@ install_or_update_coding_agent_clis() {
 
 install_openssh_server() {
   bash "${DEVCONTAINER_DIR}/utils/ssh-bootstrap.sh" install
+}
+
+install_python_runtime() {
+  bash "${DEVCONTAINER_DIR}/utils/python-bootstrap.sh" install
 }
 
 install_snyk_cli() {
