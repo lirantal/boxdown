@@ -18,8 +18,8 @@ export type BoxdownCommand =
   | 'stop'
   | 'down'
   | 'doctor'
-  | 'ssh-config-install'
-  | 'ssh-config-uninstall'
+  | 'ssh-install'
+  | 'ssh-uninstall'
   | 'ssh-proxy'
   | 'tunnel'
   | 'refresh-gh-token'
@@ -52,8 +52,8 @@ export const USAGE = `Usage:
   boxdown stop [--workspace <path>]
   boxdown down [--workspace <path>]
   boxdown doctor [--workspace <path>]
-  boxdown ssh-config install [--workspace <path>] [--alias <name>] [--target codex]
-  boxdown ssh-config uninstall [--workspace <path>] [--alias <name>]
+  boxdown ssh install [--workspace <path>] [--alias <name>] [--target codex]
+  boxdown ssh uninstall [--workspace <path>] [--alias <name>]
   boxdown ssh-proxy [--workspace <path>] [--alias <name>]
   boxdown tunnel --port <port> [--port <local:remote>] [--workspace <path>] [--alias <name>]
   boxdown refresh-gh-token [--workspace <path>]
@@ -77,9 +77,9 @@ Commands:
   down                      Remove the workspace devcontainer. Keeps Boxdown
                             cache, generated config, data, and SSH keys.
   doctor                    Check required host tools and Boxdown assets.
-  ssh-config install        Install or update an SSH host alias for the workspace
+  ssh install               Install or update an SSH host alias for the workspace
                             devcontainer.
-  ssh-config uninstall      Remove Boxdown's managed SSH host alias block and
+  ssh uninstall             Remove Boxdown's managed SSH host alias block and
                             matching Codex app project entry.
   ssh-proxy                 Internal command used by the generated SSH
                             ProxyCommand. Starts or reuses the devcontainer and
@@ -105,7 +105,7 @@ Options:
 export function commandWritesWorkspaceMetadata (command: BoxdownCommand): boolean {
   return [
     'start',
-    'ssh-config-install',
+    'ssh-install',
     'ssh-proxy',
     'tunnel',
     'refresh-gh-token',
@@ -134,8 +134,8 @@ export function parseCliArgs (argv: string[]): ParsedCli {
       throw new Error('-- passthrough is only supported with coding-agent commands')
     }
 
-    if (target !== undefined && command !== 'ssh-config-install') {
-      throw new Error('--target is only supported with ssh-config install')
+    if (target !== undefined && command !== 'ssh-install') {
+      throw new Error('--target is only supported with ssh install')
     }
 
     if (tunnelPorts.length > 0 && command !== 'tunnel') {
@@ -159,7 +159,7 @@ export function parseCliArgs (argv: string[]): ParsedCli {
     }
 
     if (target !== undefined) {
-      throw new Error('--target is only supported with ssh-config install')
+      throw new Error('--target is only supported with ssh install')
     }
 
     if (tunnelPorts.length > 0) {
@@ -209,7 +209,7 @@ export function parseCliArgs (argv: string[]): ParsedCli {
       }
 
       if (value !== 'codex') {
-        throw new Error(`Unsupported ssh-config install target: ${value}`)
+        throw new Error(`Unsupported ssh install target: ${value}`)
       }
 
       target = value
@@ -288,16 +288,16 @@ export function parseCliArgs (argv: string[]): ParsedCli {
     return parsed('doctor')
   }
 
-  if (positional[0] === 'ssh-config') {
+  if (positional[0] === 'ssh') {
     if (positional.length === 1 || (positional[1] === 'install' && positional.length === 2)) {
-      return parsed('ssh-config-install')
+      return parsed('ssh-install')
     }
 
     if (positional[1] === 'uninstall' && positional.length === 2) {
-      return parsed('ssh-config-uninstall')
+      return parsed('ssh-uninstall')
     }
 
-    throw new Error(`Unknown ssh-config command: ${positional.slice(1).join(' ')}. Usage: boxdown ssh-config [install|uninstall] [--workspace <path>] [--alias <name>] [--target codex]`)
+    throw new Error(`Unknown ssh command: ${positional.slice(1).join(' ')}. Usage: boxdown ssh [install|uninstall] [--workspace <path>] [--alias <name>] [--target codex]`)
   }
 
   if (positional[0] === 'ssh-proxy' && positional.length === 1) {
@@ -384,7 +384,7 @@ export async function runCli (argv: string[] = process.argv.slice(2)): Promise<n
       writeWorkspaceMetadata(context, alias)
     }
 
-    if (parsed.command === 'ssh-config-install') {
+    if (parsed.command === 'ssh-install') {
       await installSshConfig(context, alias)
 
       if (parsed.target === 'codex') {
@@ -406,7 +406,7 @@ export async function runCli (argv: string[] = process.argv.slice(2)): Promise<n
       return 0
     }
 
-    if (parsed.command === 'ssh-config-uninstall') {
+    if (parsed.command === 'ssh-uninstall') {
       uninstallSshConfig(alias)
       const entry = codexProjectEntryForWorkspace(context, alias)
       const result = uninstallCodexAppConfigProject(entry)

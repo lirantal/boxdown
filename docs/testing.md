@@ -59,8 +59,8 @@ boxdown list --json
 boxdown status --workspace /path/to/repo
 boxdown status --workspace /path/to/repo --json
 boxdown doctor --workspace /path/to/repo
-boxdown ssh-config install --workspace /path/to/repo
-boxdown ssh-config install --workspace /path/to/repo --target codex
+boxdown ssh install --workspace /path/to/repo
+boxdown ssh install --workspace /path/to/repo --target codex
 ssh <repo-name>-devcontainer 'whoami && pwd'
 ```
 

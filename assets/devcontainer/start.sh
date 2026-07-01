@@ -17,7 +17,7 @@
 # @options
 #   --shell     Start the dev container and attach an interactive shell (default).
 #   --ssh-proxy Start/reuse the dev container and proxy SSH over docker exec.
-#   ssh-config install
+#   ssh install
 #               Install/update the host SSH config alias and exit.
 #   --refresh-gh-token
 #               Start/reuse the dev container, then refresh container GitHub CLI
@@ -31,7 +31,7 @@
 #
 # @example
 #   .devcontainer/start.sh
-#   .devcontainer/start.sh ssh-config install
+#   .devcontainer/start.sh ssh install
 #   .devcontainer/start.sh --ssh-proxy
 #   .devcontainer/start.sh --refresh-gh-token
 #   .devcontainer/start.sh --refresh-gh-token-running
@@ -77,7 +77,7 @@ Options:
   --help, -h    Show this help and exit.
 
 Commands:
-  ssh-config install
+  ssh install
                 Install/update the host SSH config alias and exit.
 
 Notes:
@@ -436,14 +436,14 @@ while [ $# -gt 0 ]; do
       MODE="ssh-proxy"
       shift
       ;;
-    ssh-config)
+    ssh)
       MODE="ssh-config-install"
       if [ "${2:-}" = "install" ]; then
         shift 2
       elif [ "$#" -eq 1 ] || [ "${2#-}" != "$2" ]; then
         shift
       else
-        die "Unknown command: ssh-config ${2}"
+        die "Unknown command: ssh ${2}"
       fi
       ;;
     --refresh-gh-token)

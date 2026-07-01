@@ -47,7 +47,7 @@ entries with best-effort Docker state.
 ## External App Config
 
 External app integration config is not Boxdown workspace state. When requested
-with `boxdown ssh-config install --target codex`, Boxdown writes Codex's app
+with `boxdown ssh install --target codex`, Boxdown writes Codex's app
 config at:
 
 ```text
@@ -57,7 +57,7 @@ config at:
 `BOXDOWN_CODEX_APP_CONFIG` overrides this path for tests and local development.
 The Codex entry refers to the Boxdown-managed SSH alias and the container-side
 project path `/home/node/<repo-name>`. Codex owns later global-state records and
-sidebar entries it creates from that config, but `boxdown ssh-config uninstall`
+sidebar entries it creates from that config, but `boxdown ssh uninstall`
 removes the matching Codex sidebar cache entry when unregistering the project.
 
 ## Generated Changes

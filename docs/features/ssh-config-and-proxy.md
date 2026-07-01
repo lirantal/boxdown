@@ -3,15 +3,15 @@
 ## Commands
 
 ```sh
-boxdown ssh-config install
-boxdown ssh-config install --target codex
-boxdown ssh-config uninstall
+boxdown ssh install
+boxdown ssh install --target codex
+boxdown ssh uninstall
 boxdown ssh-proxy
 boxdown tunnel --port 3030
 ```
 
-`boxdown ssh-config` is accepted as a convenience shortcut for
-`boxdown ssh-config install`, but docs use the explicit install form.
+`boxdown ssh` is accepted as a convenience shortcut for
+`boxdown ssh install`, but docs use the explicit install form.
 
 `ssh-proxy` is primarily an internal command launched by OpenSSH as a
 `ProxyCommand`.
@@ -34,7 +34,7 @@ The generated SSH config block includes:
 The block is wrapped in Boxdown markers so repeated installs replace the managed
 block instead of duplicating it.
 
-`boxdown ssh-config uninstall` removes the Boxdown-managed marker block for the
+`boxdown ssh uninstall` removes the Boxdown-managed marker block for the
 selected alias, the matching Codex app remote project entry, and the matching
 Codex persisted sidebar state for the workspace. It leaves unrelated OpenSSH
 config entries, unrelated Codex remote projects, generated state, and SSH key
@@ -47,7 +47,7 @@ as an installed Boxdown alias.
 
 ## Codex App Target
 
-`boxdown ssh-config install --target codex` keeps the normal SSH install flow
+`boxdown ssh install --target codex` keeps the normal SSH install flow
 and also writes a Codex app remote project entry for the same alias.
 
 The Codex app config is written to:

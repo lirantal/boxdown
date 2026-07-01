@@ -48,7 +48,7 @@ Boxdown ships and invokes its own `@devcontainers/cli` dependency. It does not r
 Install an SSH alias for the current project:
 
 ```sh
-npx boxdown ssh-config install
+npx boxdown ssh install
 ```
 
 By default this creates a `<repo-name>-devcontainer` SSH host. Validate it with:
@@ -63,7 +63,7 @@ To also add the project to Codex's remote project sidebar, install the Codex
 target:
 
 ```sh
-npx boxdown ssh-config install --target codex
+npx boxdown ssh install --target codex
 ```
 
 Restart Codex after installing the target so the app applies its updated remote
@@ -91,7 +91,7 @@ Remove Boxdown's managed SSH host block and matching Codex app project entry
 when you no longer need the alias:
 
 ```sh
-npx boxdown ssh-config uninstall
+npx boxdown ssh uninstall
 ```
 
 ### Commands
@@ -108,8 +108,8 @@ boxdown status
 boxdown stop
 boxdown down
 boxdown doctor
-boxdown ssh-config install
-boxdown ssh-config uninstall
+boxdown ssh install
+boxdown ssh uninstall
 boxdown ssh-proxy
 boxdown tunnel --port 3030
 boxdown refresh-gh-token

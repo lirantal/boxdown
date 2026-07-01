@@ -35,11 +35,11 @@ Acceptance commands:
 
 ```sh
 boxdown start --workspace ~/projects/repos/gh-cp
-boxdown ssh-config install --workspace ~/projects/repos/gh-cp
+boxdown ssh install --workspace ~/projects/repos/gh-cp
 ssh gh-cp-devcontainer 'whoami && pwd'
 
 boxdown start --workspace ~/projects/repos/lirantaldotcom
-boxdown ssh-config install --workspace ~/projects/repos/lirantaldotcom
+boxdown ssh install --workspace ~/projects/repos/lirantaldotcom
 ssh lirantaldotcom-devcontainer 'whoami && pwd'
 ```
 

@@ -21,7 +21,7 @@ Run the CLI from source:
 ```sh
 pnpm run start -- --help
 pnpm run start -- start --workspace /path/to/project
-pnpm run start -- ssh-config install --workspace /path/to/project
+pnpm run start -- ssh install --workspace /path/to/project
 ```
 
 The published binary is `boxdown`, but local development goes through
@@ -52,7 +52,7 @@ Boxdown repo itself:
 
 ```sh
 pnpm run start -- start --workspace ~/projects/repos/example
-pnpm run start -- ssh-config install --workspace ~/projects/repos/example
+pnpm run start -- ssh install --workspace ~/projects/repos/example
 ```
 
 Starting a real container writes Boxdown state under user cache/data directories

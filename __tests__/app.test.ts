@@ -120,23 +120,23 @@ describe('CLI parsing', () => {
     })
   })
 
-  test('parses ssh-config install', () => {
-    assert.deepStrictEqual(parseCliArgs(['ssh-config']), {
-      command: 'ssh-config-install',
+  test('parses ssh install', () => {
+    assert.deepStrictEqual(parseCliArgs(['ssh']), {
+      command: 'ssh-install',
       workspace: undefined,
       alias: undefined,
       recreate: false,
       json: false
     })
-    assert.deepStrictEqual(parseCliArgs(['ssh-config', 'install', '--alias', 'demo-devcontainer']), {
-      command: 'ssh-config-install',
+    assert.deepStrictEqual(parseCliArgs(['ssh', 'install', '--alias', 'demo-devcontainer']), {
+      command: 'ssh-install',
       workspace: undefined,
       alias: 'demo-devcontainer',
       recreate: false,
       json: false
     })
-    assert.deepStrictEqual(parseCliArgs(['ssh-config', 'install', '--target', 'codex']), {
-      command: 'ssh-config-install',
+    assert.deepStrictEqual(parseCliArgs(['ssh', 'install', '--target', 'codex']), {
+      command: 'ssh-install',
       workspace: undefined,
       alias: undefined,
       target: 'codex',
@@ -145,16 +145,16 @@ describe('CLI parsing', () => {
     })
   })
 
-  test('parses ssh-config uninstall', () => {
-    assert.deepStrictEqual(parseCliArgs(['ssh-config', 'uninstall']), {
-      command: 'ssh-config-uninstall',
+  test('parses ssh uninstall', () => {
+    assert.deepStrictEqual(parseCliArgs(['ssh', 'uninstall']), {
+      command: 'ssh-uninstall',
       workspace: undefined,
       alias: undefined,
       recreate: false,
       json: false
     })
-    assert.deepStrictEqual(parseCliArgs(['ssh-config', 'uninstall', '--workspace', '/tmp/project', '--alias', 'demo-devcontainer']), {
-      command: 'ssh-config-uninstall',
+    assert.deepStrictEqual(parseCliArgs(['ssh', 'uninstall', '--workspace', '/tmp/project', '--alias', 'demo-devcontainer']), {
+      command: 'ssh-uninstall',
       workspace: '/tmp/project',
       alias: 'demo-devcontainer',
       recreate: false,
@@ -224,15 +224,17 @@ describe('CLI parsing', () => {
   })
 
   test('rejects unknown commands', () => {
-    assert.throws(() => parseCliArgs(['ssh-config', 'remove']), /Unknown ssh-config command: remove/)
-    assert.throws(() => parseCliArgs(['ssh-config', 'install', 'extra']), /Unknown ssh-config command: install extra/)
-    assert.throws(() => parseCliArgs(['ssh-config', 'uninstall', 'extra']), /Unknown ssh-config command: uninstall extra/)
+    assert.throws(() => parseCliArgs(['ssh-config']), /Unknown command: ssh-config/)
+    assert.throws(() => parseCliArgs(['ssh-config', 'install']), /Unknown command: ssh-config install/)
+    assert.throws(() => parseCliArgs(['ssh', 'remove']), /Unknown ssh command: remove/)
+    assert.throws(() => parseCliArgs(['ssh', 'install', 'extra']), /Unknown ssh command: install extra/)
+    assert.throws(() => parseCliArgs(['ssh', 'uninstall', 'extra']), /Unknown ssh command: uninstall extra/)
     assert.throws(() => parseCliArgs(['install-ssh-config']), /Unknown command/)
     assert.throws(() => parseCliArgs(['start', '--json']), /--json is only supported with status and list/)
-    assert.throws(() => parseCliArgs(['ssh-config', 'install', '--target', 'cursor']), /Unsupported ssh-config install target: cursor/)
-    assert.throws(() => parseCliArgs(['start', '--target', 'codex']), /--target is only supported with ssh-config install/)
+    assert.throws(() => parseCliArgs(['ssh', 'install', '--target', 'cursor']), /Unsupported ssh install target: cursor/)
+    assert.throws(() => parseCliArgs(['start', '--target', 'codex']), /--target is only supported with ssh install/)
     assert.throws(() => parseCliArgs(['start', '--port', '3030']), /--port is only supported with tunnel/)
-    assert.throws(() => parseCliArgs(['codex', '--target', 'codex']), /--target is only supported with ssh-config install/)
+    assert.throws(() => parseCliArgs(['codex', '--target', 'codex']), /--target is only supported with ssh install/)
     assert.throws(() => parseCliArgs(['codex', '--port', '3030']), /--port is only supported with tunnel/)
     assert.throws(() => parseCliArgs(['start', '--', '--ignored']), /passthrough is only supported/)
     assert.throws(() => parseCliArgs(['claude', 'resume']), /must come after --/)
@@ -260,10 +262,13 @@ describe('CLI parsing', () => {
     assert.match(USAGE, /doctor\s+Check required host tools/)
     assert.ok(!usageLines.includes('  boxdown shell [--workspace <path>] [--recreate]'))
     assert.ok(!usageLines.includes('  boxdown install-ssh-config [--workspace <path>] [--alias <name>]'))
+    assert.ok(!usageLines.includes('  boxdown ssh-config install [--workspace <path>] [--alias <name>] [--target codex]'))
+    assert.ok(!usageLines.includes('  boxdown ssh-config uninstall [--workspace <path>] [--alias <name>]'))
     assert.ok(!usageLines.some((line) => line.startsWith('  shell')))
     assert.ok(!usageLines.some((line) => line.startsWith('  install-ssh-config')))
-    assert.match(USAGE, /ssh-config install\s+Install or update an SSH host alias/)
-    assert.match(USAGE, /ssh-config uninstall\s+Remove Boxdown's managed SSH host alias/)
+    assert.match(USAGE, /ssh install\s+Install or update an SSH host alias/)
+    assert.match(USAGE, /ssh uninstall\s+Remove Boxdown's managed SSH host alias/)
+    assert.doesNotMatch(USAGE, /ssh-config/)
     assert.match(USAGE, /--target codex\s+Also register the SSH alias/)
     assert.match(USAGE, /ssh-proxy\s+Internal command used by the generated SSH/)
     assert.match(USAGE, /tunnel\s+Start or reuse the devcontainer/)
@@ -342,8 +347,8 @@ describe('workspace metadata', () => {
     assert.strictEqual(commandWritesWorkspaceMetadata('status'), false)
     assert.strictEqual(commandWritesWorkspaceMetadata('list'), false)
     assert.strictEqual(commandWritesWorkspaceMetadata('start'), true)
-    assert.strictEqual(commandWritesWorkspaceMetadata('ssh-config-install'), true)
-    assert.strictEqual(commandWritesWorkspaceMetadata('ssh-config-uninstall'), false)
+    assert.strictEqual(commandWritesWorkspaceMetadata('ssh-install'), true)
+    assert.strictEqual(commandWritesWorkspaceMetadata('ssh-uninstall'), false)
     assert.strictEqual(commandWritesWorkspaceMetadata('ssh-proxy'), true)
     assert.strictEqual(commandWritesWorkspaceMetadata('tunnel'), true)
     assert.strictEqual(commandWritesWorkspaceMetadata('refresh-gh-token'), true)
