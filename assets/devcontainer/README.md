@@ -180,6 +180,10 @@ It is not a GitHub token and does not authenticate `gh` or GitHub Git remotes.
 - **Other agent config on the host** — Uncomment the `mounts` entries in
   `devcontainer.json` to bind directories such as `~/.claude` or `~/.gemini`
   into the container so coding agents see your existing settings.
+- **Codex release cache** — After a successful Codex install/update, Boxdown
+  keeps the active standalone Codex release plus one previous release. Set
+  `BOXDOWN_CODEX_STANDALONE_RELEASES_KEEP_PREVIOUS=0` to keep only the active
+  release, or set it to a larger number when you want more rollback history.
 - **1Password / other CLIs** — Follow the commented blocks in `devcontainer.json` and `hooks/post-create.sh` if you need them; keep the image lean by default.
 
 ---

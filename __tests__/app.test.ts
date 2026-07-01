@@ -1603,6 +1603,43 @@ describe('packaged assets', () => {
     assert.strictEqual(existsSync(join(stateDir, 'codex.stamp')), true)
   })
 
+  test('prunes old Codex standalone releases after install', () => {
+    const updaterPath = join(assetsDevcontainerDir, 'utils', 'coding-agent-cli-update.sh')
+    const stateDir = tempDir('codex-prune-update-state')
+    const codexHome = join(tempDir('codex-prune-home'), '.codex')
+    const installerPath = join(tempDir('codex-prune-installer'), 'install.sh')
+
+    writeFileSync(installerPath, [
+      '#!/usr/bin/env sh',
+      'set -e',
+      'standalone="${CODEX_HOME}/packages/standalone"',
+      'mkdir -p "${standalone}/releases/0.142.2-aarch64-unknown-linux-musl"',
+      'mkdir -p "${standalone}/releases/0.142.3-aarch64-unknown-linux-musl"',
+      'mkdir -p "${standalone}/releases/0.142.4-aarch64-unknown-linux-musl"',
+      'mkdir -p "${standalone}/releases/0.142.5-aarch64-unknown-linux-musl"',
+      'ln -sfn "releases/0.142.5-aarch64-unknown-linux-musl" "${standalone}/current"'
+    ].join('\n'))
+
+    execFileSync('bash', [updaterPath, 'update-now', 'codex'], {
+      env: {
+        ...process.env,
+        PATH: '/usr/bin:/bin:/usr/sbin:/sbin',
+        CODEX_HOME: codexHome,
+        BOXDOWN_CODEX_INSTALL_URL: `file://${installerPath}`,
+        BOXDOWN_CODING_AGENT_UPDATE_STATE_DIR: stateDir
+      },
+      stdio: 'pipe'
+    })
+
+    const releasesDir = join(codexHome, 'packages', 'standalone', 'releases')
+
+    assert.strictEqual(existsSync(join(releasesDir, '0.142.5-aarch64-unknown-linux-musl')), true)
+    assert.strictEqual(existsSync(join(releasesDir, '0.142.4-aarch64-unknown-linux-musl')), true)
+    assert.strictEqual(existsSync(join(releasesDir, '0.142.3-aarch64-unknown-linux-musl')), false)
+    assert.strictEqual(existsSync(join(releasesDir, '0.142.2-aarch64-unknown-linux-musl')), false)
+    assert.strictEqual(existsSync(join(stateDir, 'codex.stamp')), true)
+  })
+
   test('skips coding-agent CLI refresh when all stamps are fresh', () => {
     const updaterPath = join(assetsDevcontainerDir, 'utils', 'coding-agent-cli-update.sh')
     const stateDir = tempDir('coding-agent-update-state')

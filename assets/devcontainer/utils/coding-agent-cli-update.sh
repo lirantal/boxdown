@@ -213,6 +213,64 @@ prepare_codex_home() {
   fi
 }
 
+prune_codex_standalone_releases() {
+  local keep_previous
+  local codex_home
+  local standalone_dir
+  local releases_dir
+  local current_link
+  local current_target
+  local current_name=""
+  local previous_kept=0
+  local previous_limit
+  local release_name
+
+  keep_previous="$(numeric_or_default "${BOXDOWN_CODEX_STANDALONE_RELEASES_KEEP_PREVIOUS:-1}" 1)"
+  codex_home="${CODEX_HOME:-${HOME}/.codex}"
+  standalone_dir="${codex_home}/packages/standalone"
+  releases_dir="${standalone_dir}/releases"
+
+  [ -d "${releases_dir}" ] || return 0
+
+  current_link="${standalone_dir}/current"
+  if [ -L "${current_link}" ]; then
+    current_target="$(readlink "${current_link}" 2>/dev/null || true)"
+    current_name="$(basename "${current_target}")"
+  fi
+
+  previous_limit="${keep_previous}"
+  if [ -z "${current_name}" ]; then
+    previous_limit=$((keep_previous + 1))
+  fi
+
+  while IFS= read -r release_name; do
+    if [ -n "${current_name}" ] && [ "${release_name}" = "${current_name}" ]; then
+      continue
+    fi
+
+    if [ "${previous_kept}" -lt "${previous_limit}" ]; then
+      previous_kept=$((previous_kept + 1))
+      continue
+    fi
+
+    rm -rf -- "${releases_dir}/${release_name}"
+    log "codex: pruned old standalone release: ${release_name}"
+  done < <(list_codex_standalone_release_names "${releases_dir}")
+}
+
+list_codex_standalone_release_names() {
+  local releases_dir="$1"
+
+  if printf '1\n2\n' | sort -V >/dev/null 2>&1; then
+    find "${releases_dir}" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | sort -Vr
+    return
+  fi
+
+  (cd "${releases_dir}" && ls -1t) 2>/dev/null | while IFS= read -r release_name; do
+    [ -d "${releases_dir}/${release_name}" ] && printf '%s\n' "${release_name}"
+  done
+}
+
 install_codex() {
   local url
 
@@ -221,17 +279,26 @@ install_codex() {
 }
 
 update_codex() {
+  local result=0
+
   prepare_codex_home || return 1
 
   if command -v codex >/dev/null 2>&1; then
     if codex update; then
+      prune_codex_standalone_releases || true
       return 0
     fi
 
     log "codex: codex update failed; falling back to installer."
   fi
 
-  install_codex
+  if install_codex; then
+    prune_codex_standalone_releases || true
+  else
+    result=$?
+  fi
+
+  return "${result}"
 }
 
 install_opencode() {
