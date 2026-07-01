@@ -3,7 +3,7 @@
 ## Requirements
 
 - Node.js 24 or newer.
-- pnpm 10.26 or newer.
+- pnpm 11 or newer.
 - Docker for manual container workflow testing.
 - OpenSSH tools for SSH config and proxy testing.
 - GitHub CLI for `refresh-gh-token` workflow testing.

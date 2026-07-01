@@ -1,11 +1,11 @@
 # Dev container
 
-Run this project in a **consistent Node.js 24 + TypeScript** environment without installing toolchains on your machine. Dependencies install automatically; your repo is the workspace inside the container.
+Run this project in a **consistent Node.js 24 + TypeScript** environment without installing toolchains on your machine. The container starts from the slim Node 24 Debian image, then adds only the shared tools Boxdown needs. Dependencies install automatically; your repo is the workspace inside the container.
 
 ## Why use it?
 
-- **Same stack for everyone** — Node 24, pnpm, and tooling match CI and collaborators.
-- **Fast onboarding** — Open the folder in a container; `pnpm install` and local git tweaks run once after create.
+- **Same stack for everyone** — Node 24 plus pinned features provide Git, Python, uv, ripgrep, GitHub CLI, and common shell utilities.
+- **Fast onboarding** — Open the folder in a container; dependency installation and local git tweaks run once after create. pnpm-based workspaces bootstrap `pnpm@11` when needed.
 - **Host secrets, container dev** — `ANTHROPIC_API_KEY` and `SNYK_TOKEN` are passed from your Mac/Linux session into the container when set locally (see below).
 - **Optional CLI workflow** — Use `start.sh` if you prefer a terminal-driven container instead of only the editor.
 - **Portless SSH workflow** — Install a normal SSH host alias that proxies into the devcontainer without publishing an SSH port.
@@ -14,7 +14,7 @@ Run this project in a **consistent Node.js 24 + TypeScript** environment without
 
 | File | Role |
 | ---- | ---- |
-| `devcontainer.json` | Image, Boxdown state mounts, lifecycle commands, env forwarding. |
+| `devcontainer.json` | Slim Node base image, pinned feature set/order, Boxdown state mounts, lifecycle commands, env forwarding. |
 | `start.sh` | Brings the dev container up with the Dev Containers CLI, then opens a shell **inside** the container or acts as an SSH `ProxyCommand`. |
 | `ssh-config-install.sh` | Installs/updates a host SSH config alias for Cursor, Claude, or plain `ssh`. |
 | `hooks/initialize.sh` | Runs on the host before container create/start; prepares the env file and optional secrets. |
@@ -23,7 +23,13 @@ Run this project in a **consistent Node.js 24 + TypeScript** environment without
 | `utils/git-config-bootstrap.sh` | Container-side Git config copy/sanitization helper used by lifecycle scripts. |
 | `utils/ssh-bootstrap.sh` | Container-side OpenSSH install/runtime helper used by lifecycle scripts. |
 | `utils/coding-agent-cli-update.sh` | Shared install/update helper for Codex, OpenCode, Claude Code, and Antigravity CLI. |
-| `utils/deps-install.sh` | Dependency installation helper used by `hooks/post-create.sh`. |
+| `utils/deps-install.sh` | Dependency installation helper used by `hooks/post-create.sh`; bootstraps pnpm/yarn when the slim base does not provide them. |
+
+## Base image
+
+Boxdown uses `node:24-trixie-slim` as the base image to keep the shared image smaller than the full Dev Containers TypeScript/Node image. The devcontainer then installs the required operating-system tools through pinned Dev Container features. `common-utils` and `git` run first so later features and lifecycle hooks can rely on shell basics, `sudo`, package metadata, Git, and related utilities.
+
+The Python feature still installs Python development dependencies for now. JavaScript package managers are handled at workspace setup time: npm comes from the Node image, pnpm is installed as `pnpm@11` for pnpm projects, and Yarn is enabled through Corepack when needed.
 
 ## Usage
 
