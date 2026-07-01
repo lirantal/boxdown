@@ -75,6 +75,8 @@ detect_package_manager_from_package_json() {
 
 install_dependencies() {
   local pm="$1"
+  ensure_package_manager "$pm"
+
   case "$pm" in
     pnpm) pnpm install ;;
     npm) npm install ;;
@@ -82,6 +84,63 @@ install_dependencies() {
     bun) bun install ;;
     *) npm install ;;
   esac
+}
+
+ensure_package_manager() {
+  local pm="$1"
+
+  case "$pm" in
+    pnpm)
+      ensure_pnpm
+      ;;
+    yarn)
+      ensure_yarn
+      ;;
+  esac
+}
+
+ensure_pnpm() {
+  if command -v pnpm >/dev/null 2>&1; then
+    return 0
+  fi
+
+  if command -v npm >/dev/null 2>&1; then
+    run_as_root npm install --global pnpm@11
+  fi
+}
+
+ensure_yarn() {
+  if command -v yarn >/dev/null 2>&1; then
+    return 0
+  fi
+
+  if command -v corepack >/dev/null 2>&1; then
+    enable_corepack
+  fi
+}
+
+enable_corepack() {
+  if ! command -v corepack >/dev/null 2>&1; then
+    return 0
+  fi
+
+  if corepack enable >/dev/null 2>&1; then
+    return 0
+  fi
+
+  if command -v sudo >/dev/null 2>&1; then
+    sudo corepack enable >/dev/null 2>&1 || true
+  fi
+}
+
+run_as_root() {
+  if [ "$(id -u)" -eq 0 ]; then
+    "$@"
+  elif command -v sudo >/dev/null 2>&1; then
+    sudo "$@"
+  else
+    "$@"
+  fi
 }
 
 main "$@"
