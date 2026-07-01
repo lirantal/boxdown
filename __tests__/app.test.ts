@@ -9,7 +9,7 @@ import { describe, test } from 'node:test'
 import { codexDiscoveredRemoteHostId, codexProjectEntryForWorkspace, defaultCodexAppConfigPath, defaultCodexGlobalStatePath, installCodexAppConfigProject, mergeCodexAppProject, parseCodexAppConfig, removeCodexAppProject, removeCodexGlobalStateProject, uninstallCodexAppConfigProject, uninstallCodexGlobalStateProject } from '../src/codex-app-config.ts'
 import { codingAgentBinary, codingAgentFromCommand } from '../src/coding-agents.ts'
 import { buildGeneratedDevcontainerConfig, publishContainerPortFromConfig } from '../src/config.ts'
-import { BOXDOWN_CONTAINER_AGENTS_DIR, BOXDOWN_CONTAINER_CODEX_AUTH_PATH, BOXDOWN_CONTAINER_CODEX_DIR, DEVCONTAINER_CLI_VERSION } from '../src/constants.ts'
+import { BOXDOWN_CONTAINER_AGENTS_DIR, BOXDOWN_CONTAINER_CODEX_AUTH_PATH, BOXDOWN_CONTAINER_CODEX_DIR, BOXDOWN_CONTAINER_GITCONFIG_PATH, BOXDOWN_CONTAINER_HOST_GITCONFIG_DIR, DEVCONTAINER_CLI_VERSION } from '../src/constants.ts'
 import { codingAgentDevcontainerExecArgs, sshTunnelArgs } from '../src/devcontainer.ts'
 import { resolveDevcontainerCli } from '../src/devcontainer-cli.ts'
 import { doctorHasFailures, formatDoctorText } from '../src/doctor.ts'
@@ -27,6 +27,22 @@ const assetsDevcontainerDir = fileURLToPath(new URL('../assets/devcontainer', im
 
 function tempDir (name: string): string {
   return mkdtempSync(join(tmpdir(), `boxdown-${name}-`))
+}
+
+function readGitConfig (configPath: string, key: string): string | undefined {
+  try {
+    return execFileSync('git', ['config', '--file', configPath, '--get', key]).toString('utf8').trim()
+  } catch {
+    return undefined
+  }
+}
+
+function readGitConfigAll (configPath: string, key: string): string[] {
+  try {
+    return execFileSync('git', ['config', '--file', configPath, '--get-all', key]).toString('utf8').replace(/\r?\n$/, '').split(/\r?\n/)
+  } catch {
+    return []
+  }
 }
 
 describe('CLI parsing', () => {
@@ -587,11 +603,15 @@ describe('devcontainer config generation', () => {
     const config = buildGeneratedDevcontainerConfig(context)
 
     assert.match(config.initializeCommand ?? '', /BOXDOWN_WORKSPACE_FOLDER=/)
+    assert.match(config.initializeCommand ?? '', /BOXDOWN_HOST_GITCONFIG_PATH=/)
+    assert.match(config.initializeCommand ?? '', /BOXDOWN_HOST_GITCONFIG_SNAPSHOT_PATH=/)
     assert.match(config.initializeCommand ?? '', /assets\/devcontainer\/hooks\/initialize\.sh/)
     assert.strictEqual(config.postCreateCommand, "bash '/opt/boxdown/devcontainer/hooks/post-create.sh'")
     assert.strictEqual(config.postStartCommand, "bash '/opt/boxdown/devcontainer/hooks/post-start.sh'")
     assert.ok(config.mounts?.some((mount) => mount.includes(`source=${assetsDevcontainerDir}`)))
     assert.ok(config.mounts?.some((mount) => mount.includes(`source=${context.sshPublicKeyRuntimeDir}`)))
+    assert.ok(config.mounts?.includes(`type=bind,source=${context.hostGitconfigSnapshotDir},target=${BOXDOWN_CONTAINER_HOST_GITCONFIG_DIR},readonly`))
+    assert.ok(!config.mounts?.some((mount) => mount.includes(`target=${BOXDOWN_CONTAINER_GITCONFIG_PATH}`)))
     assert.ok(!config.mounts?.some((mount) => mount.includes(`target=${BOXDOWN_CONTAINER_AGENTS_DIR}`)))
     assert.ok(!config.mounts?.some((mount) => mount.includes(`target=${BOXDOWN_CONTAINER_CODEX_AUTH_PATH}`)))
     assert.ok(!config.mounts?.some((mount) => mount.startsWith(`type=bind,source=${context.sshKeyDir},`)))
@@ -677,6 +697,95 @@ describe('devcontainer config generation', () => {
   test('parses JSONC without stripping URLs inside strings', () => {
     const parsed = parseJsonc<{ url: string }>('{ "url": "https://example.com/path" // keep string URL\n }')
     assert.strictEqual(parsed.url, 'https://example.com/path')
+  })
+})
+
+describe('devcontainer git config hooks', () => {
+  test('initialize snapshots host gitconfig and removes stale snapshot when host file is absent', () => {
+    const initializePath = join(assetsDevcontainerDir, 'hooks', 'initialize.sh')
+    const workspace = tempDir('initialize-gitconfig-workspace')
+    const home = tempDir('initialize-gitconfig-home')
+    const hostGitconfigPath = join(home, '.gitconfig')
+    const snapshotPath = join(tempDir('initialize-gitconfig-state'), '.gitconfig')
+
+    writeFileSync(hostGitconfigPath, '[user]\n\tname = Liran\n')
+
+    execFileSync('bash', [initializePath], {
+      env: {
+        ...process.env,
+        BOXDOWN_WORKSPACE_FOLDER: workspace,
+        BOXDOWN_HOST_GITCONFIG_PATH: hostGitconfigPath,
+        BOXDOWN_HOST_GITCONFIG_SNAPSHOT_PATH: snapshotPath
+      }
+    })
+
+    assert.strictEqual(readFileSync(snapshotPath, 'utf8'), '[user]\n\tname = Liran\n')
+
+    execFileSync('bash', [initializePath], {
+      env: {
+        ...process.env,
+        BOXDOWN_WORKSPACE_FOLDER: workspace,
+        BOXDOWN_HOST_GITCONFIG_PATH: join(home, 'missing-gitconfig'),
+        BOXDOWN_HOST_GITCONFIG_SNAPSHOT_PATH: snapshotPath
+      }
+    })
+
+    assert.strictEqual(existsSync(snapshotPath), false)
+  })
+
+  test('git config bootstrap copies and sanitizes the container global config', () => {
+    const bootstrapPath = join(assetsDevcontainerDir, 'utils', 'git-config-bootstrap.sh')
+    const sourcePath = join(tempDir('gitconfig-bootstrap-source'), '.gitconfig')
+    const targetPath = join(tempDir('gitconfig-bootstrap-target'), '.gitconfig')
+
+    writeFileSync(sourcePath, [
+      '[url "git@github.com:"]',
+      '\tinsteadOf = https://github.com/',
+      '[url "ssh://git@github.com/"]',
+      '\tinsteadOf = https://github.com/',
+      '[credential]',
+      '\thelper = /opt/homebrew/bin/gh auth git-credential',
+      '\thelper = cache',
+      '[credential "https://github.com"]',
+      '\thelper = /Applications/GitHub Desktop.app/Contents/Resources/app/git-credential-helper',
+      '\thelper = osxkeychain',
+      '[commit]',
+      '\tgpgsign = true',
+      '[tag]',
+      '\tgpgsign = true',
+      ''
+    ].join('\n'))
+
+    execFileSync('bash', [bootstrapPath], {
+      env: {
+        ...process.env,
+        BOXDOWN_GITCONFIG_SOURCE_PATH: sourcePath,
+        BOXDOWN_GITCONFIG_TARGET_PATH: targetPath
+      }
+    })
+
+    assert.strictEqual(readGitConfig(targetPath, 'url.git@github.com:.insteadOf'), undefined)
+    assert.strictEqual(readGitConfig(targetPath, 'url.ssh://git@github.com/.insteadOf'), undefined)
+    assert.deepStrictEqual(readGitConfigAll(targetPath, 'credential.helper'), ['cache'])
+    assert.deepStrictEqual(readGitConfigAll(targetPath, 'credential.https://github.com.helper'), ['', '!gh auth git-credential'])
+    assert.strictEqual(readGitConfig(targetPath, 'commit.gpgsign'), 'false')
+    assert.strictEqual(readGitConfig(targetPath, 'tag.gpgsign'), 'false')
+  })
+
+  test('git config bootstrap succeeds without a host snapshot', () => {
+    const bootstrapPath = join(assetsDevcontainerDir, 'utils', 'git-config-bootstrap.sh')
+    const targetPath = join(tempDir('gitconfig-bootstrap-empty-target'), '.gitconfig')
+
+    execFileSync('bash', [bootstrapPath], {
+      env: {
+        ...process.env,
+        BOXDOWN_GITCONFIG_SOURCE_PATH: join(tempDir('gitconfig-bootstrap-missing-source'), '.gitconfig'),
+        BOXDOWN_GITCONFIG_TARGET_PATH: targetPath
+      }
+    })
+
+    assert.strictEqual(existsSync(targetPath), true)
+    assert.deepStrictEqual(readGitConfigAll(targetPath, 'credential.https://github.com.helper'), ['', '!gh auth git-credential'])
   })
 })
 
@@ -1410,12 +1519,18 @@ describe('packaged assets', () => {
   test('refreshes coding-agent CLIs from lifecycle hooks through updater utility', () => {
     const postCreate = readFileSync(join(assetsDevcontainerDir, 'hooks', 'post-create.sh'), 'utf8')
     const postStart = readFileSync(join(assetsDevcontainerDir, 'hooks', 'post-start.sh'), 'utf8')
+    const gitConfigBootstrap = readFileSync(join(assetsDevcontainerDir, 'utils', 'git-config-bootstrap.sh'), 'utf8')
     const updater = readFileSync(join(assetsDevcontainerDir, 'utils', 'coding-agent-cli-update.sh'), 'utf8')
     const codexWrapper = readFileSync(join(assetsDevcontainerDir, 'utils', 'codex-cli-update.sh'), 'utf8')
 
+    assert.match(postCreate, /configure_global_git/)
+    assert.ok(postCreate.indexOf('configure_global_git') < postCreate.indexOf('install_or_update_coding_agent_clis'))
+    assert.match(postCreate, /git-config-bootstrap\.sh/)
     assert.match(postCreate, /install_or_update_coding_agent_clis/)
     assert.match(postCreate, /coding-agent-cli-update\.sh" install/)
     assert.match(postStart, /coding-agent-cli-update\.sh" maybe-update/)
+    assert.match(gitConfigBootstrap, /url\.git@github\.com:\.insteadOf/)
+    assert.match(gitConfigBootstrap, /credential\.https:\/\/github\.com\.helper/)
     assert.match(updater, /DEFAULT_AGENTS=\(codex opencode claude antigravity\)/)
     assert.match(updater, /codex update/)
     assert.match(updater, /opencode upgrade --method curl/)

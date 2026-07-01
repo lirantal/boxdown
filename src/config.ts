@@ -6,6 +6,8 @@ import {
   BOXDOWN_CONTAINER_CODEX_AUTH_PATH,
   BOXDOWN_CONTAINER_CODEX_DIR,
   BOXDOWN_CONTAINER_DEVCONTAINER_DIR,
+  BOXDOWN_CONTAINER_GITCONFIG_PATH,
+  BOXDOWN_CONTAINER_HOST_GITCONFIG_DIR,
   BOXDOWN_CONTAINER_SSH_DIR,
   BOXDOWN_CONTAINER_SSH_PUBLIC_KEY_PATH
 } from './constants.ts'
@@ -45,19 +47,26 @@ function fileExists (path: string): boolean {
   }
 }
 
+function mountHasTarget (mount: string, target: string): boolean {
+  return mount.split(',').some((part) => part.trim() === `target=${target}`)
+}
+
 function hasMountTarget (mounts: string[], target: string): boolean {
-  return mounts.some((mount) => mount.split(',').some((part) => part.trim() === `target=${target}`))
+  return mounts.some((mount) => mountHasTarget(mount, target))
 }
 
 export function buildGeneratedDevcontainerConfig (context: WorkspaceContext): DevcontainerConfig {
   const baseConfig = readBaseDevcontainerConfig(context.assetsDevcontainerDir)
   const mounts = Array.isArray(baseConfig.mounts)
-    ? baseConfig.mounts.filter((mount): mount is string => typeof mount === 'string')
+    ? baseConfig.mounts
+      .filter((mount): mount is string => typeof mount === 'string')
+      .filter((mount) => !mountHasTarget(mount, BOXDOWN_CONTAINER_GITCONFIG_PATH))
     : []
 
   const boxdownMounts = [
     `type=bind,source=${context.assetsDevcontainerDir},target=${BOXDOWN_CONTAINER_DEVCONTAINER_DIR},readonly`,
-    `type=bind,source=${context.sshPublicKeyRuntimeDir},target=${BOXDOWN_CONTAINER_SSH_DIR},readonly`
+    `type=bind,source=${context.sshPublicKeyRuntimeDir},target=${BOXDOWN_CONTAINER_SSH_DIR},readonly`,
+    `type=bind,source=${context.hostGitconfigSnapshotDir},target=${BOXDOWN_CONTAINER_HOST_GITCONFIG_DIR},readonly`
   ]
 
   if (
@@ -79,7 +88,13 @@ export function buildGeneratedDevcontainerConfig (context: WorkspaceContext): De
     ...baseConfig,
     name: `Boxdown: ${context.workspaceBasename}`,
     mounts: [...mounts, ...boxdownMounts],
-    initializeCommand: `BOXDOWN_WORKSPACE_FOLDER=${shellQuote(context.workspaceFolder)} bash ${shellQuote(join(context.assetsDevcontainerDir, 'hooks', 'initialize.sh'))}`,
+    initializeCommand: [
+      `BOXDOWN_WORKSPACE_FOLDER=${shellQuote(context.workspaceFolder)}`,
+      `BOXDOWN_HOST_GITCONFIG_PATH=${shellQuote(context.hostGitconfigPath)}`,
+      `BOXDOWN_HOST_GITCONFIG_SNAPSHOT_PATH=${shellQuote(context.hostGitconfigSnapshotPath)}`,
+      'bash',
+      shellQuote(join(context.assetsDevcontainerDir, 'hooks', 'initialize.sh'))
+    ].join(' '),
     postCreateCommand: `bash ${shellQuote(`${BOXDOWN_CONTAINER_DEVCONTAINER_DIR}/hooks/post-create.sh`)}`,
     postStartCommand: `bash ${shellQuote(`${BOXDOWN_CONTAINER_DEVCONTAINER_DIR}/hooks/post-start.sh`)}`,
     containerEnv: {

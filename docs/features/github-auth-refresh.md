@@ -48,6 +48,8 @@ container's authenticated `gh` for `git fetch`, `git pull`, and `git push`.
 For GitHub remotes, Boxdown:
 
 - rewrites fetch and push URLs to `https://github.com/<owner>/<repo>.git`
+- configures container-global GitHub HTTPS credentials through the container's
+  `gh` auth store
 - resets inherited `credential.https://github.com.helper` entries locally
 - adds `!gh auth git-credential` as the local GitHub credential helper
 - adds a repository-specific HTTPS self-rewrite so broader host rewrites like
@@ -56,6 +58,12 @@ For GitHub remotes, Boxdown:
 
 The local Git config changes are written to the workspace repository because the
 host checkout is mounted into the devcontainer.
+
+Separately, Boxdown snapshots the host `.gitconfig` into workspace state and
+copies it to a writable `/home/node/.gitconfig` during container creation. That
+container copy is sanitized so tools cloning from directories such as `/tmp` use
+HTTPS GitHub auth and do not inherit host-only helpers, GitHub SSH rewrites, or
+signing programs that are unavailable inside Linux.
 
 If host `gh` is missing, logged out, or cannot return a token, the refresh is a
 no-op.

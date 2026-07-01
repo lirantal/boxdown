@@ -7,10 +7,13 @@ set -euo pipefail
 HOOKS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE_DIR="${BOXDOWN_WORKSPACE_FOLDER:-$(cd "${HOOKS_DIR}/../.." && pwd)}"
 ENV_FILE="${WORKSPACE_DIR}/.env.development"
+HOST_GITCONFIG_PATH="${BOXDOWN_HOST_GITCONFIG_PATH:-${HOME:-}/.gitconfig}"
+HOST_GITCONFIG_SNAPSHOT_PATH="${BOXDOWN_HOST_GITCONFIG_SNAPSHOT_PATH:-}"
 OP_TOKEN_REFERENCE="op://Private/1Password op CLI Service Account for DevContainers/password"
 
 main() {
   ensure_env_file_exists
+  snapshot_host_gitconfig
   maybe_inject_1password_service_account_token
 }
 
@@ -18,6 +21,26 @@ ensure_env_file_exists() {
   if [[ ! -f "${ENV_FILE}" ]]; then
     : > "${ENV_FILE}"
   fi
+}
+
+snapshot_host_gitconfig() {
+  local snapshot_dir
+
+  if [[ -z "${HOST_GITCONFIG_SNAPSHOT_PATH}" ]]; then
+    echo "initialize.sh: host gitconfig snapshot path is not configured; skipping gitconfig snapshot."
+    return 0
+  fi
+
+  snapshot_dir="$(dirname "${HOST_GITCONFIG_SNAPSHOT_PATH}")"
+  mkdir -p "${snapshot_dir}"
+
+  if [[ -f "${HOST_GITCONFIG_PATH}" ]]; then
+    cp "${HOST_GITCONFIG_PATH}" "${HOST_GITCONFIG_SNAPSHOT_PATH}"
+    chmod 0644 "${HOST_GITCONFIG_SNAPSHOT_PATH}"
+    return 0
+  fi
+
+  rm -f "${HOST_GITCONFIG_SNAPSHOT_PATH}"
 }
 
 maybe_inject_1password_service_account_token() {

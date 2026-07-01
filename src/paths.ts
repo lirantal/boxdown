@@ -27,6 +27,9 @@ export interface WorkspaceContext {
   generatedConfigPath: string
   hostAgentsDir: string
   hostCodexAuthPath: string
+  hostGitconfigPath: string
+  hostGitconfigSnapshotDir: string
+  hostGitconfigSnapshotPath: string
   sshKeyDir: string
   sshKeyPath: string
   sshPublicKeyPath: string
@@ -88,6 +91,10 @@ export function defaultHostCodexAuthPath (env: NodeJS.ProcessEnv = process.env):
   return join(env.HOME ?? homedir(), '.codex', 'auth.json')
 }
 
+export function defaultHostGitconfigPath (env: NodeJS.ProcessEnv = process.env): string {
+  return join(env.HOME ?? homedir(), '.gitconfig')
+}
+
 export function createWorkspaceContext (options: WorkspaceContextOptions = {}): WorkspaceContext {
   const env = options.env ?? process.env
   const workspaceFolder = resolveWorkspaceFolder(options.workspace, options.cwd)
@@ -101,6 +108,7 @@ export function createWorkspaceContext (options: WorkspaceContextOptions = {}): 
   const hostCodexAuthPath = defaultHostCodexAuthPath(env)
   const workspaceCacheDir = join(cacheRoot, 'workspaces', workspaceId)
   const workspaceDataDir = join(dataRoot, 'workspaces', workspaceId)
+  const hostGitconfigSnapshotDir = join(workspaceDataDir, 'gitconfig')
 
   return {
     workspaceFolder,
@@ -115,6 +123,9 @@ export function createWorkspaceContext (options: WorkspaceContextOptions = {}): 
     generatedConfigPath: join(workspaceCacheDir, 'devcontainer.json'),
     hostAgentsDir,
     hostCodexAuthPath,
+    hostGitconfigPath: defaultHostGitconfigPath(env),
+    hostGitconfigSnapshotDir,
+    hostGitconfigSnapshotPath: join(hostGitconfigSnapshotDir, '.gitconfig'),
     sshKeyDir: join(workspaceDataDir, 'ssh'),
     sshKeyPath: join(workspaceDataDir, 'ssh', 'id_ed25519'),
     sshPublicKeyPath: join(workspaceDataDir, 'ssh', 'id_ed25519.pub'),

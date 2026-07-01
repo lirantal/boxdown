@@ -65,12 +65,13 @@ removes the matching Codex sidebar cache entry when unregistering the project.
 Boxdown starts from `assets/devcontainer/devcontainer.json` and rewrites:
 
 - `name`, to include the workspace basename.
-- `initializeCommand`, to call the host asset script with the target workspace.
+- `initializeCommand`, to call the host asset script with the target workspace
+  and host Git config snapshot paths.
 - `postCreateCommand`, to call mounted container assets.
 - `postStartCommand`, to call mounted container assets.
-- `mounts`, to add the read-only asset mount, public-key mount, host
-  `~/.agents` mount when that directory exists, and host `~/.codex/auth.json`
-  read-only mount when that file exists.
+- `mounts`, to add the read-only asset mount, public-key mount, host Git config
+  snapshot mount, host `~/.agents` mount when that directory exists, and host
+  `~/.codex/auth.json` read-only mount when that file exists.
 - `containerEnv`, to point SSH bootstrap at the mounted public key and actual
   container workspace.
 

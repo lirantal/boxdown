@@ -5,6 +5,7 @@ HOOKS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEVCONTAINER_DIR="$(cd "${HOOKS_DIR}/.." && pwd)"
 
 main() {
+  configure_global_git
   configure_local_git
   install_openssh_server
   install_apm
@@ -12,6 +13,10 @@ main() {
   install_1password_cli
   install_snyk_cli
   run_deps_install
+}
+
+configure_global_git() {
+  bash "${DEVCONTAINER_DIR}/utils/git-config-bootstrap.sh"
 }
 
 configure_local_git() {

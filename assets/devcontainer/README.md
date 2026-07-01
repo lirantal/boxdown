@@ -14,12 +14,13 @@ Run this project in a **consistent Node.js 24 + TypeScript** environment without
 
 | File | Role |
 | ---- | ---- |
-| `devcontainer.json` | Image, mounts (e.g. your `~/.gitconfig`), lifecycle commands, env forwarding. |
+| `devcontainer.json` | Image, Boxdown state mounts, lifecycle commands, env forwarding. |
 | `start.sh` | Brings the dev container up with the Dev Containers CLI, then opens a shell **inside** the container or acts as an SSH `ProxyCommand`. |
 | `ssh-config-install.sh` | Installs/updates a host SSH config alias for Cursor, Claude, or plain `ssh`. |
 | `hooks/initialize.sh` | Runs on the host before container create/start; prepares the env file and optional secrets. |
 | `hooks/post-create.sh` | Runs once after the container is created — e.g. installs [APM](https://github.com/microsoft/apm) (Agent Package Manager), coding-agent CLIs, and OpenSSH server. |
 | `hooks/post-start.sh` | Runs on each container start; refreshes runtime state such as SSH host keys and authorized keys. |
+| `utils/git-config-bootstrap.sh` | Container-side Git config copy/sanitization helper used by lifecycle scripts. |
 | `utils/ssh-bootstrap.sh` | Container-side OpenSSH install/runtime helper used by lifecycle scripts. |
 | `utils/coding-agent-cli-update.sh` | Shared install/update helper for Codex, OpenCode, Claude Code, and Antigravity CLI. |
 | `utils/deps-install.sh` | Dependency installation helper used by `hooks/post-create.sh`. |
@@ -71,10 +72,13 @@ use HTTPS and ask the container's `gh` for credentials during `git fetch`,
 `git pull`, and `git push`. This is intentionally tied to the explicit refresh
 command; regular SSH remote connections do not copy GitHub credentials.
 
-If your host `.gitconfig` is mounted into the container, Boxdown adds local
-repository settings that neutralize incompatible host-only helpers such as
-`/opt/homebrew/bin/gh` and broad rewrites such as
-`url.git@github.com:.insteadOf=https://github.com/`.
+Boxdown snapshots your host `.gitconfig` into workspace state before container
+creation, mounts that snapshot read-only, and copies it to a normal writable
+`/home/node/.gitconfig` during `postCreateCommand`. The container copy is then
+sanitized to neutralize incompatible host-only helpers such as
+`/opt/homebrew/bin/gh`, broad rewrites such as
+`url.git@github.com:.insteadOf=https://github.com/`, and host-only signing
+settings.
 
 If the container is already running and you only want to refresh its GitHub auth:
 
