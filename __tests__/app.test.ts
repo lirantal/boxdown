@@ -1550,19 +1550,22 @@ describe('packaged assets', () => {
     const stateDir = tempDir('antigravity-update-state')
     const installerPath = join(tempDir('antigravity-installer'), 'install.sh')
     const argsPath = join(tempDir('antigravity-args'), 'args.txt')
+    const cacheDir = tempDir('antigravity-cache')
 
     writeFileSync(installerPath, [
       '#!/usr/bin/env bash',
       'printf "%s\\n" "$#" > "${BOXDOWN_FAKE_ANTIGRAVITY_ARGS_FILE}"',
       'if [ "$#" -gt 0 ]; then',
       '  printf "%s\\n" "$@" >> "${BOXDOWN_FAKE_ANTIGRAVITY_ARGS_FILE}"',
-      'fi'
+      'fi',
+      'mkdir -p "${BOXDOWN_ANTIGRAVITY_CACHE_DIR}/staging"'
     ].join('\n'))
 
     execFileSync('bash', [updaterPath, 'update-now', 'antigravity'], {
       env: {
         ...process.env,
         BOXDOWN_ANTIGRAVITY_INSTALL_URL: `file://${installerPath}`,
+        BOXDOWN_ANTIGRAVITY_CACHE_DIR: cacheDir,
         BOXDOWN_CODING_AGENT_UPDATE_STATE_DIR: stateDir,
         BOXDOWN_FAKE_ANTIGRAVITY_ARGS_FILE: argsPath
       },
@@ -1570,6 +1573,7 @@ describe('packaged assets', () => {
     })
 
     assert.strictEqual(readFileSync(argsPath, 'utf8'), '0\n')
+    assert.strictEqual(existsSync(join(cacheDir, 'staging')), false)
     assert.strictEqual(existsSync(join(stateDir, 'antigravity.stamp')), true)
   })
 
@@ -1634,10 +1638,79 @@ describe('packaged assets', () => {
     const releasesDir = join(codexHome, 'packages', 'standalone', 'releases')
 
     assert.strictEqual(existsSync(join(releasesDir, '0.142.5-aarch64-unknown-linux-musl')), true)
-    assert.strictEqual(existsSync(join(releasesDir, '0.142.4-aarch64-unknown-linux-musl')), true)
+    assert.strictEqual(existsSync(join(releasesDir, '0.142.4-aarch64-unknown-linux-musl')), false)
     assert.strictEqual(existsSync(join(releasesDir, '0.142.3-aarch64-unknown-linux-musl')), false)
     assert.strictEqual(existsSync(join(releasesDir, '0.142.2-aarch64-unknown-linux-musl')), false)
     assert.strictEqual(existsSync(join(stateDir, 'codex.stamp')), true)
+  })
+
+  test('prunes old Claude Code versions after install', () => {
+    const updaterPath = join(assetsDevcontainerDir, 'utils', 'coding-agent-cli-update.sh')
+    const stateDir = tempDir('claude-prune-update-state')
+    const home = tempDir('claude-prune-home')
+    const installerPath = join(tempDir('claude-prune-installer'), 'install.sh')
+
+    writeFileSync(installerPath, [
+      '#!/usr/bin/env bash',
+      'set -e',
+      'versions_dir="${HOME}/.local/share/claude/versions"',
+      'mkdir -p "${versions_dir}/2.1.195"',
+      'mkdir -p "${versions_dir}/2.1.196"',
+      'mkdir -p "${versions_dir}/2.1.197"',
+      'mkdir -p "${HOME}/.local/bin"',
+      'ln -sfn "${versions_dir}/2.1.197" "${HOME}/.local/bin/claude"'
+    ].join('\n'))
+
+    execFileSync('bash', [updaterPath, 'update-now', 'claude'], {
+      env: {
+        ...process.env,
+        HOME: home,
+        PATH: '/usr/bin:/bin:/usr/sbin:/sbin',
+        BOXDOWN_CLAUDE_INSTALL_URL: `file://${installerPath}`,
+        BOXDOWN_CODING_AGENT_UPDATE_STATE_DIR: stateDir
+      },
+      stdio: 'pipe'
+    })
+
+    const versionsDir = join(home, '.local', 'share', 'claude', 'versions')
+
+    assert.strictEqual(existsSync(join(versionsDir, '2.1.197')), true)
+    assert.strictEqual(existsSync(join(versionsDir, '2.1.196')), false)
+    assert.strictEqual(existsSync(join(versionsDir, '2.1.195')), false)
+    assert.strictEqual(existsSync(join(stateDir, 'claude.stamp')), true)
+  })
+
+  test('removes OpenCode installer temp directories after install', () => {
+    const updaterPath = join(assetsDevcontainerDir, 'utils', 'coding-agent-cli-update.sh')
+    const stateDir = tempDir('opencode-clean-update-state')
+    const home = tempDir('opencode-clean-home')
+    const tmpParent = tempDir('opencode-clean-tmp')
+    const installerPath = join(tempDir('opencode-clean-installer'), 'install.sh')
+
+    writeFileSync(installerPath, [
+      '#!/usr/bin/env bash',
+      'set -e',
+      'mkdir -p "${HOME}/.opencode/bin"',
+      'touch "${HOME}/.opencode/bin/opencode"',
+      'mkdir -p "${BOXDOWN_OPENCODE_INSTALL_TMP_PARENT}/opencode_install_123"',
+      'mkdir -p "${BOXDOWN_OPENCODE_INSTALL_TMP_PARENT}/opencode_install_456"'
+    ].join('\n'))
+
+    execFileSync('bash', [updaterPath, 'update-now', 'opencode'], {
+      env: {
+        ...process.env,
+        HOME: home,
+        PATH: '/usr/bin:/bin:/usr/sbin:/sbin',
+        BOXDOWN_OPENCODE_INSTALL_URL: `file://${installerPath}`,
+        BOXDOWN_OPENCODE_INSTALL_TMP_PARENT: tmpParent,
+        BOXDOWN_CODING_AGENT_UPDATE_STATE_DIR: stateDir
+      },
+      stdio: 'pipe'
+    })
+
+    assert.strictEqual(existsSync(join(tmpParent, 'opencode_install_123')), false)
+    assert.strictEqual(existsSync(join(tmpParent, 'opencode_install_456')), false)
+    assert.strictEqual(existsSync(join(stateDir, 'opencode.stamp')), true)
   })
 
   test('skips coding-agent CLI refresh when all stamps are fresh', () => {

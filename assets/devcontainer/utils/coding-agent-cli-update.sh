@@ -13,6 +13,13 @@ log() {
   echo "coding-agent-cli-update: $*" >&2
 }
 
+prepend_agent_bin_paths() {
+  local codex_home="${CODEX_HOME:-${HOME}/.codex}"
+
+  PATH="${HOME}/.local/bin:${HOME}/.opencode/bin:${codex_home}/packages/standalone/current/bin:${PATH}"
+  export PATH
+}
+
 usage() {
   cat >&2 <<'EOF'
 Usage: coding-agent-cli-update.sh <install|update-now|maybe-update> [codex|opencode|claude|antigravity...]
@@ -225,7 +232,7 @@ prune_codex_standalone_releases() {
   local previous_limit
   local release_name
 
-  keep_previous="$(numeric_or_default "${BOXDOWN_CODEX_STANDALONE_RELEASES_KEEP_PREVIOUS:-1}" 1)"
+  keep_previous="$(numeric_or_default "${BOXDOWN_CODEX_STANDALONE_RELEASES_KEEP_PREVIOUS:-0}" 0)"
   codex_home="${CODEX_HOME:-${HOME}/.codex}"
   standalone_dir="${codex_home}/packages/standalone"
   releases_dir="${standalone_dir}/releases"
@@ -255,19 +262,77 @@ prune_codex_standalone_releases() {
 
     rm -rf -- "${releases_dir}/${release_name}"
     log "codex: pruned old standalone release: ${release_name}"
-  done < <(list_codex_standalone_release_names "${releases_dir}")
+  done < <(list_child_directory_names "${releases_dir}")
 }
 
-list_codex_standalone_release_names() {
-  local releases_dir="$1"
+prune_claude_versions() {
+  local versions_dir="${HOME}/.local/share/claude/versions"
+  local current_link="${HOME}/.local/bin/claude"
+  local current_target
+  local current_name=""
+  local version_name
+
+  [ -d "${versions_dir}" ] || return 0
+  [ -L "${current_link}" ] || return 0
+
+  current_target="$(readlink "${current_link}" 2>/dev/null || true)"
+  current_name="$(basename "${current_target}")"
+  [ -n "${current_name}" ] || return 0
+
+  while IFS= read -r version_name; do
+    if [ "${version_name}" = "${current_name}" ]; then
+      continue
+    fi
+
+    rm -rf -- "${versions_dir}/${version_name}"
+    log "claude: pruned old version: ${version_name}"
+  done < <(list_child_directory_names "${versions_dir}")
+}
+
+cleanup_opencode_install_temps() {
+  local tmp_parent="${BOXDOWN_OPENCODE_INSTALL_TMP_PARENT:-/tmp}"
+  local tmp_dir
+
+  [ -d "${tmp_parent}" ] || return 0
+
+  for tmp_dir in "${tmp_parent}"/opencode_install_*; do
+    [ -e "${tmp_dir}" ] || continue
+    [ -d "${tmp_dir}" ] || continue
+    rm -rf -- "${tmp_dir}"
+    log "opencode: removed installer temp dir: ${tmp_dir}"
+  done
+}
+
+cleanup_antigravity_staging() {
+  local cache_dir="${BOXDOWN_ANTIGRAVITY_CACHE_DIR:-${HOME}/.cache/antigravity}"
+  local staging_dir="${cache_dir}/staging"
+
+  [ -d "${staging_dir}" ] || return 0
+
+  rm -rf -- "${staging_dir}"
+  log "antigravity: removed staging cache: ${staging_dir}"
+}
+
+cleanup_agent_after_update() {
+  case "$1" in
+    codex) prune_codex_standalone_releases ;;
+    opencode) cleanup_opencode_install_temps ;;
+    claude) prune_claude_versions ;;
+    antigravity) cleanup_antigravity_staging ;;
+    *) return 0 ;;
+  esac
+}
+
+list_child_directory_names() {
+  local parent_dir="$1"
 
   if printf '1\n2\n' | sort -V >/dev/null 2>&1; then
-    find "${releases_dir}" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | sort -Vr
+    find "${parent_dir}" -mindepth 1 -maxdepth 1 -type d -exec basename {} \; | sort -Vr
     return
   fi
 
-  (cd "${releases_dir}" && ls -1t) 2>/dev/null | while IFS= read -r release_name; do
-    [ -d "${releases_dir}/${release_name}" ] && printf '%s\n' "${release_name}"
+  (cd "${parent_dir}" && ls -1t) 2>/dev/null | while IFS= read -r child_name; do
+    [ -d "${parent_dir}/${child_name}" ] && printf '%s\n' "${child_name}"
   done
 }
 
@@ -285,7 +350,6 @@ update_codex() {
 
   if command -v codex >/dev/null 2>&1; then
     if codex update; then
-      prune_codex_standalone_releases || true
       return 0
     fi
 
@@ -293,7 +357,7 @@ update_codex() {
   fi
 
   if install_codex; then
-    prune_codex_standalone_releases || true
+    result=0
   else
     result=$?
   fi
@@ -380,6 +444,7 @@ update_now_agent() {
   ensure_state_dir "${stamp_file}" "${lock_dir}"
   acquire_lock "${agent}" "${lock_dir}" || return 1
   if run_agent_update "${agent}"; then
+    cleanup_agent_after_update "${agent}" || true
     touch_stamp "${stamp_file}"
   else
     result=$?
@@ -408,6 +473,7 @@ maybe_update_agent() {
   fi
 
   if run_agent_update "${agent}"; then
+    cleanup_agent_after_update "${agent}" || true
     touch_stamp "${stamp_file}"
   else
     result=$?
@@ -444,6 +510,8 @@ main() {
     return 1
   fi
   shift
+
+  prepend_agent_bin_paths
 
   if [ "$#" -eq 0 ]; then
     agents=("${DEFAULT_AGENTS[@]}")

@@ -180,10 +180,12 @@ It is not a GitHub token and does not authenticate `gh` or GitHub Git remotes.
 - **Other agent config on the host** — Uncomment the `mounts` entries in
   `devcontainer.json` to bind directories such as `~/.claude` or `~/.gemini`
   into the container so coding agents see your existing settings.
-- **Codex release cache** — After a successful Codex install/update, Boxdown
-  keeps the active standalone Codex release plus one previous release. Set
-  `BOXDOWN_CODEX_STANDALONE_RELEASES_KEEP_PREVIOUS=0` to keep only the active
-  release, or set it to a larger number when you want more rollback history.
+- **Agent CLI cleanup** — After a successful coding-agent CLI install/update,
+  Boxdown removes stale agent artifacts: old Codex standalone releases, old
+  Claude Code versions, OpenCode installer temp directories, and Antigravity
+  staging cache. Codex keeps only the active standalone release by default; set
+  `BOXDOWN_CODEX_STANDALONE_RELEASES_KEEP_PREVIOUS` to keep extra rollback
+  releases.
 - **1Password / other CLIs** — Follow the commented blocks in `devcontainer.json` and `hooks/post-create.sh` if you need them; keep the image lean by default.
 
 ---
