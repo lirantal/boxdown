@@ -12,8 +12,10 @@ boxdown down
 boxdown doctor
 ```
 
-Workspace-targeting commands accept `--workspace <path>`. `status` also accepts
-`--alias <name>` so its output can match a custom SSH host alias.
+Workspace-targeting commands accept `--workspace <path>`. `down` also accepts
+repeated `--workspace` flags to remove multiple workspace containers in order.
+`status` accepts `--alias <name>` so its output can match a custom SSH host
+alias.
 
 ## List
 
@@ -53,6 +55,15 @@ already stopped or absent, it prints a short message and exits 0.
 
 `down` removes the workspace devcontainer with Docker. It does not remove
 Boxdown cache, generated config, data directories, or SSH keys.
+
+To remove multiple workspace containers, repeat `--workspace`:
+
+```sh
+boxdown down --workspace /path/to/repo-a --workspace /path/to/repo-b
+```
+
+Batch `down` continues after individual workspace failures, but exits nonzero if
+any requested workspace cannot be resolved or removed.
 
 ## Doctor
 

@@ -33,6 +33,7 @@ export interface ParsedCli {
   agent?: CodingAgentCli
   agentArgs?: string[]
   workspace?: string
+  workspaces?: string[]
   alias?: string
   target?: SshConfigInstallTarget
   tunnelPorts?: TunnelPortForward[]
@@ -50,7 +51,7 @@ export const USAGE = `Usage:
   boxdown list [--json]
   boxdown status [--workspace <path>] [--alias <name>] [--json]
   boxdown stop [--workspace <path>]
-  boxdown down [--workspace <path>]
+  boxdown down [--workspace <path>]...
   boxdown doctor [--workspace <path>]
   boxdown ssh install [--workspace <path>] [--alias <name>] [--target codex]
   boxdown ssh uninstall [--workspace <path>] [--alias <name>]
@@ -94,6 +95,7 @@ Commands:
 
 Options:
   --workspace <path>  Target project directory. Defaults to the current directory.
+                      Repeatable with down.
   --alias <name>      SSH host alias. Defaults to <repo-name>-devcontainer.
   --target codex      Also register the SSH alias as a Codex app remote project.
   --port <port>       Tunnel a local port to the same remote port, or use
@@ -117,7 +119,7 @@ export function commandWritesWorkspaceMetadata (command: BoxdownCommand): boolea
 
 export function parseCliArgs (argv: string[]): ParsedCli {
   const args = [...argv]
-  let workspace: string | undefined
+  const workspaces: string[] = []
   let alias: string | undefined
   let target: SshConfigInstallTarget | undefined
   const tunnelPorts: TunnelPortForward[] = []
@@ -125,6 +127,17 @@ export function parseCliArgs (argv: string[]): ParsedCli {
   let json = false
   let passthroughArgs: string[] | undefined
   const positional: string[] = []
+
+  function workspaceFields (command: BoxdownCommand): Pick<ParsedCli, 'workspace' | 'workspaces'> {
+    if (workspaces.length > 1 && command !== 'down') {
+      throw new Error('--workspace can only be repeated with down')
+    }
+
+    return {
+      workspace: workspaces[0],
+      ...(command === 'down' && workspaces.length > 0 ? { workspaces: [...workspaces] } : {})
+    }
+  }
 
   function parsed (command: BoxdownCommand): ParsedCli {
     if (json && command !== 'status' && command !== 'list') {
@@ -145,7 +158,7 @@ export function parseCliArgs (argv: string[]): ParsedCli {
 
     return {
       command,
-      workspace,
+      ...workspaceFields(command),
       alias,
       ...(target === undefined ? {} : { target }),
       ...(tunnelPorts.length === 0 ? {} : { tunnelPorts }),
@@ -171,7 +184,7 @@ export function parseCliArgs (argv: string[]): ParsedCli {
       command: 'coding-agent',
       agent,
       agentArgs: passthroughArgs ?? [],
-      workspace,
+      ...workspaceFields('coding-agent'),
       alias,
       recreate,
       json
@@ -199,7 +212,7 @@ export function parseCliArgs (argv: string[]): ParsedCli {
       if (value === undefined) {
         throw new Error('--workspace requires a value')
       }
-      workspace = value
+      workspaces.push(value)
       continue
     }
 
@@ -354,6 +367,23 @@ export function parseTunnelPort (value: string): TunnelPortForward {
   throw new Error(`Invalid tunnel port: ${value}`)
 }
 
+async function runDownCommand (workspaces: string[] | undefined): Promise<number> {
+  const targetWorkspaces = workspaces === undefined || workspaces.length === 0 ? [undefined] : workspaces
+  let failed = false
+
+  for (const workspace of targetWorkspaces) {
+    try {
+      const context = createWorkspaceContext({ workspace })
+      await removeWorkspaceContainer(context)
+    } catch (error) {
+      failed = true
+      process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`)
+    }
+  }
+
+  return failed ? 1 : 0
+}
+
 export async function runCli (argv: string[] = process.argv.slice(2)): Promise<number> {
   try {
     const parsed = parseCliArgs(argv)
@@ -375,6 +405,10 @@ export async function runCli (argv: string[] = process.argv.slice(2)): Promise<n
       }
 
       return 0
+    }
+
+    if (parsed.command === 'down') {
+      return runDownCommand(parsed.workspaces)
     }
 
     const context = createWorkspaceContext({ workspace: parsed.workspace })
@@ -451,11 +485,6 @@ export async function runCli (argv: string[] = process.argv.slice(2)): Promise<n
 
     if (parsed.command === 'stop') {
       await stopWorkspaceContainer(context)
-      return 0
-    }
-
-    if (parsed.command === 'down') {
-      await removeWorkspaceContainer(context)
       return 0
     }
 

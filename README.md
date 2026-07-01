@@ -85,7 +85,8 @@ npx boxdown tunnel --port 3030 --port 8080:3031
 ```
 
 Use `--workspace <path>` only when running the command from a different
-directory.
+directory. Repeat it with `down` to remove multiple workspace containers in one
+command.
 
 Remove Boxdown's managed SSH host block and matching Codex app project entry
 when you no longer need the alias:
@@ -137,7 +138,7 @@ boxdown list --json
 Shared options:
 
 ```sh
---workspace <path>  # target project directory, defaults to cwd
+--workspace <path>  # target project directory, defaults to cwd; repeatable with down
 --alias <name>      # SSH alias, defaults to <repo-name>-devcontainer
 --target codex      # also register the SSH alias as a Codex remote project
 --port <port>       # tunnel port for `boxdown tunnel`; repeatable

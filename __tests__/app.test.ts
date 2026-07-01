@@ -1,8 +1,8 @@
 import assert from 'node:assert'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { delimiter, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, test } from 'node:test'
 
@@ -43,6 +43,111 @@ function readGitConfigAll (configPath: string, key: string): string[] {
   } catch {
     return []
   }
+}
+
+interface FakeDockerWorkspace {
+  workspace: string
+  id: string
+  removeExitCode?: number
+}
+
+function runCliProcess (argv: string[], env: NodeJS.ProcessEnv): { code: number, stdout: string, stderr: string } {
+  const script = [
+    'import { runCli } from "./src/main.ts"',
+    'const argv = JSON.parse(process.env.BOXDOWN_TEST_CLI_ARGS ?? "[]")',
+    'process.exitCode = await runCli(argv)'
+  ].join('\n')
+  const result = spawnSync(process.execPath, [
+    '--import',
+    'tsx',
+    '--input-type=module',
+    '--eval',
+    script
+  ], {
+    cwd: process.cwd(),
+    encoding: 'utf8',
+    env: {
+      ...env,
+      BOXDOWN_TEST_CLI_ARGS: JSON.stringify(argv)
+    }
+  })
+
+  if (result.error !== undefined) {
+    throw result.error
+  }
+
+  return {
+    code: result.status ?? 1,
+    stdout: result.stdout,
+    stderr: result.stderr
+  }
+}
+
+async function withFakeDocker<T> (workspaces: FakeDockerWorkspace[], run: (logPath: string, env: NodeJS.ProcessEnv) => Promise<T>): Promise<T> {
+  const binDir = tempDir('fake-docker-bin')
+  const statePath = join(tempDir('fake-docker-state'), 'state.tsv')
+  const logPath = join(tempDir('fake-docker-log'), 'calls.log')
+  const dockerPath = join(binDir, 'docker')
+  const script = [
+    '#!/usr/bin/env bash',
+    'set -u',
+    'printf "%s\\n" "$*" >> "${BOXDOWN_FAKE_DOCKER_LOG}"',
+    'if [ "${1:-}" = "ps" ]; then',
+    '  filter=""',
+    '  previous=""',
+    '  for arg in "$@"; do',
+    '    if [ "$previous" = "--filter" ]; then',
+    '      filter="$arg"',
+    '      break',
+    '    fi',
+    '    previous="$arg"',
+    '  done',
+    '  workspace="${filter#label=devcontainer.local_folder=}"',
+    '  if [ "$workspace" = "$filter" ]; then',
+    '    exit 0',
+    '  fi',
+    '  while IFS="$(printf \'\\t\')" read -r folder id remove_exit_code; do',
+    '    if [ "$folder" = "$workspace" ]; then',
+    '      printf \'{"ID":"%s","Names":"%s","State":"running","Status":"Up","Labels":"devcontainer.local_folder=%s"}\\n\' "$id" "$id" "$folder"',
+    '      exit 0',
+    '    fi',
+    '  done < "${BOXDOWN_FAKE_DOCKER_STATE}"',
+    '  exit 0',
+    'fi',
+    'if [ "${1:-}" = "rm" ]; then',
+    '  id="${@: -1}"',
+    '  while IFS="$(printf \'\\t\')" read -r folder container_id remove_exit_code; do',
+    '    if [ "$container_id" = "$id" ]; then',
+    '      exit "${remove_exit_code:-0}"',
+    '    fi',
+    '  done < "${BOXDOWN_FAKE_DOCKER_STATE}"',
+    '  exit 0',
+    'fi',
+    'exit 64'
+  ].join('\n')
+
+  writeFileSync(statePath, `${workspaces.map((workspace) => [
+    realpathSync(workspace.workspace),
+    workspace.id,
+    String(workspace.removeExitCode ?? 0)
+  ].join('\t')).join('\n')}\n`)
+  writeFileSync(dockerPath, script)
+  chmodSync(dockerPath, 0o755)
+
+  return run(logPath, {
+    ...process.env,
+    PATH: process.env.PATH === undefined ? binDir : `${binDir}${delimiter}${process.env.PATH}`,
+    BOXDOWN_FAKE_DOCKER_STATE: statePath,
+    BOXDOWN_FAKE_DOCKER_LOG: logPath
+  })
+}
+
+function fakeDockerCalls (logPath: string): string[] {
+  if (!existsSync(logPath)) {
+    return []
+  }
+
+  return readFileSync(logPath, 'utf8').trim().split(/\r?\n/).filter((line) => line.length > 0)
 }
 
 describe('CLI parsing', () => {
@@ -223,6 +328,28 @@ describe('CLI parsing', () => {
     assert.strictEqual(parseCliArgs(['doctor']).command, 'doctor')
   })
 
+  test('parses repeated workspaces for down only', () => {
+    assert.deepStrictEqual(parseCliArgs(['down', '--workspace', '/tmp/a', '--workspace', '/tmp/b']), {
+      command: 'down',
+      workspace: '/tmp/a',
+      workspaces: ['/tmp/a', '/tmp/b'],
+      alias: undefined,
+      recreate: false,
+      json: false
+    })
+    assert.deepStrictEqual(parseCliArgs(['down', '--workspace', '/tmp/a']), {
+      command: 'down',
+      workspace: '/tmp/a',
+      workspaces: ['/tmp/a'],
+      alias: undefined,
+      recreate: false,
+      json: false
+    })
+    assert.throws(() => parseCliArgs(['start', '--workspace', '/tmp/a', '--workspace', '/tmp/b']), /--workspace can only be repeated with down/)
+    assert.throws(() => parseCliArgs(['status', '--workspace', '/tmp/a', '--workspace', '/tmp/b']), /--workspace can only be repeated with down/)
+    assert.throws(() => parseCliArgs(['claude', '--workspace', '/tmp/a', '--workspace', '/tmp/b']), /--workspace can only be repeated with down/)
+  })
+
   test('rejects unknown commands', () => {
     assert.throws(() => parseCliArgs(['ssh-config']), /Unknown command: ssh-config/)
     assert.throws(() => parseCliArgs(['ssh-config', 'install']), /Unknown command: ssh-config install/)
@@ -259,6 +386,8 @@ describe('CLI parsing', () => {
     assert.match(USAGE, /status\s+Show workspace state/)
     assert.match(USAGE, /stop\s+Stop the workspace devcontainer/)
     assert.match(USAGE, /down\s+Remove the workspace devcontainer/)
+    assert.match(USAGE, /boxdown down \[--workspace <path>\]\.\.\./)
+    assert.match(USAGE, /--workspace <path>\s+Target project directory[\s\S]*Repeatable with down\./)
     assert.match(USAGE, /doctor\s+Check required host tools/)
     assert.ok(!usageLines.includes('  boxdown shell [--workspace <path>] [--recreate]'))
     assert.ok(!usageLines.includes('  boxdown install-ssh-config [--workspace <path>] [--alias <name>]'))
@@ -275,6 +404,64 @@ describe('CLI parsing', () => {
     assert.match(USAGE, /--port <port>\s+Tunnel a local port/)
     assert.match(USAGE, /refresh-gh-token\s+Start or reuse the devcontainer/)
     assert.match(USAGE, /refresh-gh-token-running\s+Refresh GitHub CLI auth only if/)
+  })
+})
+
+describe('CLI execution', () => {
+  test('removes each requested down workspace', async () => {
+    const alpha = tempDir('down-alpha-workspace')
+    const beta = tempDir('down-beta-workspace')
+
+    await withFakeDocker([
+      { workspace: alpha, id: 'alpha-container' },
+      { workspace: beta, id: 'beta-container' }
+    ], async (logPath, env) => {
+      const result = runCliProcess(['down', '--workspace', alpha, '--workspace', beta], env)
+      const rmCalls = fakeDockerCalls(logPath).filter((line) => line.startsWith('rm -f '))
+
+      assert.strictEqual(result.code, 0)
+      assert.deepStrictEqual(rmCalls, ['rm -f alpha-container', 'rm -f beta-container'])
+      assert.match(result.stdout, /Removed devcontainer: alpha-container/)
+      assert.match(result.stdout, /Removed devcontainer: beta-container/)
+    })
+  })
+
+  test('continues batch down after a removal failure', async () => {
+    const alpha = tempDir('down-fail-alpha-workspace')
+    const beta = tempDir('down-fail-beta-workspace')
+    const gamma = tempDir('down-fail-gamma-workspace')
+
+    await withFakeDocker([
+      { workspace: alpha, id: 'alpha-container' },
+      { workspace: beta, id: 'beta-container', removeExitCode: 37 },
+      { workspace: gamma, id: 'gamma-container' }
+    ], async (logPath, env) => {
+      const result = runCliProcess(['down', '--workspace', alpha, '--workspace', beta, '--workspace', gamma], env)
+      const rmCalls = fakeDockerCalls(logPath).filter((line) => line.startsWith('rm -f '))
+
+      assert.strictEqual(result.code, 1)
+      assert.deepStrictEqual(rmCalls, ['rm -f alpha-container', 'rm -f beta-container', 'rm -f gamma-container'])
+      assert.match(result.stderr, /Could not remove devcontainer beta-container/)
+      assert.match(result.stdout, /Removed devcontainer: alpha-container/)
+      assert.match(result.stdout, /Removed devcontainer: gamma-container/)
+    })
+  })
+
+  test('continues batch down after a missing workspace path', async () => {
+    const missing = join(tempDir('down-missing-parent'), 'missing-workspace')
+    const valid = tempDir('down-valid-workspace')
+
+    await withFakeDocker([
+      { workspace: valid, id: 'valid-container' }
+    ], async (logPath, env) => {
+      const result = runCliProcess(['down', '--workspace', missing, '--workspace', valid], env)
+      const rmCalls = fakeDockerCalls(logPath).filter((line) => line.startsWith('rm -f '))
+
+      assert.strictEqual(result.code, 1)
+      assert.deepStrictEqual(rmCalls, ['rm -f valid-container'])
+      assert.match(result.stderr, /Workspace does not exist:/)
+      assert.match(result.stdout, /Removed devcontainer: valid-container/)
+    })
   })
 })
 
