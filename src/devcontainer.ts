@@ -5,6 +5,7 @@ import { buildGeneratedDevcontainerConfig, publishContainerPortFromConfig, write
 import { codingAgentBinary, type CodingAgentCli } from './coding-agents.ts'
 import { resolveDevcontainerCli } from './devcontainer-cli.ts'
 import { configureWorkspaceGithubGitAuth } from './github-git-auth.ts'
+import { recordWorkspaceDockerImage } from './metadata.ts'
 import type { WorkspaceContext } from './paths.ts'
 import { runBuffered, runInteractive } from './process.ts'
 import { interactiveCommandScript, interactiveShellEnvArgs, interactiveShellScript } from './shell.ts'
@@ -25,6 +26,16 @@ export interface TunnelPortForward {
 export interface SshTunnelOptions {
   bindAddress?: string
   remoteHost?: string
+}
+
+export interface DockerImageInfo {
+  id: string
+  name?: string
+}
+
+interface DockerInspectContainer {
+  Image?: unknown
+  Config?: unknown
 }
 
 function devcontainerWorkspaceArgs (context: WorkspaceContext): string[] {
@@ -107,6 +118,69 @@ export async function findRunningContainerId (context: WorkspaceContext): Promis
   return result.stdout.split(/\r?\n/).find((line) => line.length > 0)
 }
 
+function isRecord (value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+function parseDockerInspectImage (output: string, containerId: string): DockerImageInfo | undefined {
+  const trimmed = output.trim()
+
+  if (trimmed.length === 0) {
+    return undefined
+  }
+
+  let parsed: DockerInspectContainer
+
+  try {
+    parsed = JSON.parse(trimmed) as DockerInspectContainer
+  } catch (error) {
+    throw new Error(`Could not parse docker inspect output for ${containerId}`, { cause: error })
+  }
+
+  if (typeof parsed.Image !== 'string' || parsed.Image.length === 0) {
+    return undefined
+  }
+
+  const configImage = isRecord(parsed.Config) && typeof parsed.Config.Image === 'string' && parsed.Config.Image.length > 0
+    ? parsed.Config.Image
+    : undefined
+
+  return {
+    id: parsed.Image,
+    ...(configImage === undefined ? {} : { name: configImage })
+  }
+}
+
+export async function inspectContainerImage (containerId: string): Promise<DockerImageInfo | undefined> {
+  const result = await runBuffered('docker', [
+    'inspect',
+    '--format',
+    '{{json .}}',
+    containerId
+  ], {
+    mirrorStdout: false,
+    mirrorStderr: false
+  })
+
+  if (result.code !== 0) {
+    throw new Error(`Could not inspect devcontainer image for ${containerId}`)
+  }
+
+  return parseDockerInspectImage(result.stdout, containerId)
+}
+
+async function recordContainerImageIfPresent (context: WorkspaceContext, containerId: string): Promise<void> {
+  try {
+    const image = await inspectContainerImage(containerId)
+
+    if (image !== undefined) {
+      recordWorkspaceDockerImage(context, image)
+    }
+  } catch {
+    process.stderr.write(`Warning: could not record devcontainer image metadata for ${containerId}.\n`)
+  }
+}
+
 export async function stopWorkspaceContainer (context: WorkspaceContext): Promise<void> {
   const container = await findWorkspaceContainer(context)
 
@@ -140,16 +214,47 @@ export async function removeWorkspaceContainer (context: WorkspaceContext): Prom
     return
   }
 
-  const result = await runBuffered('docker', ['rm', '-f', container.id], {
+  await removeContainerById(container.id)
+  process.stdout.write(`Removed devcontainer: ${container.id}\n`)
+}
+
+export async function removeContainerById (containerId: string, options: { volumes?: boolean } = {}): Promise<void> {
+  const result = await runBuffered('docker', [
+    'rm',
+    '-f',
+    ...(options.volumes === true ? ['-v'] : []),
+    containerId
+  ], {
     mirrorStdout: false,
     mirrorStderr: false
   })
 
   if (result.code !== 0) {
-    throw new Error(`Could not remove devcontainer ${container.id}`)
+    throw new Error(`Could not remove devcontainer ${containerId}`)
+  }
+}
+
+function dockerImageMissing (stderr: string): boolean {
+  return /No such image/i.test(stderr) || /not found/i.test(stderr)
+}
+
+export async function removeDockerImage (imageId: string): Promise<boolean> {
+  const result = await runBuffered('docker', ['image', 'rm', '-f', imageId], {
+    mirrorStdout: false,
+    mirrorStderr: false
+  })
+
+  if (result.code !== 0) {
+    if (dockerImageMissing(result.stderr)) {
+      process.stdout.write(`Docker image already absent: ${imageId}\n`)
+      return false
+    }
+
+    throw new Error(`Could not remove Docker image ${imageId}`)
   }
 
-  process.stdout.write(`Removed devcontainer: ${container.id}\n`)
+  process.stdout.write(`Removed Docker image: ${imageId}\n`)
+  return true
 }
 
 export async function startDevcontainer (context: WorkspaceContext, options: StartOptions = {}): Promise<string> {
@@ -161,6 +266,7 @@ export async function startDevcontainer (context: WorkspaceContext, options: Sta
 
     if (runningContainerId !== undefined) {
       log(`Using running devcontainer for: ${context.workspaceFolder}`, options.proxyMode)
+      await recordContainerImageIfPresent(context, runningContainerId)
       return runningContainerId
     }
   }
@@ -193,6 +299,7 @@ export async function startDevcontainer (context: WorkspaceContext, options: Sta
     throw new Error(`Could not resolve devcontainer ID for ${context.workspaceFolder}`)
   }
 
+  await recordContainerImageIfPresent(context, containerId)
   return containerId
 }
 

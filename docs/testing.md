@@ -63,6 +63,7 @@ boxdown ssh install --workspace /path/to/repo
 boxdown ssh install --workspace /path/to/repo --target codex
 ssh <repo-name>-devcontainer 'whoami && pwd'
 boxdown down --workspace /path/to/repo-a --workspace /path/to/repo-b
+boxdown purge --workspace /path/to/disposable-repo
 ```
 
 When checking browser access, start a dev server inside the container and keep a

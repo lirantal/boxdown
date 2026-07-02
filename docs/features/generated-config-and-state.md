@@ -44,6 +44,9 @@ Each touched workspace also records inventory metadata at:
 `boxdown list` reads these metadata files as its source of truth, then enriches
 entries with best-effort Docker state.
 
+Metadata may also record the last inspected Docker image ID for the workspace so
+`boxdown purge` can remove that exact image even after the container is gone.
+
 ## External App Config
 
 External app integration config is not Boxdown workspace state. When requested

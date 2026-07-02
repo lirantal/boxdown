@@ -107,6 +107,7 @@ boxdown list
 boxdown status
 boxdown stop
 boxdown down
+boxdown purge
 boxdown doctor
 boxdown ssh install
 boxdown ssh uninstall
@@ -146,6 +147,11 @@ Shared options:
 --recreate          # recreate the devcontainer before starting
 --json              # JSON output for status and list
 ```
+
+Use `boxdown purge` when you want to remove the workspace's Boxdown-managed
+environment residue: the devcontainer, its exact recorded Docker image, managed
+SSH/Codex entries, and Boxdown cache/data for that workspace. It does not delete
+the local repository directory or files inside it.
 
 ## Contributing
 

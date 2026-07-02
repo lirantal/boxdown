@@ -7,6 +7,7 @@ import { startDevcontainer, printPortHint, openShell, openCodingAgentCli, ensure
 import { createWorkspaceListEntries, formatWorkspaceListText } from './list.ts'
 import { listWorkspaceMetadata, writeWorkspaceMetadata } from './metadata.ts'
 import { createWorkspaceContext, defaultDataRoot } from './paths.ts'
+import { purgeWorkspace } from './purge.ts'
 import { defaultSshAlias, installSshConfig, uninstallSshConfig } from './ssh-config.ts'
 import { createStatusInfo, formatStatusText, statusIsHealthy } from './status.ts'
 
@@ -17,6 +18,7 @@ export type BoxdownCommand =
   | 'status'
   | 'stop'
   | 'down'
+  | 'purge'
   | 'doctor'
   | 'ssh-install'
   | 'ssh-uninstall'
@@ -51,6 +53,7 @@ export const USAGE = `Usage:
   boxdown status [--workspace <path>] [--alias <name>] [--json]
   boxdown stop [--workspace <path>]
   boxdown down [--workspace <path>]...
+  boxdown purge [--workspace <path>] [--alias <name>]
   boxdown doctor [--workspace <path>]
   boxdown ssh install [--workspace <path>] [--alias <name>] [--target codex]
   boxdown ssh uninstall [--workspace <path>] [--alias <name>]
@@ -77,6 +80,9 @@ Commands:
   stop                      Stop the workspace devcontainer if it is running.
   down                      Remove the workspace devcontainer. Keeps Boxdown
                             cache, generated config, data, and SSH keys.
+  purge                     Remove the workspace devcontainer, exact Docker
+                            image, managed SSH/app config, and Boxdown
+                            cache/data for this workspace.
   doctor                    Check required host tools and Boxdown assets.
   ssh install               Install or update an SSH host alias for the workspace
                             devcontainer.
@@ -153,6 +159,10 @@ export function parseCliArgs (argv: string[]): ParsedCli {
 
     if (tunnelPorts.length > 0 && command !== 'tunnel') {
       throw new Error('--port is only supported with tunnel')
+    }
+
+    if (recreate && command === 'purge') {
+      throw new Error('--recreate is not supported with purge')
     }
 
     return {
@@ -295,6 +305,10 @@ export function parseCliArgs (argv: string[]): ParsedCli {
 
   if (positional[0] === 'down' && positional.length === 1) {
     return parsed('down')
+  }
+
+  if (positional[0] === 'purge' && positional.length === 1) {
+    return parsed('purge')
   }
 
   if (positional[0] === 'doctor' && positional.length === 1) {
@@ -485,6 +499,10 @@ export async function runCli (argv: string[] = process.argv.slice(2)): Promise<n
     if (parsed.command === 'stop') {
       await stopWorkspaceContainer(context)
       return 0
+    }
+
+    if (parsed.command === 'purge') {
+      return purgeWorkspace(context, { alias: parsed.alias })
     }
 
     if (parsed.command === 'doctor') {
