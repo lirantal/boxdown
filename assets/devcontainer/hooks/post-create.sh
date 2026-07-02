@@ -23,9 +23,11 @@ configure_global_git() {
 configure_local_git() {
   # Local git prefs only apply inside a repository; skip when there is no .git (avoids postCreate failure).
   if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    git config --local commit.gpgsign false
-    git config --local core.pager 'less -R'
-    git config --local credential.https://github.com.helper '!gh auth git-credential'
+    git config --local --replace-all commit.gpgsign false
+    git config --local --replace-all core.pager 'less -R'
+    git config --local --unset-all credential.https://github.com.helper >/dev/null 2>&1 || true
+    git config --local --add credential.https://github.com.helper ''
+    git config --local --add credential.https://github.com.helper '!gh auth git-credential'
   fi
 }
 
@@ -74,4 +76,6 @@ run_deps_install() {
   bash "${DEVCONTAINER_DIR}/utils/deps-install.sh"
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi

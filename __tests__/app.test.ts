@@ -982,6 +982,26 @@ describe('devcontainer git config hooks', () => {
     assert.strictEqual(existsSync(targetPath), true)
     assert.deepStrictEqual(readGitConfigAll(targetPath, 'credential.https://github.com.helper'), ['', '!gh auth git-credential'])
   })
+
+  test('post-create local git config is idempotent with multiple GitHub helpers', () => {
+    const postCreatePath = join(assetsDevcontainerDir, 'hooks', 'post-create.sh')
+    const workspace = tempDir('post-create-local-git')
+
+    execFileSync('git', ['init'], { cwd: workspace })
+    execFileSync('git', ['config', '--local', '--add', 'credential.https://github.com.helper', ''], { cwd: workspace })
+    execFileSync('git', ['config', '--local', '--add', 'credential.https://github.com.helper', '!gh auth git-credential'], { cwd: workspace })
+
+    execFileSync('bash', ['-c', 'source "$1"; configure_local_git', 'bash', postCreatePath], { cwd: workspace })
+
+    const helpers = execFileSync('git', ['config', '--local', '--get-all', 'credential.https://github.com.helper'], { cwd: workspace })
+      .toString('utf8')
+      .replace(/\r?\n$/, '')
+      .split(/\r?\n/)
+
+    assert.deepStrictEqual(helpers, ['', '!gh auth git-credential'])
+    assert.strictEqual(execFileSync('git', ['config', '--local', '--get', 'commit.gpgsign'], { cwd: workspace }).toString('utf8').trim(), 'false')
+    assert.strictEqual(execFileSync('git', ['config', '--local', '--get', 'core.pager'], { cwd: workspace }).toString('utf8').trim(), 'less -R')
+  })
 })
 
 describe('interactive shell setup', () => {
