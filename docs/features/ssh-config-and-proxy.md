@@ -53,10 +53,11 @@ as an installed Boxdown alias.
 
 ## Codex App Target
 
-`boxdown ssh install --target codex` keeps the normal SSH install flow
-and also writes a Codex app remote project entry for the same alias.
-`--target` is repeatable so future optional SSH install targets can be combined
-in one install command.
+Selecting Codex from the interactive prompt or running
+`boxdown ssh install --target codex` keeps the normal SSH install flow and also
+writes a Codex app remote project entry for the same alias. `--target` is
+repeatable so future optional SSH install targets can be combined in one
+install command.
 
 The Codex app config is written to:
 

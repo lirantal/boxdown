@@ -64,8 +64,8 @@ ssh <repo-name>-devcontainer 'whoami && pwd'
 
 Use the same alias in Cursor, Claude, Codex, or any SSH-capable tool.
 
-To also add the project to Codex's remote project sidebar, install the Codex
-target explicitly:
+To also add the project to Codex's remote project sidebar, select Codex from
+the prompt or install the Codex target explicitly for scripts:
 
 ```sh
 npx boxdown ssh install --target codex

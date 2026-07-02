@@ -21,7 +21,9 @@ Unit tests should avoid starting Docker. Prefer pure tests for:
 - Workspace path resolution and state directory selection.
 - Generated devcontainer config shape.
 - SSH config block creation and idempotent replacement.
-- Codex app config target parsing, merge behavior, and idempotent project
+- SSH install target parsing and prompt behavior, including explicit target
+  flags, prompt selection, prompt skip/cancel, and non-TTY fallback.
+- Codex app config target installation, merge behavior, and idempotent project
   injection.
 - Lifecycle status and doctor output formatting.
 - Workspace metadata and list output formatting.
@@ -61,10 +63,16 @@ boxdown status --workspace /path/to/repo --json
 boxdown doctor --workspace /path/to/repo
 boxdown ssh install --workspace /path/to/repo
 boxdown ssh install --workspace /path/to/repo --target codex
+CI=1 boxdown ssh install --workspace /path/to/repo
 ssh <repo-name>-devcontainer 'whoami && pwd'
 boxdown down --workspace /path/to/repo-a --workspace /path/to/repo-b
 boxdown purge --workspace /path/to/disposable-repo
 ```
+
+The plain `ssh install` command should show the optional target selector when
+run in an interactive terminal. The explicit `--target codex` command verifies
+scriptable target installation, and the `CI=1` command verifies the
+non-interactive skip path without blocking.
 
 When checking browser access, start a dev server inside the container and keep a
 foreground tunnel open from the host:

@@ -55,5 +55,9 @@ pnpm run start -- start --workspace ~/projects/repos/example
 pnpm run start -- ssh install --workspace ~/projects/repos/example
 ```
 
+In an interactive terminal, `ssh install` asks whether to install optional SSH
+targets. Add `--target codex` when testing the Codex target explicitly, or set
+`CI=1` when you want to exercise the non-interactive skip path.
+
 Starting a real container writes Boxdown state under user cache/data directories
 and may pull images or install the Dev Containers CLI.
