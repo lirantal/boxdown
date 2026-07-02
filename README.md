@@ -51,7 +51,12 @@ Install an SSH alias for the current project:
 npx boxdown ssh install
 ```
 
-By default this creates a `<repo-name>-devcontainer` SSH host. Validate it with:
+This creates a `<repo-name>-devcontainer` SSH host. When run in an interactive
+terminal, Boxdown also asks whether to install optional targets such as Codex.
+Non-interactive runs skip optional targets and print the explicit `--target`
+form to use in scripts.
+
+Validate the SSH alias with:
 
 ```sh
 ssh <repo-name>-devcontainer 'whoami && pwd'
@@ -60,7 +65,7 @@ ssh <repo-name>-devcontainer 'whoami && pwd'
 Use the same alias in Cursor, Claude, Codex, or any SSH-capable tool.
 
 To also add the project to Codex's remote project sidebar, install the Codex
-target:
+target explicitly:
 
 ```sh
 npx boxdown ssh install --target codex
@@ -140,7 +145,7 @@ Shared options:
 ```sh
 --workspace <path>  # target project directory, defaults to cwd; repeatable with down
 --alias <name>      # SSH alias, defaults to <repo-name>-devcontainer
---target codex      # also register the SSH alias as a Codex remote project
+--target <name>     # optional SSH install target; repeatable; supported: codex
 --port <port>       # tunnel port for `boxdown tunnel`; repeatable
 --recreate          # recreate the devcontainer before starting
 --json              # JSON output for status and list

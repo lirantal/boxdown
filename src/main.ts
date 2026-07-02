@@ -1,13 +1,15 @@
 import { existsSync } from 'node:fs'
 
-import { codexProjectEntryForWorkspace, installCodexAppConfigProject, uninstallCodexAppConfigProject, uninstallCodexGlobalStateProject } from './codex-app-config.ts'
+import { codexProjectEntryForWorkspace, uninstallCodexAppConfigProject, uninstallCodexGlobalStateProject } from './codex-app-config.ts'
 import { codingAgentFromCommand, type CodingAgentCli } from './coding-agents.ts'
 import { doctorHasFailures, formatDoctorText, runDoctorChecks } from './doctor.ts'
 import { startDevcontainer, printPortHint, openShell, openCodingAgentCli, ensureContainerSshRuntime, runSshdProxy, refreshContainerGhAuth, refreshContainerCodingAgentClis, ensureContainerCodingAgentCli, findRunningContainerId, findWorkspaceContainer, stopWorkspaceContainer, removeWorkspaceContainer, listWorkspaceContainers, openSshTunnel, type TunnelPortForward } from './devcontainer.ts'
+import { promptMultiSelect, type PromptInput, type PromptOutput } from './interactive-select.ts'
 import { createWorkspaceListEntries, formatWorkspaceListText } from './list.ts'
 import { listWorkspaceMetadata, writeWorkspaceMetadata } from './metadata.ts'
 import { createWorkspaceContext, defaultDataRoot } from './paths.ts'
 import { defaultSshAlias, installSshConfig, uninstallSshConfig } from './ssh-config.ts'
+import { dedupeSshInstallTargets, installSshInstallTarget, isSshConfigInstallTarget, SSH_INSTALL_TARGETS, sshInstallTargetFlagHintsText, supportedSshInstallTargetsText, type SshConfigInstallTarget } from './ssh-install-targets.ts'
 import { createStatusInfo, formatStatusText, statusIsHealthy } from './status.ts'
 
 export type BoxdownCommand =
@@ -26,8 +28,6 @@ export type BoxdownCommand =
   | 'refresh-gh-token-running'
   | 'coding-agent'
 
-export type SshConfigInstallTarget = 'codex'
-
 export interface ParsedCli {
   command: BoxdownCommand
   agent?: CodingAgentCli
@@ -35,10 +35,16 @@ export interface ParsedCli {
   workspace?: string
   workspaces?: string[]
   alias?: string
-  target?: SshConfigInstallTarget
+  targets?: SshConfigInstallTarget[]
   tunnelPorts?: TunnelPortForward[]
   recreate: boolean
   json: boolean
+}
+
+export interface RunCliOptions {
+  promptInput?: PromptInput
+  promptOutput?: PromptOutput
+  env?: NodeJS.ProcessEnv
 }
 
 export const USAGE = `Usage:
@@ -53,7 +59,7 @@ export const USAGE = `Usage:
   boxdown stop [--workspace <path>]
   boxdown down [--workspace <path>]...
   boxdown doctor [--workspace <path>]
-  boxdown ssh install [--workspace <path>] [--alias <name>] [--target codex]
+  boxdown ssh install [--workspace <path>] [--alias <name>] [--target <name>]...
   boxdown ssh uninstall [--workspace <path>] [--alias <name>]
   boxdown ssh-proxy [--workspace <path>] [--alias <name>]
   boxdown tunnel --port <port> [--port <local:remote>] [--workspace <path>] [--alias <name>]
@@ -97,7 +103,7 @@ Options:
   --workspace <path>  Target project directory. Defaults to the current directory.
                       Repeatable with down.
   --alias <name>      SSH host alias. Defaults to <repo-name>-devcontainer.
-  --target codex      Also register the SSH alias as a Codex app remote project.
+  --target <name>     Optional SSH install target. Repeatable. Supported: codex.
   --port <port>       Tunnel a local port to the same remote port, or use
                       <local:remote>. Repeatable. Supported by tunnel.
   --recreate          Remove the existing devcontainer before starting.
@@ -121,7 +127,7 @@ export function parseCliArgs (argv: string[]): ParsedCli {
   const args = [...argv]
   const workspaces: string[] = []
   let alias: string | undefined
-  let target: SshConfigInstallTarget | undefined
+  const targets: SshConfigInstallTarget[] = []
   const tunnelPorts: TunnelPortForward[] = []
   let recreate = false
   let json = false
@@ -148,7 +154,7 @@ export function parseCliArgs (argv: string[]): ParsedCli {
       throw new Error('-- passthrough is only supported with coding-agent commands')
     }
 
-    if (target !== undefined && command !== 'ssh-install') {
+    if (targets.length > 0 && command !== 'ssh-install') {
       throw new Error('--target is only supported with ssh install')
     }
 
@@ -156,11 +162,13 @@ export function parseCliArgs (argv: string[]): ParsedCli {
       throw new Error('--port is only supported with tunnel')
     }
 
+    const parsedTargets = dedupeSshInstallTargets(targets)
+
     return {
       command,
       ...workspaceFields(command),
       alias,
-      ...(target === undefined ? {} : { target }),
+      ...(parsedTargets.length === 0 ? {} : { targets: parsedTargets }),
       ...(tunnelPorts.length === 0 ? {} : { tunnelPorts }),
       recreate,
       json
@@ -172,7 +180,7 @@ export function parseCliArgs (argv: string[]): ParsedCli {
       throw new Error('--json is only supported with status and list')
     }
 
-    if (target !== undefined) {
+    if (targets.length > 0) {
       throw new Error('--target is only supported with ssh install')
     }
 
@@ -222,11 +230,11 @@ export function parseCliArgs (argv: string[]): ParsedCli {
         throw new Error('--target requires a value')
       }
 
-      if (value !== 'codex') {
+      if (!isSshConfigInstallTarget(value)) {
         throw new Error(`Unsupported ssh install target: ${value}`)
       }
 
-      target = value
+      targets.push(value)
       continue
     }
 
@@ -311,7 +319,7 @@ export function parseCliArgs (argv: string[]): ParsedCli {
       return parsed('ssh-uninstall')
     }
 
-    throw new Error(`Unknown ssh command: ${positional.slice(1).join(' ')}. Usage: boxdown ssh [install|uninstall] [--workspace <path>] [--alias <name>] [--target codex]`)
+    throw new Error(`Unknown ssh command: ${positional.slice(1).join(' ')}. Usage: boxdown ssh [install|uninstall] [--workspace <path>] [--alias <name>] [--target <name>]...`)
   }
 
   if (positional[0] === 'ssh-proxy' && positional.length === 1) {
@@ -384,7 +392,45 @@ async function runDownCommand (workspaces: string[] | undefined): Promise<number
   return failed ? 1 : 0
 }
 
-export async function runCli (argv: string[] = process.argv.slice(2)): Promise<number> {
+interface ResolvedSshInstallTargets {
+  targets: SshConfigInstallTarget[]
+  cancelled: boolean
+  skippedNonInteractive: boolean
+}
+
+async function resolveSshInstallTargets (
+  parsed: ParsedCli,
+  options: RunCliOptions
+): Promise<ResolvedSshInstallTargets> {
+  if (parsed.targets !== undefined) {
+    return {
+      targets: parsed.targets,
+      cancelled: false,
+      skippedNonInteractive: false
+    }
+  }
+
+  const result = await promptMultiSelect<SshConfigInstallTarget>({
+    title: 'Install optional SSH targets?',
+    choices: SSH_INSTALL_TARGETS.map((target) => ({
+      value: target.value,
+      label: target.label,
+      description: target.description
+    })),
+    skipLabel: 'Skip optional targets',
+    input: options.promptInput,
+    output: options.promptOutput,
+    env: options.env
+  })
+
+  return {
+    targets: result.values,
+    cancelled: result.status === 'cancelled',
+    skippedNonInteractive: result.status === 'non-interactive'
+  }
+}
+
+export async function runCli (argv: string[] = process.argv.slice(2), options: RunCliOptions = {}): Promise<number> {
   try {
     const parsed = parseCliArgs(argv)
 
@@ -415,27 +461,27 @@ export async function runCli (argv: string[] = process.argv.slice(2)): Promise<n
     const alias = parsed.alias ?? defaultSshAlias(context.workspaceBasename)
     const aliasSource = parsed.alias === undefined ? 'default' : 'provided'
 
-    if (commandWritesWorkspaceMetadata(parsed.command)) {
+    if (parsed.command !== 'ssh-install' && commandWritesWorkspaceMetadata(parsed.command)) {
       writeWorkspaceMetadata(context, alias)
     }
 
     if (parsed.command === 'ssh-install') {
+      const resolvedTargets = await resolveSshInstallTargets(parsed, options)
+
+      if (resolvedTargets.cancelled) {
+        process.stderr.write('Canceled SSH install.\n')
+        return 1
+      }
+
+      writeWorkspaceMetadata(context, alias)
       await installSshConfig(context, alias)
 
-      if (parsed.target === 'codex') {
-        const entry = codexProjectEntryForWorkspace(context, alias)
-        const result = installCodexAppConfigProject(entry)
+      if (resolvedTargets.skippedNonInteractive) {
+        process.stdout.write(`\nNo optional SSH install targets selected. Run boxdown ssh install ${sshInstallTargetFlagHintsText()} to install optional targets explicitly. Supported targets: ${supportedSshInstallTargetsText()}.\n`)
+      }
 
-        process.stdout.write(`\nCodex app config: ${result.configPath}\n`)
-        process.stdout.write(result.changed
-          ? `Installed Codex remote project: ${entry.label} (${entry.remotePath})\n`
-          : `Codex remote project already up to date: ${entry.label} (${entry.remotePath})\n`)
-
-        if (result.backupPath !== undefined) {
-          process.stdout.write(`Codex app config backup: ${result.backupPath}\n`)
-        }
-
-        process.stdout.write('Restart Codex to apply the remote project entry.\n')
+      for (const target of resolvedTargets.targets) {
+        await installSshInstallTarget(context, alias, target)
       }
 
       return 0

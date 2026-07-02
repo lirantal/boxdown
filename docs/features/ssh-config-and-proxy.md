@@ -34,6 +34,12 @@ The generated SSH config block includes:
 The block is wrapped in Boxdown markers so repeated installs replace the managed
 block instead of duplicating it.
 
+When `boxdown ssh install` runs without `--target` in an interactive terminal,
+Boxdown asks which optional install targets to update in addition to the SSH
+alias. The menu supports selecting multiple targets or skipping all optional
+targets. In non-interactive contexts, Boxdown skips optional targets instead of
+blocking and prints the explicit `--target` form for scripts.
+
 `boxdown ssh uninstall` removes the Boxdown-managed marker block for the
 selected alias, the matching Codex app remote project entry, and the matching
 Codex persisted sidebar state for the workspace. It leaves unrelated OpenSSH
@@ -49,6 +55,8 @@ as an installed Boxdown alias.
 
 `boxdown ssh install --target codex` keeps the normal SSH install flow
 and also writes a Codex app remote project entry for the same alias.
+`--target` is repeatable so future optional SSH install targets can be combined
+in one install command.
 
 The Codex app config is written to:
 

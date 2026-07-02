@@ -3,6 +3,7 @@ import { execFileSync, spawnSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
+import { PassThrough } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import { describe, test } from 'node:test'
 
@@ -16,9 +17,10 @@ import { doctorHasFailures, formatDoctorText } from '../src/doctor.ts'
 import { canonicalGithubRemoteUrl, configureWorkspaceGithubGitAuth } from '../src/github-git-auth.ts'
 import { parseJsonc } from '../src/jsonc.ts'
 import { createWorkspaceListEntries, formatWorkspaceListText } from '../src/list.ts'
-import { commandWritesWorkspaceMetadata, parseCliArgs, parseTunnelPort, USAGE } from '../src/main.ts'
+import { commandWritesWorkspaceMetadata, parseCliArgs, parseTunnelPort, runCli, USAGE } from '../src/main.ts'
 import { listWorkspaceMetadata, writeWorkspaceMetadata } from '../src/metadata.ts'
 import { createWorkspaceContext } from '../src/paths.ts'
+import { promptMultiSelect, type PromptInput, type PromptOutput } from '../src/interactive-select.ts'
 import { DEFAULT_TTY_MAX_COLUMNS, interactiveCommandScript, interactiveShellEnvArgs, interactiveShellScript } from '../src/shell.ts'
 import { buildSshConfigBlock, defaultSshAlias, installSshConfig, removeSshConfigBlock, replaceSshConfigBlock, uninstallSshConfig } from '../src/ssh-config.ts'
 import { createStatusInfo, formatStatusText, inspectSshConfigStatus, parseDockerPsJsonLines, statusIsHealthy } from '../src/status.ts'
@@ -150,6 +152,59 @@ function fakeDockerCalls (logPath: string): string[] {
   return readFileSync(logPath, 'utf8').trim().split(/\r?\n/).filter((line) => line.length > 0)
 }
 
+const codexPromptChoice = {
+  value: 'codex',
+  label: 'Codex',
+  description: 'Register this SSH alias as a Codex app remote project.'
+} as const
+
+function fakePromptStreams (options: { rawMode?: boolean } = {}): {
+  input: PassThrough & PromptInput
+  output: PassThrough & PromptOutput
+  outputText: () => string
+} {
+  const input = new PassThrough() as PassThrough & PromptInput
+  const output = new PassThrough() as PassThrough & PromptOutput
+  const outputChunks: Buffer[] = []
+
+  input.isTTY = true
+  output.isTTY = true
+  output.on('data', (chunk: Buffer) => {
+    outputChunks.push(chunk)
+  })
+
+  if (options.rawMode !== false) {
+    input.setRawMode = () => {}
+  }
+
+  return {
+    input,
+    output,
+    outputText: () => Buffer.concat(outputChunks).toString('utf8')
+  }
+}
+
+async function withProcessEnv<T> (overrides: Record<string, string>, run: () => Promise<T>): Promise<T> {
+  const previous = new Map<string, string | undefined>()
+
+  for (const [key, value] of Object.entries(overrides)) {
+    previous.set(key, process.env[key])
+    process.env[key] = value
+  }
+
+  try {
+    return await run()
+  } finally {
+    for (const [key, value] of previous) {
+      if (value === undefined) {
+        delete process.env[key]
+      } else {
+        process.env[key] = value
+      }
+    }
+  }
+}
+
 describe('CLI parsing', () => {
   test('parses start options', () => {
     assert.deepStrictEqual(parseCliArgs(['start', '--workspace', '/tmp/project', '--recreate']), {
@@ -244,7 +299,15 @@ describe('CLI parsing', () => {
       command: 'ssh-install',
       workspace: undefined,
       alias: undefined,
-      target: 'codex',
+      targets: ['codex'],
+      recreate: false,
+      json: false
+    })
+    assert.deepStrictEqual(parseCliArgs(['ssh', 'install', '--target', 'codex', '--target', 'codex']), {
+      command: 'ssh-install',
+      workspace: undefined,
+      alias: undefined,
+      targets: ['codex'],
       recreate: false,
       json: false
     })
@@ -398,12 +461,119 @@ describe('CLI parsing', () => {
     assert.match(USAGE, /ssh install\s+Install or update an SSH host alias/)
     assert.match(USAGE, /ssh uninstall\s+Remove Boxdown's managed SSH host alias/)
     assert.doesNotMatch(USAGE, /ssh-config/)
-    assert.match(USAGE, /--target codex\s+Also register the SSH alias/)
+    assert.match(USAGE, /--target <name>\s+Optional SSH install target/)
+    assert.match(USAGE, /Repeatable\. Supported: codex/)
     assert.match(USAGE, /ssh-proxy\s+Internal command used by the generated SSH/)
     assert.match(USAGE, /tunnel\s+Start or reuse the devcontainer/)
     assert.match(USAGE, /--port <port>\s+Tunnel a local port/)
     assert.match(USAGE, /refresh-gh-token\s+Start or reuse the devcontainer/)
     assert.match(USAGE, /refresh-gh-token-running\s+Refresh GitHub CLI auth only if/)
+  })
+})
+
+describe('interactive install target prompt', () => {
+  test('selects a target with raw-mode keys', async () => {
+    const { input, output, outputText } = fakePromptStreams()
+    const resultPromise = promptMultiSelect({
+      title: 'Install optional SSH targets?',
+      choices: [codexPromptChoice],
+      skipLabel: 'Skip optional targets',
+      input,
+      output,
+      env: { CI: 'false' }
+    })
+
+    input.write('\u001B[A')
+    input.write(' ')
+    input.write('\r')
+
+    assert.deepStrictEqual(await resultPromise, {
+      status: 'selected',
+      values: ['codex']
+    })
+    assert.match(outputText(), /\u001B\[36m◆\u001B\[0m {2}\u001B\[1mInstall optional SSH targets\?\u001B\[0m/)
+    assert.match(outputText(), /\u001B\[36m│\u001B\[0m {2}\u001B\[32m■\u001B\[0m \u001B\[1mCodex\u001B\[0m/)
+  })
+
+  test('starts raw-mode focus on the selected skip row', async () => {
+    const { input, output, outputText } = fakePromptStreams()
+    const resultPromise = promptMultiSelect({
+      title: 'Install optional SSH targets?',
+      choices: [codexPromptChoice],
+      skipLabel: 'Skip optional targets',
+      input,
+      output,
+      env: { CI: 'false' }
+    })
+
+    input.write('\r')
+
+    assert.deepStrictEqual(await resultPromise, {
+      status: 'skipped',
+      values: []
+    })
+    assert.match(outputText(), /\u001B\[36m│\u001B\[0m {2}\u001B\[32m■\u001B\[0m \u001B\[1mSkip optional targets\u001B\[0m/)
+    assert.match(outputText(), /\u001B\[36m└\u001B\[0m/)
+    assert.doesNotMatch(outputText(), /Use arrows to move/)
+    assert.doesNotMatch(outputText(), /Ctrl-C to cancel/)
+  })
+
+  test('falls back to line-based selection when raw mode is unavailable', async () => {
+    const { input, output } = fakePromptStreams({ rawMode: false })
+    const resultPromise = promptMultiSelect({
+      title: 'Install optional SSH targets?',
+      choices: [codexPromptChoice],
+      skipLabel: 'Skip optional targets',
+      input,
+      output,
+      env: { CI: 'false' }
+    })
+
+    input.write('1\n')
+
+    assert.deepStrictEqual(await resultPromise, {
+      status: 'selected',
+      values: ['codex']
+    })
+  })
+
+  test('skips without blocking when input is not interactive', async () => {
+    const input = new PassThrough() as PassThrough & PromptInput
+    const output = new PassThrough() as PassThrough & PromptOutput
+
+    input.isTTY = false
+    output.isTTY = false
+
+    assert.deepStrictEqual(await promptMultiSelect({
+      title: 'Install optional SSH targets?',
+      choices: [codexPromptChoice],
+      skipLabel: 'Skip optional targets',
+      input,
+      output,
+      env: { CI: 'false' }
+    }), {
+      status: 'non-interactive',
+      values: []
+    })
+  })
+
+  test('cancels when the raw-mode prompt receives Ctrl-C', async () => {
+    const { input, output } = fakePromptStreams()
+    const resultPromise = promptMultiSelect({
+      title: 'Install optional SSH targets?',
+      choices: [codexPromptChoice],
+      skipLabel: 'Skip optional targets',
+      input,
+      output,
+      env: { CI: 'false' }
+    })
+
+    input.write('\u0003')
+
+    assert.deepStrictEqual(await resultPromise, {
+      status: 'cancelled',
+      values: []
+    })
   })
 })
 
@@ -462,6 +632,110 @@ describe('CLI execution', () => {
       assert.match(result.stderr, /Workspace does not exist:/)
       assert.match(result.stdout, /Removed devcontainer: valid-container/)
     })
+  })
+
+  test('installs explicit Codex ssh install target', () => {
+    const workspace = tempDir('cli-explicit-codex-workspace')
+    const sshConfigPath = join(tempDir('cli-explicit-codex-ssh'), 'config')
+    const codexConfigPath = join(tempDir('cli-explicit-codex-app'), 'config.json')
+    const result = runCliProcess(['ssh', 'install', '--workspace', workspace, '--target', 'codex'], {
+      ...process.env,
+      HOME: tempDir('cli-explicit-codex-home'),
+      BOXDOWN_CACHE_HOME: tempDir('cli-explicit-codex-cache'),
+      BOXDOWN_DATA_HOME: tempDir('cli-explicit-codex-data'),
+      BOXDOWN_SSH_CONFIG: sshConfigPath,
+      BOXDOWN_CODEX_APP_CONFIG: codexConfigPath
+    })
+    const codexConfig = parseCodexAppConfig(JSON.parse(readFileSync(codexConfigPath, 'utf8')))
+
+    assert.strictEqual(result.code, 0)
+    assert.match(result.stdout, /Installed SSH alias:/)
+    assert.match(result.stdout, /Installed Codex remote project:/)
+    assert.strictEqual(existsSync(sshConfigPath), true)
+    assert.strictEqual(codexConfig.remoteConnections.length, 1)
+    assert.strictEqual(codexConfig.remoteConnections[0]?.projects[0]?.label, realpathSync(workspace).split('/').at(-1))
+  })
+
+  test('skips optional ssh install targets without a TTY', () => {
+    const workspace = tempDir('cli-non-tty-workspace')
+    const sshConfigPath = join(tempDir('cli-non-tty-ssh'), 'config')
+    const codexConfigPath = join(tempDir('cli-non-tty-codex-app'), 'config.json')
+    const result = runCliProcess(['ssh', 'install', '--workspace', workspace], {
+      ...process.env,
+      HOME: tempDir('cli-non-tty-home'),
+      BOXDOWN_CACHE_HOME: tempDir('cli-non-tty-cache'),
+      BOXDOWN_DATA_HOME: tempDir('cli-non-tty-data'),
+      BOXDOWN_SSH_CONFIG: sshConfigPath,
+      BOXDOWN_CODEX_APP_CONFIG: codexConfigPath
+    })
+
+    assert.strictEqual(result.code, 0)
+    assert.match(result.stdout, /No optional SSH install targets selected/)
+    assert.strictEqual(existsSync(sshConfigPath), true)
+    assert.strictEqual(existsSync(codexConfigPath), false)
+  })
+
+  test('installs prompt-selected Codex ssh install target', async () => {
+    const workspace = tempDir('cli-prompt-codex-workspace')
+    const sshConfigPath = join(tempDir('cli-prompt-codex-ssh'), 'config')
+    const codexConfigPath = join(tempDir('cli-prompt-codex-app'), 'config.json')
+    const { input, output } = fakePromptStreams()
+
+    const code = await withProcessEnv({
+      HOME: tempDir('cli-prompt-codex-home'),
+      BOXDOWN_CACHE_HOME: tempDir('cli-prompt-codex-cache'),
+      BOXDOWN_DATA_HOME: tempDir('cli-prompt-codex-data'),
+      BOXDOWN_SSH_CONFIG: sshConfigPath,
+      BOXDOWN_CODEX_APP_CONFIG: codexConfigPath
+    }, async () => {
+      const runPromise = runCli(['ssh', 'install', '--workspace', workspace], {
+        promptInput: input,
+        promptOutput: output,
+        env: { ...process.env, CI: 'false' }
+      })
+
+      input.write('\u001B[A')
+      input.write(' ')
+      input.write('\r')
+
+      return runPromise
+    })
+    const codexConfig = parseCodexAppConfig(JSON.parse(readFileSync(codexConfigPath, 'utf8')))
+
+    assert.strictEqual(code, 0)
+    assert.strictEqual(existsSync(sshConfigPath), true)
+    assert.strictEqual(codexConfig.remoteConnections[0]?.sshAlias, defaultSshAlias(realpathSync(workspace).split('/').at(-1) ?? 'workspace'))
+  })
+
+  test('cancels prompted ssh install without installing', async () => {
+    const workspace = tempDir('cli-prompt-cancel-workspace')
+    const sshConfigPath = join(tempDir('cli-prompt-cancel-ssh'), 'config')
+    const codexConfigPath = join(tempDir('cli-prompt-cancel-app'), 'config.json')
+    const dataDir = tempDir('cli-prompt-cancel-data')
+    const { input, output } = fakePromptStreams()
+
+    const code = await withProcessEnv({
+      HOME: tempDir('cli-prompt-cancel-home'),
+      BOXDOWN_CACHE_HOME: tempDir('cli-prompt-cancel-cache'),
+      BOXDOWN_DATA_HOME: dataDir,
+      BOXDOWN_SSH_CONFIG: sshConfigPath,
+      BOXDOWN_CODEX_APP_CONFIG: codexConfigPath
+    }, async () => {
+      const runPromise = runCli(['ssh', 'install', '--workspace', workspace], {
+        promptInput: input,
+        promptOutput: output,
+        env: { ...process.env, CI: 'false' }
+      })
+
+      input.write('\u0003')
+
+      return runPromise
+    })
+
+    assert.strictEqual(code, 1)
+    assert.strictEqual(existsSync(sshConfigPath), false)
+    assert.strictEqual(existsSync(codexConfigPath), false)
+    assert.deepStrictEqual(listWorkspaceMetadata(dataDir), [])
   })
 })
 
