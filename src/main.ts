@@ -8,6 +8,7 @@ import { promptMultiSelect, type PromptInput, type PromptOutput } from './intera
 import { createWorkspaceListEntries, formatWorkspaceListText } from './list.ts'
 import { listWorkspaceMetadata, writeWorkspaceMetadata } from './metadata.ts'
 import { createWorkspaceContext, defaultDataRoot } from './paths.ts'
+import { purgeWorkspace } from './purge.ts'
 import { defaultSshAlias, installSshConfig, uninstallSshConfig } from './ssh-config.ts'
 import { dedupeSshInstallTargets, installSshInstallTarget, isSshConfigInstallTarget, SSH_INSTALL_TARGETS, sshInstallTargetFlagHintsText, supportedSshInstallTargetsText, type SshConfigInstallTarget } from './ssh-install-targets.ts'
 import { createStatusInfo, formatStatusText, statusIsHealthy } from './status.ts'
@@ -19,6 +20,7 @@ export type BoxdownCommand =
   | 'status'
   | 'stop'
   | 'down'
+  | 'purge'
   | 'doctor'
   | 'ssh-install'
   | 'ssh-uninstall'
@@ -51,13 +53,13 @@ export const USAGE = `Usage:
   boxdown start [--workspace <path>] [--recreate]
   boxdown codex [--workspace <path>] [--recreate] [-- <codex args...>]
   boxdown claude [--workspace <path>] [--recreate] [-- <claude args...>]
-  boxdown cc [--workspace <path>] [--recreate] [-- <claude args...>]
   boxdown opencode [--workspace <path>] [--recreate] [-- <opencode args...>]
   boxdown antigravity [--workspace <path>] [--recreate] [-- <agy args...>]
   boxdown list [--json]
   boxdown status [--workspace <path>] [--alias <name>] [--json]
   boxdown stop [--workspace <path>]
   boxdown down [--workspace <path>]...
+  boxdown purge [--workspace <path>] [--alias <name>]
   boxdown doctor [--workspace <path>]
   boxdown ssh install [--workspace <path>] [--alias <name>] [--target <name>]...
   boxdown ssh uninstall [--workspace <path>] [--alias <name>]
@@ -67,11 +69,11 @@ export const USAGE = `Usage:
   boxdown refresh-gh-token-running [--workspace <path>]
 
 Commands:
-  start                     Start or reuse the workspace devcontainer, then open
-                            an interactive shell inside it. Alias: shell.
+  start, shell              Start or reuse the workspace devcontainer, then open
+                            an interactive shell inside it.
   codex                     Start or reuse the devcontainer, then launch Codex.
-  claude                    Start or reuse the devcontainer, then launch Claude
-                            Code. Alias: cc.
+  claude, cc                Start or reuse the devcontainer, then launch Claude
+                            Code.
   opencode                  Start or reuse the devcontainer, then launch
                             OpenCode, installing it first when needed.
   antigravity               Start or reuse the devcontainer, then launch
@@ -84,6 +86,9 @@ Commands:
   stop                      Stop the workspace devcontainer if it is running.
   down                      Remove the workspace devcontainer. Keeps Boxdown
                             cache, generated config, data, and SSH keys.
+  purge                     Remove the workspace devcontainer, exact Docker
+                            image, managed SSH/app config, and Boxdown
+                            cache/data for this workspace.
   doctor                    Check required host tools and Boxdown assets.
   ssh install               Install or update an SSH host alias for the workspace
                             devcontainer.
@@ -160,6 +165,10 @@ export function parseCliArgs (argv: string[]): ParsedCli {
 
     if (tunnelPorts.length > 0 && command !== 'tunnel') {
       throw new Error('--port is only supported with tunnel')
+    }
+
+    if (recreate && command === 'purge') {
+      throw new Error('--recreate is not supported with purge')
     }
 
     const parsedTargets = dedupeSshInstallTargets(targets)
@@ -304,6 +313,10 @@ export function parseCliArgs (argv: string[]): ParsedCli {
 
   if (positional[0] === 'down' && positional.length === 1) {
     return parsed('down')
+  }
+
+  if (positional[0] === 'purge' && positional.length === 1) {
+    return parsed('purge')
   }
 
   if (positional[0] === 'doctor' && positional.length === 1) {
@@ -532,6 +545,10 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
     if (parsed.command === 'stop') {
       await stopWorkspaceContainer(context)
       return 0
+    }
+
+    if (parsed.command === 'purge') {
+      return purgeWorkspace(context, { alias: parsed.alias })
     }
 
     if (parsed.command === 'doctor') {

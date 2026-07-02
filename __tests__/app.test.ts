@@ -18,7 +18,7 @@ import { canonicalGithubRemoteUrl, configureWorkspaceGithubGitAuth } from '../sr
 import { parseJsonc } from '../src/jsonc.ts'
 import { createWorkspaceListEntries, formatWorkspaceListText } from '../src/list.ts'
 import { commandWritesWorkspaceMetadata, parseCliArgs, parseTunnelPort, runCli, USAGE } from '../src/main.ts'
-import { listWorkspaceMetadata, writeWorkspaceMetadata } from '../src/metadata.ts'
+import { listWorkspaceMetadata, readWorkspaceMetadata, recordWorkspaceDockerImage, writeWorkspaceMetadata } from '../src/metadata.ts'
 import { createWorkspaceContext } from '../src/paths.ts'
 import { promptMultiSelect, type PromptInput, type PromptOutput } from '../src/interactive-select.ts'
 import { DEFAULT_TTY_MAX_COLUMNS, interactiveCommandScript, interactiveShellEnvArgs, interactiveShellScript } from '../src/shell.ts'
@@ -51,6 +51,10 @@ interface FakeDockerWorkspace {
   workspace: string
   id: string
   removeExitCode?: number
+  imageId?: string
+  imageName?: string
+  inspectExitCode?: number
+  imageRemoveExitCode?: number
 }
 
 function runCliProcess (argv: string[], env: NodeJS.ProcessEnv): { code: number, stdout: string, stderr: string } {
@@ -108,7 +112,7 @@ async function withFakeDocker<T> (workspaces: FakeDockerWorkspace[], run: (logPa
     '  if [ "$workspace" = "$filter" ]; then',
     '    exit 0',
     '  fi',
-    '  while IFS="$(printf \'\\t\')" read -r folder id remove_exit_code; do',
+    '  while IFS="$(printf \'\\t\')" read -r folder id remove_exit_code image_id image_name inspect_exit_code image_remove_exit_code; do',
     '    if [ "$folder" = "$workspace" ]; then',
     '      printf \'{"ID":"%s","Names":"%s","State":"running","Status":"Up","Labels":"devcontainer.local_folder=%s"}\\n\' "$id" "$id" "$folder"',
     '      exit 0',
@@ -116,11 +120,33 @@ async function withFakeDocker<T> (workspaces: FakeDockerWorkspace[], run: (logPa
     '  done < "${BOXDOWN_FAKE_DOCKER_STATE}"',
     '  exit 0',
     'fi',
+    'if [ "${1:-}" = "inspect" ]; then',
+    '  id="${@: -1}"',
+    '  while IFS="$(printf \'\\t\')" read -r folder container_id remove_exit_code image_id image_name inspect_exit_code image_remove_exit_code; do',
+    '    if [ "$container_id" = "$id" ]; then',
+    '      if [ "${inspect_exit_code:-0}" != "0" ]; then',
+    '        exit "$inspect_exit_code"',
+    '      fi',
+    '      printf \'{"Image":"%s","Config":{"Image":"%s"}}\\n\' "${image_id:-sha256:${container_id}-image}" "${image_name:-boxdown-test:${container_id}}"',
+    '      exit 0',
+    '    fi',
+    '  done < "${BOXDOWN_FAKE_DOCKER_STATE}"',
+    '  exit 1',
+    'fi',
     'if [ "${1:-}" = "rm" ]; then',
     '  id="${@: -1}"',
-    '  while IFS="$(printf \'\\t\')" read -r folder container_id remove_exit_code; do',
+    '  while IFS="$(printf \'\\t\')" read -r folder container_id remove_exit_code image_id image_name inspect_exit_code image_remove_exit_code; do',
     '    if [ "$container_id" = "$id" ]; then',
     '      exit "${remove_exit_code:-0}"',
+    '    fi',
+    '  done < "${BOXDOWN_FAKE_DOCKER_STATE}"',
+    '  exit 0',
+    'fi',
+    'if [ "${1:-}" = "image" ] && [ "${2:-}" = "rm" ]; then',
+    '  image_id="${@: -1}"',
+    '  while IFS="$(printf \'\\t\')" read -r folder container_id remove_exit_code recorded_image_id image_name inspect_exit_code image_remove_exit_code; do',
+    '    if [ "$recorded_image_id" = "$image_id" ]; then',
+    '      exit "${image_remove_exit_code:-0}"',
     '    fi',
     '  done < "${BOXDOWN_FAKE_DOCKER_STATE}"',
     '  exit 0',
@@ -131,7 +157,11 @@ async function withFakeDocker<T> (workspaces: FakeDockerWorkspace[], run: (logPa
   writeFileSync(statePath, `${workspaces.map((workspace) => [
     realpathSync(workspace.workspace),
     workspace.id,
-    String(workspace.removeExitCode ?? 0)
+    String(workspace.removeExitCode ?? 0),
+    workspace.imageId ?? `sha256:${workspace.id}-image`,
+    workspace.imageName ?? `boxdown-test:${workspace.id}`,
+    String(workspace.inspectExitCode ?? 0),
+    String(workspace.imageRemoveExitCode ?? 0)
   ].join('\t')).join('\n')}\n`)
   writeFileSync(dockerPath, script)
   chmodSync(dockerPath, 0o755)
@@ -388,6 +418,13 @@ describe('CLI parsing', () => {
     })
     assert.strictEqual(parseCliArgs(['stop']).command, 'stop')
     assert.strictEqual(parseCliArgs(['down']).command, 'down')
+    assert.deepStrictEqual(parseCliArgs(['purge', '--workspace', '/tmp/project', '--alias', 'demo-devcontainer']), {
+      command: 'purge',
+      workspace: '/tmp/project',
+      alias: 'demo-devcontainer',
+      recreate: false,
+      json: false
+    })
     assert.strictEqual(parseCliArgs(['doctor']).command, 'doctor')
   })
 
@@ -411,6 +448,7 @@ describe('CLI parsing', () => {
     assert.throws(() => parseCliArgs(['start', '--workspace', '/tmp/a', '--workspace', '/tmp/b']), /--workspace can only be repeated with down/)
     assert.throws(() => parseCliArgs(['status', '--workspace', '/tmp/a', '--workspace', '/tmp/b']), /--workspace can only be repeated with down/)
     assert.throws(() => parseCliArgs(['claude', '--workspace', '/tmp/a', '--workspace', '/tmp/b']), /--workspace can only be repeated with down/)
+    assert.throws(() => parseCliArgs(['purge', '--workspace', '/tmp/a', '--workspace', '/tmp/b']), /--workspace can only be repeated with down/)
   })
 
   test('rejects unknown commands', () => {
@@ -427,6 +465,9 @@ describe('CLI parsing', () => {
     assert.throws(() => parseCliArgs(['codex', '--target', 'codex']), /--target is only supported with ssh install/)
     assert.throws(() => parseCliArgs(['codex', '--port', '3030']), /--port is only supported with tunnel/)
     assert.throws(() => parseCliArgs(['start', '--', '--ignored']), /passthrough is only supported/)
+    assert.throws(() => parseCliArgs(['purge', '--json']), /--json is only supported with status and list/)
+    assert.throws(() => parseCliArgs(['purge', '--port', '3030']), /--port is only supported with tunnel/)
+    assert.throws(() => parseCliArgs(['purge', '--recreate']), /--recreate is not supported with purge/)
     assert.throws(() => parseCliArgs(['claude', 'resume']), /must come after --/)
     assert.throws(() => parseCliArgs(['claude', '--continue']), /Unknown option: --continue/)
     assert.throws(() => parseCliArgs(['tunnel', '--port', '0']), /Invalid tunnel port: 0/)
@@ -438,11 +479,9 @@ describe('CLI parsing', () => {
     const usageLines = USAGE.split(/\r?\n/)
 
     assert.match(USAGE, /Commands:/)
-    assert.match(USAGE, /start\s+Start or reuse the workspace devcontainer/)
-    assert.match(USAGE, /Alias: shell/)
+    assert.match(USAGE, /start, shell\s+Start or reuse the workspace devcontainer/)
     assert.match(USAGE, /codex\s+Start or reuse the devcontainer, then launch Codex/)
-    assert.match(USAGE, /claude\s+Start or reuse the devcontainer, then launch Claude/)
-    assert.match(USAGE, /Alias: cc/)
+    assert.match(USAGE, /claude, cc\s+Start or reuse the devcontainer, then launch Claude/)
     assert.match(USAGE, /opencode\s+Start or reuse the devcontainer, then launch/)
     assert.match(USAGE, /antigravity\s+Start or reuse the devcontainer, then launch/)
     assert.match(USAGE, /list\s+List Boxdown-known devcontainer workspaces/)
@@ -450,13 +489,18 @@ describe('CLI parsing', () => {
     assert.match(USAGE, /stop\s+Stop the workspace devcontainer/)
     assert.match(USAGE, /down\s+Remove the workspace devcontainer/)
     assert.match(USAGE, /boxdown down \[--workspace <path>\]\.\.\./)
+    assert.match(USAGE, /purge\s+Remove the workspace devcontainer, exact Docker/)
+    assert.match(USAGE, /boxdown purge \[--workspace <path>\] \[--alias <name>\]/)
     assert.match(USAGE, /--workspace <path>\s+Target project directory[\s\S]*Repeatable with down\./)
     assert.match(USAGE, /doctor\s+Check required host tools/)
+    assert.doesNotMatch(USAGE, /Alias:/)
+    assert.ok(!usageLines.includes('  boxdown cc [--workspace <path>] [--recreate] [-- <claude args...>]'))
     assert.ok(!usageLines.includes('  boxdown shell [--workspace <path>] [--recreate]'))
     assert.ok(!usageLines.includes('  boxdown install-ssh-config [--workspace <path>] [--alias <name>]'))
     assert.ok(!usageLines.includes('  boxdown ssh-config install [--workspace <path>] [--alias <name>] [--target codex]'))
     assert.ok(!usageLines.includes('  boxdown ssh-config uninstall [--workspace <path>] [--alias <name>]'))
     assert.ok(!usageLines.some((line) => line.startsWith('  shell')))
+    assert.ok(!usageLines.some((line) => line.startsWith('  cc')))
     assert.ok(!usageLines.some((line) => line.startsWith('  install-ssh-config')))
     assert.match(USAGE, /ssh install\s+Install or update an SSH host alias/)
     assert.match(USAGE, /ssh uninstall\s+Remove Boxdown's managed SSH host alias/)
@@ -737,6 +781,185 @@ describe('CLI execution', () => {
     assert.strictEqual(existsSync(codexConfigPath), false)
     assert.deepStrictEqual(listWorkspaceMetadata(dataDir), [])
   })
+
+  test('purges workspace container image state and managed integrations', async () => {
+    const workspace = tempDir('purge-workspace')
+    const env = {
+      HOME: tempDir('purge-home'),
+      BOXDOWN_CACHE_HOME: tempDir('purge-cache'),
+      BOXDOWN_DATA_HOME: tempDir('purge-data'),
+      BOXDOWN_SSH_CONFIG: join(tempDir('purge-ssh'), 'config'),
+      BOXDOWN_CODEX_APP_CONFIG: join(tempDir('purge-codex-app'), 'config.json'),
+      BOXDOWN_CODEX_GLOBAL_STATE: join(tempDir('purge-codex-state'), '.codex-global-state.json')
+    }
+    const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+    const defaultAlias = defaultSshAlias(context.workspaceBasename)
+    const recordedAlias = 'recorded-devcontainer'
+    const providedAlias = 'provided-devcontainer'
+    const otherAlias = 'other-devcontainer'
+
+    mkdirSync(context.workspaceCacheDir, { recursive: true })
+    writeFileSync(context.generatedConfigPath, '{}\n')
+    writeWorkspaceMetadata(context, recordedAlias)
+    writeFileSync(env.BOXDOWN_SSH_CONFIG, 'Host github.com\n  User git\n')
+    await installSshConfig(context, defaultAlias, { quiet: true, configPath: env.BOXDOWN_SSH_CONFIG })
+    await installSshConfig(context, recordedAlias, { quiet: true, configPath: env.BOXDOWN_SSH_CONFIG })
+    await installSshConfig(context, providedAlias, { quiet: true, configPath: env.BOXDOWN_SSH_CONFIG })
+    installCodexAppConfigProject(codexProjectEntryForWorkspace(context, defaultAlias), { configPath: env.BOXDOWN_CODEX_APP_CONFIG })
+    installCodexAppConfigProject(codexProjectEntryForWorkspace(context, recordedAlias), { configPath: env.BOXDOWN_CODEX_APP_CONFIG })
+    installCodexAppConfigProject(codexProjectEntryForWorkspace(context, providedAlias), { configPath: env.BOXDOWN_CODEX_APP_CONFIG })
+    installCodexAppConfigProject({
+      sshAlias: otherAlias,
+      remotePath: '/home/node/other',
+      label: 'Other'
+    }, { configPath: env.BOXDOWN_CODEX_APP_CONFIG })
+
+    const state = {
+      'remote-projects': [
+        { id: 'default-project-id', hostId: codexDiscoveredRemoteHostId(defaultAlias), remotePath: `/home/node/${context.workspaceBasename}` },
+        { id: 'recorded-project-id', hostId: codexDiscoveredRemoteHostId(recordedAlias), remotePath: `/home/node/${context.workspaceBasename}` },
+        { id: 'provided-project-id', hostId: codexDiscoveredRemoteHostId(providedAlias), remotePath: `/home/node/${context.workspaceBasename}` },
+        { id: 'other-project-id', hostId: codexDiscoveredRemoteHostId(otherAlias), remotePath: '/home/node/other' }
+      ],
+      'codex-managed-remote-connections': [
+        { hostId: codexDiscoveredRemoteHostId(defaultAlias) },
+        { hostId: codexDiscoveredRemoteHostId(recordedAlias) },
+        { hostId: codexDiscoveredRemoteHostId(providedAlias) },
+        { hostId: codexDiscoveredRemoteHostId(otherAlias) }
+      ],
+      'project-order': ['default-project-id', 'recorded-project-id', 'provided-project-id', 'other-project-id'],
+      'sidebar-collapsed-groups': {
+        'default-project-id': true,
+        'recorded-project-id': true,
+        'provided-project-id': true,
+        'other-project-id': true
+      }
+    }
+    writeFileSync(env.BOXDOWN_CODEX_GLOBAL_STATE, `${JSON.stringify(state)}\n`)
+
+    await withFakeDocker([
+      {
+        workspace,
+        id: 'purge-container',
+        imageId: 'sha256:purge-image',
+        imageName: 'boxdown-purge:latest'
+      }
+    ], async (logPath, dockerEnv) => {
+      const result = runCliProcess(['purge', '--workspace', workspace, '--alias', providedAlias], {
+        ...dockerEnv,
+        ...env
+      })
+      const calls = fakeDockerCalls(logPath)
+
+      assert.strictEqual(result.code, 0)
+      assert.ok(calls.includes('inspect --format {{json .}} purge-container'))
+      assert.ok(calls.includes('rm -f -v purge-container'))
+      assert.ok(calls.includes('image rm -f sha256:purge-image'))
+      assert.strictEqual(existsSync(context.workspaceFolder), true)
+      assert.strictEqual(existsSync(context.workspaceCacheDir), false)
+      assert.strictEqual(existsSync(context.workspaceDataDir), false)
+      assert.strictEqual(readFileSync(env.BOXDOWN_SSH_CONFIG, 'utf8'), 'Host github.com\n  User git\n')
+
+      const codexConfig = parseCodexAppConfig(JSON.parse(readFileSync(env.BOXDOWN_CODEX_APP_CONFIG, 'utf8')))
+      assert.deepStrictEqual(codexConfig.remoteConnections, [
+        {
+          sshAlias: otherAlias,
+          projects: [
+            {
+              remotePath: '/home/node/other',
+              label: 'Other'
+            }
+          ]
+        }
+      ])
+
+      const codexState = JSON.parse(readFileSync(env.BOXDOWN_CODEX_GLOBAL_STATE, 'utf8'))
+      assert.deepStrictEqual(codexState['remote-projects'], [
+        {
+          id: 'other-project-id',
+          hostId: codexDiscoveredRemoteHostId(otherAlias),
+          remotePath: '/home/node/other'
+        }
+      ])
+      assert.deepStrictEqual(codexState['project-order'], ['other-project-id'])
+      assert.deepStrictEqual(codexState['sidebar-collapsed-groups'], {
+        'other-project-id': true
+      })
+    })
+  })
+
+  test('purge removes a recorded image when the container is already absent', async () => {
+    const workspace = tempDir('purge-recorded-image-workspace')
+    const env = {
+      HOME: tempDir('purge-recorded-image-home'),
+      BOXDOWN_CACHE_HOME: tempDir('purge-recorded-image-cache'),
+      BOXDOWN_DATA_HOME: tempDir('purge-recorded-image-data'),
+      BOXDOWN_SSH_CONFIG: join(tempDir('purge-recorded-image-ssh'), 'config'),
+      BOXDOWN_CODEX_APP_CONFIG: join(tempDir('purge-recorded-image-codex-app'), 'config.json'),
+      BOXDOWN_CODEX_GLOBAL_STATE: join(tempDir('purge-recorded-image-codex-state'), '.codex-global-state.json')
+    }
+    const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+
+    mkdirSync(context.workspaceCacheDir, { recursive: true })
+    writeFileSync(join(context.workspaceCacheDir, 'devcontainer.json'), '{}\n')
+    writeWorkspaceMetadata(context, defaultSshAlias(context.workspaceBasename))
+    recordWorkspaceDockerImage(context, { id: 'sha256:recorded-image', name: 'recorded:latest' })
+
+    await withFakeDocker([], async (logPath, dockerEnv) => {
+      const result = runCliProcess(['purge', '--workspace', workspace], {
+        ...dockerEnv,
+        ...env
+      })
+      const calls = fakeDockerCalls(logPath)
+
+      assert.strictEqual(result.code, 0)
+      assert.ok(calls.some((line) => line.startsWith('ps -a ')))
+      assert.ok(!calls.some((line) => line.startsWith('rm -f')))
+      assert.ok(calls.includes('image rm -f sha256:recorded-image'))
+      assert.strictEqual(existsSync(context.workspaceCacheDir), false)
+      assert.strictEqual(existsSync(context.workspaceDataDir), false)
+    })
+  })
+
+  test('purge continues after Docker cleanup failures and exits nonzero', async () => {
+    const workspace = tempDir('purge-failure-workspace')
+    const env = {
+      HOME: tempDir('purge-failure-home'),
+      BOXDOWN_CACHE_HOME: tempDir('purge-failure-cache'),
+      BOXDOWN_DATA_HOME: tempDir('purge-failure-data'),
+      BOXDOWN_SSH_CONFIG: join(tempDir('purge-failure-ssh'), 'config'),
+      BOXDOWN_CODEX_APP_CONFIG: join(tempDir('purge-failure-codex-app'), 'config.json'),
+      BOXDOWN_CODEX_GLOBAL_STATE: join(tempDir('purge-failure-codex-state'), '.codex-global-state.json')
+    }
+    const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+
+    mkdirSync(context.workspaceCacheDir, { recursive: true })
+    writeWorkspaceMetadata(context, defaultSshAlias(context.workspaceBasename))
+
+    await withFakeDocker([
+      {
+        workspace,
+        id: 'failing-container',
+        imageId: 'sha256:failing-image',
+        removeExitCode: 37,
+        imageRemoveExitCode: 41
+      }
+    ], async (logPath, dockerEnv) => {
+      const result = runCliProcess(['purge', '--workspace', workspace], {
+        ...dockerEnv,
+        ...env
+      })
+      const calls = fakeDockerCalls(logPath)
+
+      assert.strictEqual(result.code, 1)
+      assert.ok(calls.includes('rm -f -v failing-container'))
+      assert.ok(calls.includes('image rm -f sha256:failing-image'))
+      assert.match(result.stderr, /Failed devcontainer failing-container/)
+      assert.match(result.stderr, /Failed Docker image sha256:failing-image/)
+      assert.strictEqual(existsSync(context.workspaceCacheDir), false)
+      assert.strictEqual(existsSync(context.workspaceDataDir), false)
+    })
+  })
 })
 
 describe('coding-agent command mapping', () => {
@@ -807,9 +1030,35 @@ describe('workspace metadata', () => {
     assert.deepStrictEqual(listed, second)
   })
 
+  test('records and preserves workspace Docker image metadata', () => {
+    const workspace = tempDir('metadata-image-workspace')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('metadata-image-cache'),
+        BOXDOWN_DATA_HOME: tempDir('metadata-image-data')
+      },
+      assetsDevcontainerDir
+    })
+
+    writeWorkspaceMetadata(context, 'demo-devcontainer', new Date('2026-01-01T00:00:00.000Z'))
+    const imageMetadata = recordWorkspaceDockerImage(context, {
+      id: 'sha256:demo-image',
+      name: 'boxdown-demo:latest'
+    }, new Date('2026-01-01T00:01:00.000Z'))
+    const laterMetadata = writeWorkspaceMetadata(context, 'updated-devcontainer', new Date('2026-01-02T00:00:00.000Z'))
+
+    assert.strictEqual(imageMetadata?.dockerImageId, 'sha256:demo-image')
+    assert.strictEqual(imageMetadata?.dockerImageName, 'boxdown-demo:latest')
+    assert.strictEqual(imageMetadata?.dockerImageLastSeenAt, '2026-01-01T00:01:00.000Z')
+    assert.strictEqual(laterMetadata.dockerImageId, 'sha256:demo-image')
+    assert.deepStrictEqual(readWorkspaceMetadata(context), laterMetadata)
+  })
+
   test('status does not record workspace metadata', () => {
     assert.strictEqual(commandWritesWorkspaceMetadata('status'), false)
     assert.strictEqual(commandWritesWorkspaceMetadata('list'), false)
+    assert.strictEqual(commandWritesWorkspaceMetadata('purge'), false)
     assert.strictEqual(commandWritesWorkspaceMetadata('start'), true)
     assert.strictEqual(commandWritesWorkspaceMetadata('ssh-install'), true)
     assert.strictEqual(commandWritesWorkspaceMetadata('ssh-uninstall'), false)

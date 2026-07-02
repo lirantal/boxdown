@@ -13,6 +13,14 @@ export interface WorkspaceMetadata {
   sshAlias: string
   firstSeenAt: string
   lastSeenAt: string
+  dockerImageId?: string
+  dockerImageName?: string
+  dockerImageLastSeenAt?: string
+}
+
+export interface WorkspaceDockerImageMetadata {
+  id: string
+  name?: string
 }
 
 function isWorkspaceMetadata (value: unknown): value is WorkspaceMetadata {
@@ -28,7 +36,10 @@ function isWorkspaceMetadata (value: unknown): value is WorkspaceMetadata {
     typeof candidate.workspaceBasename === 'string' &&
     typeof candidate.sshAlias === 'string' &&
     typeof candidate.firstSeenAt === 'string' &&
-    typeof candidate.lastSeenAt === 'string'
+    typeof candidate.lastSeenAt === 'string' &&
+    (candidate.dockerImageId === undefined || typeof candidate.dockerImageId === 'string') &&
+    (candidate.dockerImageName === undefined || typeof candidate.dockerImageName === 'string') &&
+    (candidate.dockerImageLastSeenAt === undefined || typeof candidate.dockerImageLastSeenAt === 'string')
 }
 
 export function workspaceMetadataPath (context: WorkspaceContext): string {
@@ -45,13 +56,25 @@ export function readWorkspaceMetadataFile (path: string): WorkspaceMetadata {
   return parsed
 }
 
+export function readWorkspaceMetadata (context: WorkspaceContext): WorkspaceMetadata | undefined {
+  const metadataPath = workspaceMetadataPath(context)
+
+  if (!existsSync(metadataPath)) {
+    return undefined
+  }
+
+  return readWorkspaceMetadataFile(metadataPath)
+}
+
 export function writeWorkspaceMetadata (context: WorkspaceContext, sshAlias: string, now = new Date()): WorkspaceMetadata {
   const metadataPath = workspaceMetadataPath(context)
   const timestamp = now.toISOString()
   let firstSeenAt = timestamp
+  let existingMetadata: WorkspaceMetadata | undefined
 
   if (existsSync(metadataPath)) {
-    firstSeenAt = readWorkspaceMetadataFile(metadataPath).firstSeenAt
+    existingMetadata = readWorkspaceMetadataFile(metadataPath)
+    firstSeenAt = existingMetadata.firstSeenAt
   }
 
   const metadata: WorkspaceMetadata = {
@@ -61,12 +84,38 @@ export function writeWorkspaceMetadata (context: WorkspaceContext, sshAlias: str
     workspaceBasename: context.workspaceBasename,
     sshAlias,
     firstSeenAt,
-    lastSeenAt: timestamp
+    lastSeenAt: timestamp,
+    ...(existingMetadata?.dockerImageId === undefined ? {} : { dockerImageId: existingMetadata.dockerImageId }),
+    ...(existingMetadata?.dockerImageName === undefined ? {} : { dockerImageName: existingMetadata.dockerImageName }),
+    ...(existingMetadata?.dockerImageLastSeenAt === undefined ? {} : { dockerImageLastSeenAt: existingMetadata.dockerImageLastSeenAt })
   }
 
   mkdirSync(context.workspaceDataDir, { recursive: true })
   writeFileSync(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`)
   return metadata
+}
+
+export function recordWorkspaceDockerImage (
+  context: WorkspaceContext,
+  image: WorkspaceDockerImageMetadata,
+  now = new Date()
+): WorkspaceMetadata | undefined {
+  const metadata = readWorkspaceMetadata(context)
+
+  if (metadata === undefined) {
+    return undefined
+  }
+
+  const nextMetadata: WorkspaceMetadata = {
+    ...metadata,
+    dockerImageId: image.id,
+    ...(image.name === undefined ? {} : { dockerImageName: image.name }),
+    dockerImageLastSeenAt: now.toISOString()
+  }
+
+  mkdirSync(context.workspaceDataDir, { recursive: true })
+  writeFileSync(workspaceMetadataPath(context), `${JSON.stringify(nextMetadata, null, 2)}\n`)
+  return nextMetadata
 }
 
 export function listWorkspaceMetadata (dataRoot: string): WorkspaceMetadata[] {

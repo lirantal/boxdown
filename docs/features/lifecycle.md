@@ -9,6 +9,7 @@ boxdown status
 boxdown status --json
 boxdown stop
 boxdown down
+boxdown purge
 boxdown doctor
 ```
 
@@ -48,13 +49,19 @@ workspace container is running. Missing setup or a stopped/absent container is
 reported in the output and exits nonzero. Installing an SSH alias is optional
 and is not required for a healthy status exit.
 
-## Stop and Down
+## Stop, Down, and Purge
 
 `stop` stops the workspace devcontainer when it is running. If the container is
 already stopped or absent, it prints a short message and exits 0.
 
 `down` removes the workspace devcontainer with Docker. It does not remove
 Boxdown cache, generated config, data directories, or SSH keys.
+
+`purge` removes the workspace devcontainer with Docker, force-removes the exact
+Docker image ID Boxdown can inspect or has recorded for the workspace, removes
+Boxdown-managed SSH/Codex entries for the computed, recorded, and provided
+aliases, and deletes the workspace's Boxdown cache/data directories. It does not
+delete the target repository directory or files inside it.
 
 To remove multiple workspace containers, repeat `--workspace`:
 

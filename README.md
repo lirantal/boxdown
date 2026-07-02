@@ -106,13 +106,13 @@ npx boxdown ssh uninstall
 boxdown start
 boxdown codex
 boxdown claude
-boxdown cc
 boxdown opencode
 boxdown antigravity
 boxdown list
 boxdown status
 boxdown stop
 boxdown down
+boxdown purge
 boxdown doctor
 boxdown ssh install
 boxdown ssh uninstall
@@ -124,6 +124,8 @@ boxdown refresh-gh-token-running
 
 `boxdown shell` remains supported as an alias for `boxdown start`, but
 documentation uses `start` as the canonical command.
+`boxdown cc` remains supported as an alias for `boxdown claude`, but
+documentation uses `claude` as the canonical command.
 
 Container bring-up installs Codex and Claude Code by default. The OpenCode and
 Antigravity commands stay available, but install/update those CLIs only when you
@@ -150,6 +152,11 @@ Shared options:
 --recreate          # recreate the devcontainer before starting
 --json              # JSON output for status and list
 ```
+
+Use `boxdown purge` when you want to remove the workspace's Boxdown-managed
+environment residue: the devcontainer, its exact recorded Docker image, managed
+SSH/Codex entries, and Boxdown cache/data for that workspace. It does not delete
+the local repository directory or files inside it.
 
 ## Contributing
 
