@@ -101,7 +101,6 @@ npx boxdown ssh uninstall
 boxdown start
 boxdown codex
 boxdown claude
-boxdown cc
 boxdown opencode
 boxdown antigravity
 boxdown list
@@ -119,6 +118,8 @@ boxdown refresh-gh-token-running
 
 `boxdown shell` remains supported as an alias for `boxdown start`, but
 documentation uses `start` as the canonical command.
+`boxdown cc` remains supported as an alias for `boxdown claude`, but
+documentation uses `claude` as the canonical command.
 
 Container bring-up installs Codex and Claude Code by default. The OpenCode and
 Antigravity commands stay available, but install/update those CLIs only when you

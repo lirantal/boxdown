@@ -6,7 +6,6 @@
 boxdown start
 boxdown codex
 boxdown claude
-boxdown cc
 boxdown opencode
 boxdown antigravity
 ```
@@ -20,12 +19,14 @@ boxdown antigravity
 
 `boxdown shell` remains supported as an alias for `boxdown start`, but `start`
 is the canonical command used in help and documentation.
+`boxdown cc` remains supported as an alias for `boxdown claude`, but `claude`
+is the canonical command used in help and documentation.
 
 The coding-agent aliases start or reuse the same workspace devcontainer and
 launch the selected CLI directly:
 
 - `boxdown codex` launches `codex`.
-- `boxdown claude` and `boxdown cc` launch `claude`.
+- `boxdown claude` launches `claude`.
 - `boxdown opencode` installs/updates OpenCode when needed, then launches
   `opencode`.
 - `boxdown antigravity` installs/updates Antigravity when needed, then launches

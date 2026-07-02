@@ -45,7 +45,6 @@ export const USAGE = `Usage:
   boxdown start [--workspace <path>] [--recreate]
   boxdown codex [--workspace <path>] [--recreate] [-- <codex args...>]
   boxdown claude [--workspace <path>] [--recreate] [-- <claude args...>]
-  boxdown cc [--workspace <path>] [--recreate] [-- <claude args...>]
   boxdown opencode [--workspace <path>] [--recreate] [-- <opencode args...>]
   boxdown antigravity [--workspace <path>] [--recreate] [-- <agy args...>]
   boxdown list [--json]
@@ -61,11 +60,11 @@ export const USAGE = `Usage:
   boxdown refresh-gh-token-running [--workspace <path>]
 
 Commands:
-  start                     Start or reuse the workspace devcontainer, then open
-                            an interactive shell inside it. Alias: shell.
+  start, shell              Start or reuse the workspace devcontainer, then open
+                            an interactive shell inside it.
   codex                     Start or reuse the devcontainer, then launch Codex.
-  claude                    Start or reuse the devcontainer, then launch Claude
-                            Code. Alias: cc.
+  claude, cc                Start or reuse the devcontainer, then launch Claude
+                            Code.
   opencode                  Start or reuse the devcontainer, then launch
                             OpenCode, installing it first when needed.
   antigravity               Start or reuse the devcontainer, then launch
