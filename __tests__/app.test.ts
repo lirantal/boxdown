@@ -7,6 +7,7 @@ import { PassThrough } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import { describe, test } from 'node:test'
 
+import { claudeSshConfigEntryForWorkspace, defaultClaudeSshConfigsPath, installClaudeSshConfigHost, mergeClaudeSshConfigHost, parseClaudeSshConfigs, removeClaudeSshConfigHost, uninstallClaudeSshConfigHost } from '../src/claude-app-config.ts'
 import { codexDiscoveredRemoteHostId, codexProjectEntryForWorkspace, defaultCodexAppConfigPath, defaultCodexGlobalStatePath, installCodexAppConfigProject, mergeCodexAppProject, parseCodexAppConfig, removeCodexAppProject, removeCodexGlobalStateProject, uninstallCodexAppConfigProject, uninstallCodexGlobalStateProject } from '../src/codex-app-config.ts'
 import { codingAgentBinary, codingAgentFromCommand } from '../src/coding-agents.ts'
 import { buildGeneratedDevcontainerConfig, publishContainerPortFromConfig } from '../src/config.ts'
@@ -21,6 +22,7 @@ import { commandWritesWorkspaceMetadata, parseCliArgs, parseTunnelPort, runCli, 
 import { listWorkspaceMetadata, readWorkspaceMetadata, recordWorkspaceDockerImage, writeWorkspaceMetadata } from '../src/metadata.ts'
 import { createWorkspaceContext } from '../src/paths.ts'
 import { promptMultiSelect, type PromptInput, type PromptOutput } from '../src/interactive-select.ts'
+import { buildHostToolPath } from '../src/process.ts'
 import { DEFAULT_TTY_MAX_COLUMNS, interactiveCommandScript, interactiveShellEnvArgs, interactiveShellScript } from '../src/shell.ts'
 import { buildSshConfigBlock, defaultSshAlias, installSshConfig, removeSshConfigBlock, replaceSshConfigBlock, uninstallSshConfig } from '../src/ssh-config.ts'
 import { createStatusInfo, formatStatusText, inspectSshConfigStatus, parseDockerPsJsonLines, statusIsHealthy } from '../src/status.ts'
@@ -359,11 +361,11 @@ describe('CLI parsing', () => {
       recreate: false,
       json: false
     })
-    assert.deepStrictEqual(parseCliArgs(['ssh', 'install', '--target', 'codex', '--target', 'codex']), {
+    assert.deepStrictEqual(parseCliArgs(['ssh', 'install', '--target', 'codex', '--target', 'claude', '--target', 'codex']), {
       command: 'ssh-install',
       workspace: undefined,
       alias: undefined,
-      targets: ['codex'],
+      targets: ['codex', 'claude'],
       recreate: false,
       json: false
     })
@@ -538,7 +540,7 @@ describe('CLI parsing', () => {
     assert.match(USAGE, /ssh uninstall\s+Remove Boxdown's managed SSH host alias/)
     assert.doesNotMatch(USAGE, /ssh-config/)
     assert.match(USAGE, /--target <name>\s+Optional SSH install target/)
-    assert.match(USAGE, /Repeatable\. Supported by[\s\S]*setup and ssh install: codex\./)
+    assert.match(USAGE, /Repeatable\. Supported by[\s\S]*setup and ssh install: codex, claude\./)
     assert.match(USAGE, /ssh-proxy\s+Internal command used by the generated SSH/)
     assert.match(USAGE, /tunnel\s+Start or reuse the devcontainer/)
     assert.match(USAGE, /--port <port>\s+Tunnel a local port/)
@@ -798,6 +800,40 @@ describe('CLI execution', () => {
     assert.strictEqual(codexConfig.remoteConnections[0]?.projects[0]?.label, realpathSync(workspace).split('/').at(-1))
   })
 
+  test('installs explicit Claude ssh install target', () => {
+    const workspace = tempDir('cli-explicit-claude-workspace')
+    const sshConfigPath = join(tempDir('cli-explicit-claude-ssh'), 'config')
+    const claudeConfigPath = join(tempDir('cli-explicit-claude-app'), 'ssh_configs.json')
+    const result = runCliProcess(['ssh', 'install', '--workspace', workspace, '--target', 'claude'], {
+      ...process.env,
+      HOME: tempDir('cli-explicit-claude-home'),
+      BOXDOWN_CACHE_HOME: tempDir('cli-explicit-claude-cache'),
+      BOXDOWN_DATA_HOME: tempDir('cli-explicit-claude-data'),
+      BOXDOWN_SSH_CONFIG: sshConfigPath,
+      BOXDOWN_CLAUDE_SSH_CONFIGS: claudeConfigPath
+    })
+    const claudeConfig = parseClaudeSshConfigs(JSON.parse(readFileSync(claudeConfigPath, 'utf8')))
+    const workspaceName = realpathSync(workspace).split('/').at(-1) ?? 'workspace'
+
+    assert.strictEqual(result.code, 0)
+    assert.match(result.stdout, /Installed SSH alias:/)
+    assert.match(result.stdout, /Installed Claude SSH remote:/)
+    assert.strictEqual(existsSync(sshConfigPath), true)
+    assert.deepStrictEqual(claudeConfig.configs.map((config) => ({
+      name: config.name,
+      sshHost: config.sshHost,
+      source: config.source
+    })), [
+      {
+        name: workspaceName,
+        sshHost: `${workspaceName}-devcontainer`,
+        source: 'desktop'
+      }
+    ])
+    assert.match(claudeConfig.configs[0]?.id ?? '', /^[0-9a-f-]{36}$/u)
+    assert.deepStrictEqual(claudeConfig.trustedHosts, [`${workspaceName}-devcontainer`])
+  })
+
   test('skips optional ssh install targets without a TTY', () => {
     const workspace = tempDir('cli-non-tty-workspace')
     const sshConfigPath = join(tempDir('cli-non-tty-ssh'), 'config')
@@ -836,6 +872,7 @@ describe('CLI execution', () => {
         env: { ...process.env, CI: 'false' }
       })
 
+      input.write('\u001B[A')
       input.write('\u001B[A')
       input.write(' ')
       input.write('\r')
@@ -888,7 +925,8 @@ describe('CLI execution', () => {
       BOXDOWN_DATA_HOME: tempDir('purge-data'),
       BOXDOWN_SSH_CONFIG: join(tempDir('purge-ssh'), 'config'),
       BOXDOWN_CODEX_APP_CONFIG: join(tempDir('purge-codex-app'), 'config.json'),
-      BOXDOWN_CODEX_GLOBAL_STATE: join(tempDir('purge-codex-state'), '.codex-global-state.json')
+      BOXDOWN_CODEX_GLOBAL_STATE: join(tempDir('purge-codex-state'), '.codex-global-state.json'),
+      BOXDOWN_CLAUDE_SSH_CONFIGS: join(tempDir('purge-claude-app'), 'ssh_configs.json')
     }
     const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
     const defaultAlias = defaultSshAlias(context.workspaceBasename)
@@ -911,6 +949,13 @@ describe('CLI execution', () => {
       remotePath: '/home/node/other',
       label: 'Other'
     }, { configPath: env.BOXDOWN_CODEX_APP_CONFIG })
+    installClaudeSshConfigHost(claudeSshConfigEntryForWorkspace(context, defaultAlias), { configPath: env.BOXDOWN_CLAUDE_SSH_CONFIGS, createId: () => 'default-claude-id' })
+    installClaudeSshConfigHost(claudeSshConfigEntryForWorkspace(context, recordedAlias), { configPath: env.BOXDOWN_CLAUDE_SSH_CONFIGS, createId: () => 'recorded-claude-id' })
+    installClaudeSshConfigHost(claudeSshConfigEntryForWorkspace(context, providedAlias), { configPath: env.BOXDOWN_CLAUDE_SSH_CONFIGS, createId: () => 'provided-claude-id' })
+    installClaudeSshConfigHost({
+      name: 'Other',
+      sshHost: otherAlias
+    }, { configPath: env.BOXDOWN_CLAUDE_SSH_CONFIGS, createId: () => 'other-claude-id' })
 
     const state = {
       'remote-projects': [
@@ -970,6 +1015,17 @@ describe('CLI execution', () => {
           ]
         }
       ])
+      assert.deepStrictEqual(parseClaudeSshConfigs(JSON.parse(readFileSync(env.BOXDOWN_CLAUDE_SSH_CONFIGS, 'utf8'))), {
+        configs: [
+          {
+            name: 'Other',
+            sshHost: otherAlias,
+            id: 'other-claude-id',
+            source: 'desktop'
+          }
+        ],
+        trustedHosts: [otherAlias]
+      })
 
       const codexState = JSON.parse(readFileSync(env.BOXDOWN_CODEX_GLOBAL_STATE, 'utf8'))
       assert.deepStrictEqual(codexState['remote-projects'], [
@@ -1102,6 +1158,24 @@ describe('coding-agent command mapping', () => {
     assert.match(commandScript, /export PATH="\$\{HOME\}\/\.local\/bin:\$\{HOME\}\/\.opencode\/bin:\$\{codex_home\}\/packages\/standalone\/current\/bin:\$\{PATH\}"/)
     assert.match(commandScript, /exec "\$@"/)
     assert.deepStrictEqual(args.slice(-3), ['boxdown-agent', 'agy', '--help'])
+  })
+})
+
+describe('host tool path', () => {
+  test('adds GUI-missing Docker and Homebrew paths while preserving existing priority', () => {
+    const home = tempDir('host-tool-path-home')
+    const customBin = join(tempDir('host-tool-path-custom'), 'bin')
+    const path = buildHostToolPath({
+      HOME: home,
+      PATH: `/usr/bin${delimiter}/bin${delimiter}/usr/sbin${delimiter}/sbin`,
+      BOXDOWN_HOST_PATH_PREFIX: customBin
+    }).split(delimiter)
+
+    assert.strictEqual(path[0], customBin)
+    assert.ok(path.indexOf('/usr/bin') < path.indexOf('/usr/local/bin'))
+    assert.ok(path.includes(`${home}/.docker/bin`))
+    assert.ok(path.includes('/Applications/Docker.app/Contents/Resources/bin'))
+    assert.strictEqual(path.filter((entry) => entry === '/usr/bin').length, 1)
   })
 })
 
@@ -2345,6 +2419,230 @@ describe('Codex app config injection', () => {
       remotePath: `/home/node/${context.workspaceBasename}`,
       label: context.workspaceBasename
     })
+  })
+})
+
+describe('Claude SSH config injection', () => {
+  test('builds the default config path and workspace SSH entry', () => {
+    const workspace = tempDir('claude-entry-workspace')
+    const home = tempDir('claude-entry-home')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        HOME: home,
+        BOXDOWN_CACHE_HOME: tempDir('claude-entry-cache'),
+        BOXDOWN_DATA_HOME: tempDir('claude-entry-data')
+      },
+      assetsDevcontainerDir
+    })
+
+    assert.strictEqual(defaultClaudeSshConfigsPath({ HOME: home }, 'darwin'), join(home, 'Library', 'Application Support', 'Claude', 'ssh_configs.json'))
+    assert.strictEqual(defaultClaudeSshConfigsPath({ HOME: home, BOXDOWN_CLAUDE_SSH_CONFIGS: '/tmp/claude.json' }, 'darwin'), '/tmp/claude.json')
+    assert.deepStrictEqual(claudeSshConfigEntryForWorkspace(context, 'demo-devcontainer'), {
+      name: context.workspaceBasename,
+      sshHost: 'demo-devcontainer'
+    })
+  })
+
+  test('merges by SSH host, preserves IDs, and trusts the host', () => {
+    const config = parseClaudeSshConfigs({
+      unknown: true,
+      configs: [
+        {
+          name: 'Old demo',
+          sshHost: 'demo-devcontainer',
+          id: 'existing-id',
+          source: 'desktop',
+          unknown: true
+        },
+        {
+          name: 'Other',
+          sshHost: 'other-devcontainer',
+          id: 'other-id',
+          source: 'desktop'
+        }
+      ],
+      trustedHosts: ['other-devcontainer']
+    })
+
+    const first = mergeClaudeSshConfigHost(config, {
+      name: 'Demo',
+      sshHost: 'demo-devcontainer'
+    }, () => 'unused-id')
+    const second = mergeClaudeSshConfigHost(first, {
+      name: 'New demo',
+      sshHost: 'new-demo-devcontainer'
+    }, () => 'new-id')
+
+    assert.strictEqual(first.unknown, true)
+    assert.deepStrictEqual(first.configs[0], {
+      name: 'Demo',
+      sshHost: 'demo-devcontainer',
+      id: 'existing-id',
+      source: 'desktop',
+      unknown: true
+    })
+    assert.deepStrictEqual(second.configs[2], {
+      name: 'New demo',
+      sshHost: 'new-demo-devcontainer',
+      id: 'new-id',
+      source: 'desktop'
+    })
+    assert.deepStrictEqual(second.trustedHosts, [
+      'other-devcontainer',
+      'demo-devcontainer',
+      'new-demo-devcontainer'
+    ])
+  })
+
+  test('removes by SSH host and untrusts the host', () => {
+    const config = parseClaudeSshConfigs({
+      configs: [
+        {
+          name: 'Demo',
+          sshHost: 'demo-devcontainer',
+          id: 'demo-id',
+          source: 'desktop'
+        },
+        {
+          name: 'Other',
+          sshHost: 'other-devcontainer',
+          id: 'other-id',
+          source: 'desktop'
+        }
+      ],
+      trustedHosts: ['demo-devcontainer', 'other-devcontainer']
+    })
+
+    assert.deepStrictEqual(removeClaudeSshConfigHost(config, {
+      name: 'Demo',
+      sshHost: 'demo-devcontainer'
+    }), {
+      configs: [
+        {
+          name: 'Other',
+          sshHost: 'other-devcontainer',
+          id: 'other-id',
+          source: 'desktop'
+        }
+      ],
+      trustedHosts: ['other-devcontainer']
+    })
+  })
+
+  test('creates and updates Claude SSH config with backups', () => {
+    const configPath = join(tempDir('claude-create'), 'Claude', 'ssh_configs.json')
+    const first = installClaudeSshConfigHost({
+      name: 'Demo',
+      sshHost: 'demo-devcontainer'
+    }, {
+      configPath,
+      now: new Date('2026-01-01T00:00:00.000Z'),
+      createId: () => 'demo-id'
+    })
+    const second = installClaudeSshConfigHost({
+      name: 'Demo',
+      sshHost: 'demo-devcontainer'
+    }, {
+      configPath,
+      now: new Date('2026-01-02T00:00:00.000Z'),
+      createId: () => 'unused-id'
+    })
+
+    assert.deepStrictEqual(first, {
+      configPath,
+      changed: true
+    })
+    assert.deepStrictEqual(second, {
+      configPath,
+      changed: false
+    })
+    assert.deepStrictEqual(JSON.parse(readFileSync(configPath, 'utf8')), {
+      configs: [
+        {
+          name: 'Demo',
+          sshHost: 'demo-devcontainer',
+          id: 'demo-id',
+          source: 'desktop'
+        }
+      ],
+      trustedHosts: ['demo-devcontainer']
+    })
+
+    const renamed = installClaudeSshConfigHost({
+      name: 'Renamed demo',
+      sshHost: 'demo-devcontainer'
+    }, {
+      configPath,
+      now: new Date('2026-01-03T00:00:00.000Z')
+    })
+
+    assert.strictEqual(renamed.changed, true)
+    assert.strictEqual(renamed.backupPath, `${configPath}.2026-01-03T00-00-00-000Z.bak`)
+    assert.strictEqual(existsSync(renamed.backupPath), true)
+    assert.strictEqual(parseClaudeSshConfigs(JSON.parse(readFileSync(configPath, 'utf8'))).configs[0]?.id, 'demo-id')
+  })
+
+  test('uninstalls Claude SSH config and writes a backup', () => {
+    const configPath = join(tempDir('claude-uninstall'), 'ssh_configs.json')
+    writeFileSync(configPath, `${JSON.stringify({
+      configs: [
+        {
+          name: 'Demo',
+          sshHost: 'demo-devcontainer',
+          id: 'demo-id',
+          source: 'desktop'
+        }
+      ],
+      trustedHosts: ['demo-devcontainer']
+    }, null, 2)}\n`)
+
+    const result = uninstallClaudeSshConfigHost({
+      name: 'Demo',
+      sshHost: 'demo-devcontainer'
+    }, {
+      configPath,
+      now: new Date('2026-01-01T00:00:00.000Z')
+    })
+    const second = uninstallClaudeSshConfigHost({
+      name: 'Demo',
+      sshHost: 'demo-devcontainer'
+    }, {
+      configPath,
+      now: new Date('2026-01-02T00:00:00.000Z')
+    })
+
+    assert.strictEqual(result.changed, true)
+    assert.strictEqual(result.backupPath, `${configPath}.2026-01-01T00-00-00-000Z.bak`)
+    assert.strictEqual(existsSync(result.backupPath), true)
+    assert.deepStrictEqual(second, {
+      configPath,
+      changed: false
+    })
+    assert.deepStrictEqual(JSON.parse(readFileSync(configPath, 'utf8')), {
+      configs: [],
+      trustedHosts: []
+    })
+  })
+
+  test('fails without rewriting invalid Claude SSH configs', () => {
+    const invalidJsonPath = join(tempDir('claude-invalid-json'), 'ssh_configs.json')
+    writeFileSync(invalidJsonPath, '{ invalid json')
+
+    assert.throws(() => installClaudeSshConfigHost({
+      name: 'Demo',
+      sshHost: 'demo-devcontainer'
+    }, { configPath: invalidJsonPath }), /Invalid Claude SSH config JSON/)
+    assert.strictEqual(readFileSync(invalidJsonPath, 'utf8'), '{ invalid json')
+
+    const invalidShapePath = join(tempDir('claude-invalid-shape'), 'ssh_configs.json')
+    writeFileSync(invalidShapePath, '{"configs":[{"name":"Demo","sshHost":"demo-devcontainer"}],"trustedHosts":[]}\n')
+
+    assert.throws(() => installClaudeSshConfigHost({
+      name: 'Demo',
+      sshHost: 'demo-devcontainer'
+    }, { configPath: invalidShapePath }), /id must be a nonempty string/)
+    assert.strictEqual(readFileSync(invalidShapePath, 'utf8'), '{"configs":[{"name":"Demo","sshHost":"demo-devcontainer"}],"trustedHosts":[]}\n')
   })
 })
 

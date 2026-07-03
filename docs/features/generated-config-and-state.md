@@ -50,9 +50,9 @@ Metadata may also record the last inspected Docker image ID for the workspace so
 ## External App Config
 
 External app integration config is not Boxdown workspace state. Boxdown writes
-it only when the Codex SSH install target is selected from an interactive
+it only when an SSH install target is selected from an interactive
 `boxdown setup` or `boxdown ssh install` prompt, or requested explicitly with
-`boxdown setup --target codex` or `boxdown ssh install --target codex`.
+`boxdown setup --target <name>` or `boxdown ssh install --target <name>`.
 Non-interactive runs without `--target` install only the SSH alias and leave
 external app config unchanged.
 
@@ -67,6 +67,16 @@ The Codex entry refers to the Boxdown-managed SSH alias and the container-side
 project path `/home/node/<repo-name>`. Codex owns later global-state records and
 sidebar entries it creates from that config, but `boxdown ssh uninstall`
 removes the matching Codex sidebar cache entry when unregistering the project.
+
+When requested, Boxdown writes Claude's SSH remote config at:
+
+```text
+~/Library/Application Support/Claude/ssh_configs.json
+```
+
+`BOXDOWN_CLAUDE_SSH_CONFIGS` overrides this path for tests and local
+development. The Claude entry refers to the Boxdown-managed SSH alias and adds
+that alias to Claude's trusted host list.
 
 ## Generated Changes
 

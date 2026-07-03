@@ -4,8 +4,10 @@
 
 ```sh
 boxdown setup --target codex
+boxdown setup --target claude
 boxdown ssh install
 boxdown ssh install --target codex
+boxdown ssh install --target claude
 boxdown ssh uninstall
 boxdown ssh-proxy
 boxdown tunnel --port 3030
@@ -93,6 +95,44 @@ Boxdown does not edit `~/.codex/.codex-global-state.json`. Restart Codex after
 installing the target so Codex applies the app config, discovers the SSH alias
 from normal OpenSSH config, and creates or updates its sidebar project entry.
 
+## Claude App Target
+
+Selecting Claude from the interactive prompt or running
+`boxdown ssh install --target claude` keeps the normal SSH install flow and also
+writes a Claude app SSH remote entry for the same alias. `--target` is
+repeatable, so `codex` and `claude` can be installed in one command.
+
+The Claude SSH config is written to:
+
+```text
+~/Library/Application Support/Claude/ssh_configs.json
+```
+
+`BOXDOWN_CLAUDE_SSH_CONFIGS` overrides this path for tests and local
+development.
+
+The generated Claude entry mirrors the desktop app's SSH remote shape:
+
+```json
+{
+  "configs": [
+    {
+      "name": "<repo-name>",
+      "sshHost": "<repo-name>-devcontainer",
+      "id": "<uuid>",
+      "source": "desktop"
+    }
+  ],
+  "trustedHosts": [
+    "<repo-name>-devcontainer"
+  ]
+}
+```
+
+Boxdown merges by `sshHost`, preserves an existing Claude remote ID, and adds
+the alias to `trustedHosts`. Restart Claude after installing the target so the
+app applies the SSH remote entry.
+
 ## Proxy Flow
 
 When OpenSSH launches `boxdown ssh-proxy`, Boxdown:
@@ -107,6 +147,12 @@ When OpenSSH launches `boxdown ssh-proxy`, Boxdown:
 7. Bridges OpenSSH to `/usr/sbin/sshd -i` through `docker exec -i`.
 
 This does not publish an SSH port. The SSH stream travels through Docker exec.
+
+Boxdown augments child-process `PATH` with common macOS GUI-missing tool
+locations, including `/usr/local/bin`, Homebrew paths, `~/.docker/bin`, and
+Docker Desktop's bundled CLI directory. This lets GUI apps such as Claude launch
+the SSH proxy through OpenSSH even when their launchd environment cannot
+resolve `docker` by default.
 
 The default coding-agent CLI update preflight covers Codex and Claude Code in
 already-running containers, where `postStartCommand` does not necessarily run

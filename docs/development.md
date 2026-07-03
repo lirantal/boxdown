@@ -54,11 +54,13 @@ Boxdown repo itself:
 ```sh
 pnpm run start -- setup --workspace ~/projects/repos/example
 pnpm run start -- setup --workspace ~/projects/repos/example --target codex
+pnpm run start -- setup --workspace ~/projects/repos/example --target claude
 ```
 
 In an interactive terminal, `ssh install` asks whether to install optional SSH
-targets. Add `--target codex` when testing the Codex target explicitly, or set
-`CI=1` when you want to exercise the non-interactive skip path.
+targets. Add `--target codex` or `--target claude` when testing an app target
+explicitly, or set `CI=1` when you want to exercise the non-interactive skip
+path.
 
 Setting up a real container writes Boxdown state under user cache/data
 directories and may pull images or install the Dev Containers CLI.

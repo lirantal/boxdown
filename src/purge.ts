@@ -1,6 +1,7 @@
 import { existsSync, rmSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, parse, relative, resolve } from 'node:path'
 
+import { claudeSshConfigEntryForWorkspace, uninstallClaudeSshConfigHost } from './claude-app-config.ts'
 import { codexProjectEntryForWorkspace, uninstallCodexAppConfigProject, uninstallCodexGlobalStateProject } from './codex-app-config.ts'
 import { findWorkspaceContainer, inspectContainerImage, removeContainerById, removeDockerImage } from './devcontainer.ts'
 import { readWorkspaceMetadata, type WorkspaceMetadata } from './metadata.ts'
@@ -106,6 +107,15 @@ async function purgeAliasIntegrations (context: WorkspaceContext, alias: string)
     process.stdout.write(result.changed
       ? `Removed Codex sidebar state: ${entry.label} (${alias})\n`
       : `Codex sidebar state absent: ${entry.label} (${alias})\n`)
+  }) || failed
+
+  const claudeEntry = claudeSshConfigEntryForWorkspace(context, alias)
+
+  failed = await runPurgeStep(`Claude SSH config for ${alias}`, () => {
+    const result = uninstallClaudeSshConfigHost(claudeEntry)
+    process.stdout.write(result.changed
+      ? `Removed Claude SSH remote: ${claudeEntry.name} (${alias})\n`
+      : `Claude SSH remote absent: ${claudeEntry.name} (${alias})\n`)
   }) || failed
 
   return failed

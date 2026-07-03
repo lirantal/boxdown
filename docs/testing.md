@@ -57,6 +57,7 @@ Manual Docker acceptance is heavier and should be done intentionally:
 ```sh
 boxdown setup --workspace /path/to/repo
 boxdown setup --workspace /path/to/repo --target codex
+boxdown setup --workspace /path/to/repo --target claude
 boxdown start --workspace /path/to/repo
 boxdown list
 boxdown list --json
@@ -65,6 +66,7 @@ boxdown status --workspace /path/to/repo --json
 boxdown doctor --workspace /path/to/repo
 boxdown ssh install --workspace /path/to/repo
 boxdown ssh install --workspace /path/to/repo --target codex
+boxdown ssh install --workspace /path/to/repo --target claude
 CI=1 boxdown ssh install --workspace /path/to/repo
 ssh <repo-name>-devcontainer 'whoami && pwd'
 boxdown down --workspace /path/to/repo-a --workspace /path/to/repo-b
@@ -72,9 +74,9 @@ boxdown purge --workspace /path/to/disposable-repo
 ```
 
 The plain `ssh install` command should show the optional target selector when
-run in an interactive terminal. The explicit `--target codex` command verifies
-scriptable target installation, and the `CI=1` command verifies the
-non-interactive skip path without blocking.
+run in an interactive terminal. The explicit `--target codex` and
+`--target claude` commands verify scriptable target installation, and the `CI=1`
+command verifies the non-interactive skip path without blocking.
 
 When checking browser access, start a dev server inside the container and keep a
 foreground tunnel open from the host:

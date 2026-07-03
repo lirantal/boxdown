@@ -63,7 +63,8 @@ npx boxdown ssh install
 ```
 
 This creates a `<repo-name>-devcontainer` SSH host. When run in an interactive
-terminal, Boxdown also asks whether to install optional targets such as Codex.
+terminal, Boxdown also asks whether to install optional targets such as Codex
+and Claude.
 Non-interactive runs skip optional targets and print the explicit `--target`
 form to use in scripts.
 
@@ -75,20 +76,23 @@ ssh <repo-name>-devcontainer 'whoami && pwd'
 
 Use the same alias in Cursor, Claude, Codex, or any SSH-capable tool.
 
-To also add the project to Codex's remote project sidebar, pass the Codex
-target during setup or select Codex from the lower-level SSH prompt:
+To also add the project to Codex's remote project sidebar or Claude's SSH
+remote list, pass one or more targets during setup or select them from the
+lower-level SSH prompt:
 
 ```sh
 npx boxdown setup --target codex
+npx boxdown setup --target claude
 ```
 
-The lower-level SSH command also supports the same target for scripts:
+The lower-level SSH command also supports the same targets for scripts:
 
 ```sh
 npx boxdown ssh install --target codex
+npx boxdown ssh install --target claude
 ```
 
-Restart Codex after installing the target so the app applies its updated remote
+Restart the target app after installing it so it applies the updated remote
 project config.
 
 From the target project directory, forward a dev server running inside the
@@ -110,7 +114,7 @@ Use `--workspace <path>` only when running the command from a different
 directory. Repeat it with `down` to remove multiple workspace containers in one
 command.
 
-Remove Boxdown's managed SSH host block and matching Codex app project entry
+Remove Boxdown's managed SSH host block and matching Codex/Claude app entries
 when you no longer need the alias:
 
 ```sh
@@ -165,7 +169,7 @@ Shared options:
 ```sh
 --workspace <path>  # target project directory, defaults to cwd; repeatable with down
 --alias <name>      # SSH alias, defaults to <repo-name>-devcontainer
---target <name>     # with setup/ssh install, optional target; repeatable; supported: codex
+--target <name>     # with setup/ssh install, optional target; repeatable; supported: codex, claude
 --port <port>       # tunnel port for `boxdown tunnel`; repeatable
 --recreate          # recreate the devcontainer before starting
 --json              # JSON output for status and list
@@ -173,8 +177,8 @@ Shared options:
 
 Use `boxdown purge` when you want to remove the workspace's Boxdown-managed
 environment residue: the devcontainer, its exact recorded Docker image, managed
-SSH/Codex entries, and Boxdown cache/data for that workspace. It does not delete
-the local repository directory or files inside it.
+SSH/Codex/Claude entries, and Boxdown cache/data for that workspace. It does
+not delete the local repository directory or files inside it.
 
 ## Contributing
 

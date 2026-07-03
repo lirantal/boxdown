@@ -45,12 +45,18 @@ install` ask about optional targets in interactive terminals, while
 non-interactive runs skip them unless `--target` is provided. For example,
 `boxdown setup --target codex` or `boxdown ssh install --target codex` writes
 Codex app remote project configuration under `~/.codex/codex-app/config.json`,
-but it does not make that file part of Boxdown workspace state.
+and `--target claude` writes Claude app SSH remote configuration under
+`~/Library/Application Support/Claude/ssh_configs.json`, but neither file
+becomes Boxdown workspace state.
 
 Boxdown writes the Codex app config entry needed to point Codex at the
 Boxdown-managed SSH alias and container-side project path. On uninstall, it also
 removes the matching Codex global-state sidebar cache entry that Codex derived
 from that app config. Other Codex global state remains Codex-owned.
+
+Boxdown writes the Claude SSH remote entry needed to point Claude at the same
+Boxdown-managed SSH alias. On uninstall, it removes that matching Claude SSH
+remote and trusted-host entry.
 
 ## Container Asset Mounts
 

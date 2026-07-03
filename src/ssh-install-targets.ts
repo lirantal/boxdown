@@ -1,7 +1,8 @@
+import { claudeSshConfigEntryForWorkspace, installClaudeSshConfigHost } from './claude-app-config.ts'
 import { codexProjectEntryForWorkspace, installCodexAppConfigProject } from './codex-app-config.ts'
 import type { WorkspaceContext } from './paths.ts'
 
-export type SshConfigInstallTarget = 'codex'
+export type SshConfigInstallTarget = 'codex' | 'claude'
 
 export interface SshInstallTargetDefinition {
   value: SshConfigInstallTarget
@@ -27,6 +28,22 @@ function installCodexTarget (context: WorkspaceContext, alias: string): void {
   process.stdout.write('Restart Codex to apply the remote project entry.\n')
 }
 
+function installClaudeTarget (context: WorkspaceContext, alias: string): void {
+  const entry = claudeSshConfigEntryForWorkspace(context, alias)
+  const result = installClaudeSshConfigHost(entry)
+
+  process.stdout.write(`\nClaude SSH config: ${result.configPath}\n`)
+  process.stdout.write(result.changed
+    ? `Installed Claude SSH remote: ${entry.name} (${entry.sshHost})\n`
+    : `Claude SSH remote already up to date: ${entry.name} (${entry.sshHost})\n`)
+
+  if (result.backupPath !== undefined) {
+    process.stdout.write(`Claude SSH config backup: ${result.backupPath}\n`)
+  }
+
+  process.stdout.write('Restart Claude to apply the SSH remote entry.\n')
+}
+
 export const SSH_INSTALL_TARGETS: readonly SshInstallTargetDefinition[] = [
   {
     value: 'codex',
@@ -34,6 +51,13 @@ export const SSH_INSTALL_TARGETS: readonly SshInstallTargetDefinition[] = [
     description: 'Register this SSH alias as a Codex app remote project.',
     flag: '--target codex',
     install: installCodexTarget
+  },
+  {
+    value: 'claude',
+    label: 'Claude',
+    description: 'Register this SSH alias as a Claude app SSH remote.',
+    flag: '--target claude',
+    install: installClaudeTarget
   }
 ]
 

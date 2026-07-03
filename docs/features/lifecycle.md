@@ -59,9 +59,9 @@ Boxdown cache, generated config, data directories, or SSH keys.
 
 `purge` removes the workspace devcontainer with Docker, force-removes the exact
 Docker image ID Boxdown can inspect or has recorded for the workspace, removes
-Boxdown-managed SSH/Codex entries for the computed, recorded, and provided
-aliases, and deletes the workspace's Boxdown cache/data directories. It does not
-delete the target repository directory or files inside it.
+Boxdown-managed SSH/Codex/Claude entries for the computed, recorded, and
+provided aliases, and deletes the workspace's Boxdown cache/data directories. It
+does not delete the target repository directory or files inside it.
 
 To remove multiple workspace containers, repeat `--workspace`:
 

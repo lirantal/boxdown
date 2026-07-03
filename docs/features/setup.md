@@ -5,6 +5,7 @@
 ```sh
 boxdown setup
 boxdown setup --target codex
+boxdown setup --target claude
 boxdown setup --recreate
 ```
 
@@ -25,13 +26,20 @@ interactive shell. It accepts:
 3. Generate a Boxdown-owned devcontainer config.
 4. Run `devcontainer up --workspace-folder <repo> --override-config <config>`.
 5. Install or update the Boxdown-managed SSH alias.
-6. Optionally install selected SSH targets such as Codex.
+6. Optionally install selected SSH targets such as Codex or Claude.
 
 When `--target codex` is provided, Boxdown writes the Codex app config entry for
 the same alias and container-side project path used by:
 
 ```sh
 boxdown ssh install --target codex
+```
+
+When `--target claude` is provided, Boxdown writes the Claude app SSH remote
+entry for the same alias used by:
+
+```sh
+boxdown ssh install --target claude
 ```
 
 When no target is provided, Boxdown uses the same optional target prompt as

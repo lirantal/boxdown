@@ -1,5 +1,6 @@
 import { existsSync } from 'node:fs'
 
+import { claudeSshConfigEntryForWorkspace, uninstallClaudeSshConfigHost } from './claude-app-config.ts'
 import { codexProjectEntryForWorkspace, uninstallCodexAppConfigProject, uninstallCodexGlobalStateProject } from './codex-app-config.ts'
 import { codingAgentFromCommand, type CodingAgentCli } from './coding-agents.ts'
 import { doctorHasFailures, formatDoctorText, runDoctorChecks } from './doctor.ts'
@@ -97,7 +98,7 @@ Commands:
   ssh install               Install or update an SSH host alias for the workspace
                             devcontainer.
   ssh uninstall             Remove Boxdown's managed SSH host alias block and
-                            matching Codex app project entry.
+                            matching Codex/Claude app entries.
   ssh-proxy                 Internal command used by the generated SSH
                             ProxyCommand. Starts or reuses the devcontainer and
                             bridges SSH over docker exec.
@@ -113,7 +114,7 @@ Options:
                       Repeatable with down.
   --alias <name>      SSH host alias. Defaults to <repo-name>-devcontainer.
   --target <name>     Optional SSH install target. Repeatable. Supported by
-                      setup and ssh install: codex.
+                      setup and ssh install: codex, claude.
   --port <port>       Tunnel a local port to the same remote port, or use
                       <local:remote>. Repeatable. Supported by tunnel.
   --recreate          Remove the existing devcontainer before starting.
@@ -561,7 +562,19 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
         process.stdout.write(`Codex app state backup: ${stateResult.backupPath}\n`)
       }
 
-      process.stdout.write('Restart Codex to apply the remote project removal.\n')
+      const claudeEntry = claudeSshConfigEntryForWorkspace(context, alias)
+      const claudeResult = uninstallClaudeSshConfigHost(claudeEntry)
+
+      process.stdout.write(`\nClaude SSH config: ${claudeResult.configPath}\n`)
+      process.stdout.write(claudeResult.changed
+        ? `Removed Claude SSH remote: ${claudeEntry.name} (${claudeEntry.sshHost})\n`
+        : `Claude SSH remote not installed: ${claudeEntry.name} (${claudeEntry.sshHost})\n`)
+
+      if (claudeResult.backupPath !== undefined) {
+        process.stdout.write(`Claude SSH config backup: ${claudeResult.backupPath}\n`)
+      }
+
+      process.stdout.write('Restart Codex and Claude to apply the remote project removal.\n')
       return 0
     }
 

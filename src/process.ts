@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process'
+import { delimiter } from 'node:path'
 
 export interface BufferedCommandOptions {
   cwd?: string
@@ -15,10 +16,58 @@ export interface CommandResult {
 }
 
 function mergedEnv (env?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  return {
+  const baseEnv = {
     ...process.env,
     ...(env ?? {})
   }
+
+  return {
+    ...baseEnv,
+    PATH: buildHostToolPath(baseEnv)
+  }
+}
+
+function uniquePathEntries (entries: readonly string[]): string[] {
+  const seen = new Set<string>()
+  const result: string[] = []
+
+  for (const entry of entries) {
+    if (entry.length === 0 || seen.has(entry)) {
+      continue
+    }
+
+    seen.add(entry)
+    result.push(entry)
+  }
+
+  return result
+}
+
+export function buildHostToolPath (env: NodeJS.ProcessEnv = process.env): string {
+  const home = env.HOME
+  const existingPath = env.PATH ?? ''
+  const configuredPrefix = env.BOXDOWN_HOST_PATH_PREFIX?.split(delimiter) ?? []
+  const guiFriendlyPrefix = [
+    ...(home === undefined ? [] : [
+      `${home}/.local/bin`,
+      `${home}/.docker/bin`
+    ]),
+    '/opt/homebrew/bin',
+    '/opt/homebrew/sbin',
+    '/usr/local/bin',
+    '/usr/local/sbin',
+    '/Applications/Docker.app/Contents/Resources/bin',
+    '/usr/bin',
+    '/bin',
+    '/usr/sbin',
+    '/sbin'
+  ]
+
+  return uniquePathEntries([
+    ...configuredPrefix,
+    ...existingPath.split(delimiter),
+    ...guiFriendlyPrefix
+  ]).join(delimiter)
 }
 
 function writeChunk (target: 'stdout' | 'stderr' | false, chunk: Buffer): void {
