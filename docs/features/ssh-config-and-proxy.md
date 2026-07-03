@@ -171,6 +171,11 @@ From the target project directory:
 boxdown tunnel --port 3030
 ```
 
+When `--port` is omitted in an interactive terminal, Boxdown prompts for one or
+more port mappings. Pressing Enter accepts the generated devcontainer published
+port when Boxdown can read one from the config, currently `3000`. Non-TTY and
+CI runs keep requiring an explicit `--port`.
+
 From another directory:
 
 ```sh

@@ -18,10 +18,10 @@ import { doctorHasFailures, formatDoctorText } from '../src/doctor.ts'
 import { canonicalGithubRemoteUrl, configureWorkspaceGithubGitAuth } from '../src/github-git-auth.ts'
 import { parseJsonc } from '../src/jsonc.ts'
 import { createWorkspaceListEntries, formatWorkspaceListText } from '../src/list.ts'
-import { commandWritesWorkspaceMetadata, parseCliArgs, parseTunnelPort, runCli, setupWorkspace, USAGE } from '../src/main.ts'
+import { commandWritesWorkspaceMetadata, parseCliArgs, parseTunnelPort, parseTunnelPortList, runCli, setupWorkspace, USAGE } from '../src/main.ts'
 import { listWorkspaceMetadata, readWorkspaceMetadata, recordWorkspaceDockerImage, writeWorkspaceMetadata } from '../src/metadata.ts'
 import { createWorkspaceContext } from '../src/paths.ts'
-import { promptMultiSelect, type PromptInput, type PromptOutput } from '../src/interactive-select.ts'
+import { promptConfirm, promptMultiSelect, promptText, type PromptInput, type PromptOutput } from '../src/interactive-prompts.ts'
 import { buildHostToolPath } from '../src/process.ts'
 import { DEFAULT_TTY_MAX_COLUMNS, interactiveCommandScript, interactiveShellEnvArgs, interactiveShellScript } from '../src/shell.ts'
 import { buildSshConfigBlock, defaultSshAlias, installSshConfig, removeSshConfigBlock, replaceSshConfigBlock, uninstallSshConfig } from '../src/ssh-config.ts'
@@ -237,6 +237,17 @@ async function withProcessEnv<T> (overrides: Record<string, string>, run: () => 
   }
 }
 
+async function withCwd<T> (cwd: string, run: () => Promise<T>): Promise<T> {
+  const previous = process.cwd()
+  process.chdir(cwd)
+
+  try {
+    return await run()
+  } finally {
+    process.chdir(previous)
+  }
+}
+
 describe('CLI parsing', () => {
   test('parses setup options', () => {
     assert.deepStrictEqual(parseCliArgs(['setup']), {
@@ -397,6 +408,20 @@ describe('CLI parsing', () => {
       localPort: 8080,
       remotePort: 3030
     })
+    assert.deepStrictEqual(parseTunnelPortList('3030, 8080:3031 9090'), [
+      {
+        localPort: 3030,
+        remotePort: 3030
+      },
+      {
+        localPort: 8080,
+        remotePort: 3031
+      },
+      {
+        localPort: 9090,
+        remotePort: 9090
+      }
+    ])
     assert.deepStrictEqual(parseCliArgs(['tunnel', '--port', '3030']), {
       command: 'tunnel',
       workspace: undefined,
@@ -543,6 +568,7 @@ describe('CLI parsing', () => {
     assert.match(USAGE, /Repeatable\. Supported by[\s\S]*setup and ssh install: codex, claude\./)
     assert.match(USAGE, /ssh-proxy\s+Internal command used by the generated SSH/)
     assert.match(USAGE, /tunnel\s+Start or reuse the devcontainer/)
+    assert.match(USAGE, /boxdown tunnel \[--port <port>\]/)
     assert.match(USAGE, /--port <port>\s+Tunnel a local port/)
     assert.match(USAGE, /refresh-gh-token\s+Start or reuse the devcontainer/)
     assert.match(USAGE, /refresh-gh-token-running\s+Refresh GitHub CLI auth only if/)
@@ -651,6 +677,157 @@ describe('interactive install target prompt', () => {
     assert.deepStrictEqual(await resultPromise, {
       status: 'cancelled',
       values: []
+    })
+  })
+
+  test('text prompt accepts a default value on blank input', async () => {
+    const { input, output, outputText } = fakePromptStreams()
+    const resultPromise = promptText({
+      title: 'Tunnel port(s) to forward?',
+      defaultValue: '3000',
+      summaryLabel: 'Tunnel ports',
+      validate: (value) => {
+        try {
+          parseTunnelPortList(value)
+          return undefined
+        } catch (error) {
+          return error instanceof Error ? error.message : String(error)
+        }
+      },
+      input,
+      output,
+      env: { CI: 'false' }
+    })
+
+    input.write('\n')
+
+    assert.deepStrictEqual(await resultPromise, {
+      status: 'submitted',
+      value: '3000'
+    })
+    assert.match(outputText(), /\u001B\[36m◆\u001B\[0m {2}\u001B\[1mTunnel port\(s\) to forward\?\u001B\[0m/)
+    assert.match(outputText(), /Tunnel ports: 3000/)
+  })
+
+  test('text prompt retries invalid tunnel ports until corrected', async () => {
+    const { input, output, outputText } = fakePromptStreams()
+    const resultPromise = promptText({
+      title: 'Tunnel port(s) to forward?',
+      summaryLabel: 'Tunnel ports',
+      validate: (value) => {
+        try {
+          parseTunnelPortList(value)
+          return undefined
+        } catch (error) {
+          return error instanceof Error ? error.message : String(error)
+        }
+      },
+      input,
+      output,
+      env: { CI: 'false' }
+    })
+
+    input.write('nope\n')
+    input.write('3030, 8080:3031\n')
+
+    assert.deepStrictEqual(await resultPromise, {
+      status: 'submitted',
+      value: '3030, 8080:3031'
+    })
+    assert.match(outputText(), /Invalid tunnel port: nope/)
+  })
+
+  test('confirm prompt defaults to cancel', async () => {
+    const { input, output, outputText } = fakePromptStreams()
+    const resultPromise = promptConfirm({
+      title: 'Purge Boxdown workspace?',
+      details: ['Workspace: /tmp/demo'],
+      confirmLabel: 'Purge',
+      cancelLabel: 'Cancel',
+      summaryLabel: 'Purge',
+      input,
+      output,
+      env: { CI: 'false' }
+    })
+
+    input.write('\r')
+
+    assert.deepStrictEqual(await resultPromise, {
+      status: 'denied'
+    })
+    assert.match(outputText(), /\u001B\[36m│\u001B\[0m {2}\u001B\[32m■\u001B\[0m \u001B\[1mCancel\u001B\[0m/)
+    assert.match(outputText(), /Purge: canceled/)
+  })
+
+  test('confirm prompt confirms with arrow selection', async () => {
+    const { input, output, outputText } = fakePromptStreams()
+    const resultPromise = promptConfirm({
+      title: 'Purge Boxdown workspace?',
+      details: ['Workspace: /tmp/demo'],
+      confirmLabel: 'Purge',
+      cancelLabel: 'Cancel',
+      summaryLabel: 'Purge',
+      input,
+      output,
+      env: { CI: 'false' }
+    })
+
+    input.write('\u001B[C')
+    input.write('\r')
+
+    assert.deepStrictEqual(await resultPromise, {
+      status: 'confirmed'
+    })
+    assert.match(outputText(), /\u001B\[36m│\u001B\[0m {2}\u001B\[32m■\u001B\[0m \u001B\[1mPurge\u001B\[0m/)
+    assert.match(outputText(), /Purge: confirmed/)
+  })
+
+  test('confirm prompt cancels on Ctrl-C', async () => {
+    const { input, output } = fakePromptStreams()
+    const resultPromise = promptConfirm({
+      title: 'Purge Boxdown workspace?',
+      details: ['Workspace: /tmp/demo'],
+      confirmLabel: 'Purge',
+      cancelLabel: 'Cancel',
+      summaryLabel: 'Purge',
+      input,
+      output,
+      env: { CI: 'false' }
+    })
+
+    input.write('\u0003')
+
+    assert.deepStrictEqual(await resultPromise, {
+      status: 'cancelled'
+    })
+  })
+
+  test('new prompt types skip without blocking when input is not interactive', async () => {
+    const input = new PassThrough() as PassThrough & PromptInput
+    const output = new PassThrough() as PassThrough & PromptOutput
+
+    input.isTTY = false
+    output.isTTY = false
+
+    assert.deepStrictEqual(await promptText({
+      title: 'Tunnel port(s) to forward?',
+      summaryLabel: 'Tunnel ports',
+      input,
+      output,
+      env: { CI: 'false' }
+    }), {
+      status: 'non-interactive'
+    })
+    assert.deepStrictEqual(await promptConfirm({
+      title: 'Purge Boxdown workspace?',
+      confirmLabel: 'Purge',
+      cancelLabel: 'Cancel',
+      summaryLabel: 'Purge',
+      input,
+      output,
+      env: { CI: 'false' }
+    }), {
+      status: 'non-interactive'
     })
   })
 })
@@ -776,6 +953,179 @@ describe('CLI execution', () => {
       assert.match(result.stderr, /Workspace does not exist:/)
       assert.match(result.stdout, /Removed devcontainer: valid-container/)
     })
+  })
+
+  test('keeps current down behavior when cwd is a known workspace', async () => {
+    const workspace = tempDir('down-known-cwd-workspace')
+    const env = {
+      HOME: tempDir('down-known-cwd-home'),
+      BOXDOWN_CACHE_HOME: tempDir('down-known-cwd-cache'),
+      BOXDOWN_DATA_HOME: tempDir('down-known-cwd-data')
+    }
+    const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+
+    writeWorkspaceMetadata(context, defaultSshAlias(context.workspaceBasename))
+
+    await withFakeDocker([
+      { workspace, id: 'known-cwd-container' }
+    ], async (logPath, dockerEnv) => {
+      const code = await withProcessEnv({
+        ...dockerEnv,
+        ...env
+      }, async () => withCwd(workspace, async () => runCli(['down'])))
+      const calls = fakeDockerCalls(logPath)
+
+      assert.strictEqual(code, 0)
+      assert.ok(calls.includes('rm -f known-cwd-container'))
+    })
+  })
+
+  test('prompts for known workspaces when down runs from an unknown cwd', async () => {
+    const alpha = tempDir('down-prompt-alpha-workspace')
+    const beta = tempDir('down-prompt-beta-workspace')
+    const unknown = tempDir('down-prompt-unknown-cwd')
+    const env = {
+      HOME: tempDir('down-prompt-home'),
+      BOXDOWN_CACHE_HOME: tempDir('down-prompt-cache'),
+      BOXDOWN_DATA_HOME: tempDir('down-prompt-data')
+    }
+    const alphaContext = createWorkspaceContext({ workspace: alpha, env, assetsDevcontainerDir })
+    const betaContext = createWorkspaceContext({ workspace: beta, env, assetsDevcontainerDir })
+    const { input, output } = fakePromptStreams()
+
+    writeWorkspaceMetadata(alphaContext, defaultSshAlias(alphaContext.workspaceBasename))
+    writeWorkspaceMetadata(betaContext, defaultSshAlias(betaContext.workspaceBasename))
+
+    await withFakeDocker([
+      { workspace: alpha, id: 'alpha-prompt-container' },
+      { workspace: beta, id: 'beta-prompt-container' }
+    ], async (logPath, dockerEnv) => {
+      const codePromise = withProcessEnv({
+        ...dockerEnv,
+        ...env
+      }, async () => withCwd(unknown, async () => runCli(['down'], {
+        promptInput: input,
+        promptOutput: output,
+        env: { ...process.env, CI: 'false' }
+      })))
+
+      input.write('\u001B[A')
+      input.write(' ')
+      input.write('\u001B[A')
+      input.write(' ')
+      input.write('\r')
+
+      const code = await codePromise
+      const calls = fakeDockerCalls(logPath)
+
+      assert.strictEqual(code, 0)
+      assert.ok(calls.includes('rm -f alpha-prompt-container'))
+      assert.ok(calls.includes('rm -f beta-prompt-container'))
+    })
+  })
+
+  test('cancels prompted down without removing workspaces', async () => {
+    const workspace = tempDir('down-prompt-cancel-workspace')
+    const unknown = tempDir('down-prompt-cancel-unknown-cwd')
+    const env = {
+      HOME: tempDir('down-prompt-cancel-home'),
+      BOXDOWN_CACHE_HOME: tempDir('down-prompt-cancel-cache'),
+      BOXDOWN_DATA_HOME: tempDir('down-prompt-cancel-data')
+    }
+    const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+    const { input, output } = fakePromptStreams()
+
+    writeWorkspaceMetadata(context, defaultSshAlias(context.workspaceBasename))
+
+    await withFakeDocker([
+      { workspace, id: 'cancel-down-container' }
+    ], async (logPath, dockerEnv) => {
+      const codePromise = withProcessEnv({
+        ...dockerEnv,
+        ...env
+      }, async () => withCwd(unknown, async () => runCli(['down'], {
+        promptInput: input,
+        promptOutput: output,
+        env: { ...process.env, CI: 'false' }
+      })))
+
+      input.write('\r')
+
+      const code = await codePromise
+      const calls = fakeDockerCalls(logPath)
+
+      assert.strictEqual(code, 1)
+      assert.ok(!calls.some((line) => line.startsWith('rm -f')))
+    })
+  })
+
+  test('keeps non-interactive unknown-cwd down behavior', async () => {
+    const workspace = tempDir('down-non-tty-known-workspace')
+    const unknown = tempDir('down-non-tty-unknown-cwd')
+    const env = {
+      HOME: tempDir('down-non-tty-home'),
+      BOXDOWN_CACHE_HOME: tempDir('down-non-tty-cache'),
+      BOXDOWN_DATA_HOME: tempDir('down-non-tty-data')
+    }
+    const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+
+    writeWorkspaceMetadata(context, defaultSshAlias(context.workspaceBasename))
+
+    await withFakeDocker([
+      { workspace, id: 'non-tty-known-container' }
+    ], async (logPath, dockerEnv) => {
+      const code = await withProcessEnv({
+        ...dockerEnv,
+        ...env
+      }, async () => withCwd(unknown, async () => runCli(['down'])))
+      const calls = fakeDockerCalls(logPath)
+
+      assert.strictEqual(code, 0)
+      assert.ok(calls.some((line) => line.startsWith('ps -a ')))
+      assert.ok(!calls.some((line) => line.startsWith('rm -f')))
+    })
+  })
+
+  test('tunnel with no port still errors without a TTY and writes no metadata', () => {
+    const workspace = tempDir('tunnel-non-tty-workspace')
+    const dataDir = tempDir('tunnel-non-tty-data')
+    const result = runCliProcess(['tunnel', '--workspace', workspace], {
+      ...process.env,
+      HOME: tempDir('tunnel-non-tty-home'),
+      BOXDOWN_CACHE_HOME: tempDir('tunnel-non-tty-cache'),
+      BOXDOWN_DATA_HOME: dataDir,
+      BOXDOWN_SSH_CONFIG: join(tempDir('tunnel-non-tty-ssh'), 'config')
+    })
+
+    assert.strictEqual(result.code, 1)
+    assert.match(result.stderr, /tunnel requires at least one --port value/)
+    assert.deepStrictEqual(listWorkspaceMetadata(dataDir), [])
+  })
+
+  test('cancels prompted tunnel without writing metadata or SSH config', async () => {
+    const workspace = tempDir('tunnel-prompt-cancel-workspace')
+    const dataDir = tempDir('tunnel-prompt-cancel-data')
+    const sshConfigPath = join(tempDir('tunnel-prompt-cancel-ssh'), 'config')
+    const { input, output } = fakePromptStreams()
+
+    const codePromise = withProcessEnv({
+      HOME: tempDir('tunnel-prompt-cancel-home'),
+      BOXDOWN_CACHE_HOME: tempDir('tunnel-prompt-cancel-cache'),
+      BOXDOWN_DATA_HOME: dataDir,
+      BOXDOWN_SSH_CONFIG: sshConfigPath
+    }, async () => runCli(['tunnel', '--workspace', workspace], {
+      promptInput: input,
+      promptOutput: output,
+      env: { ...process.env, CI: 'false' }
+    }))
+
+    input.end()
+
+    const code = await codePromise
+
+    assert.strictEqual(code, 1)
+    assert.deepStrictEqual(listWorkspaceMetadata(dataDir), [])
+    assert.strictEqual(existsSync(sshConfigPath), false)
   })
 
   test('installs explicit Codex ssh install target', () => {
@@ -1110,6 +1460,92 @@ describe('CLI execution', () => {
       assert.ok(calls.includes('image rm -f sha256:failing-image'))
       assert.match(result.stderr, /Failed devcontainer failing-container/)
       assert.match(result.stderr, /Failed Docker image sha256:failing-image/)
+      assert.strictEqual(existsSync(context.workspaceCacheDir), false)
+      assert.strictEqual(existsSync(context.workspaceDataDir), false)
+    })
+  })
+
+  test('cancels interactive purge before Docker or state removal', async () => {
+    const workspace = tempDir('purge-prompt-cancel-workspace')
+    const env = {
+      HOME: tempDir('purge-prompt-cancel-home'),
+      BOXDOWN_CACHE_HOME: tempDir('purge-prompt-cancel-cache'),
+      BOXDOWN_DATA_HOME: tempDir('purge-prompt-cancel-data'),
+      BOXDOWN_SSH_CONFIG: join(tempDir('purge-prompt-cancel-ssh'), 'config'),
+      BOXDOWN_CODEX_APP_CONFIG: join(tempDir('purge-prompt-cancel-codex-app'), 'config.json'),
+      BOXDOWN_CODEX_GLOBAL_STATE: join(tempDir('purge-prompt-cancel-codex-state'), '.codex-global-state.json')
+    }
+    const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+    const { input, output } = fakePromptStreams()
+
+    mkdirSync(context.workspaceCacheDir, { recursive: true })
+    writeWorkspaceMetadata(context, defaultSshAlias(context.workspaceBasename))
+
+    await withFakeDocker([
+      { workspace, id: 'purge-prompt-cancel-container' }
+    ], async (logPath, dockerEnv) => {
+      const codePromise = withProcessEnv({
+        ...dockerEnv,
+        ...env
+      }, async () => runCli(['purge', '--workspace', workspace], {
+        promptInput: input,
+        promptOutput: output,
+        env: { ...process.env, CI: 'false' }
+      }))
+
+      input.write('\r')
+
+      const code = await codePromise
+      const calls = fakeDockerCalls(logPath)
+
+      assert.strictEqual(code, 1)
+      assert.deepStrictEqual(calls, [])
+      assert.strictEqual(existsSync(context.workspaceCacheDir), true)
+      assert.strictEqual(existsSync(context.workspaceDataDir), true)
+    })
+  })
+
+  test('confirmed interactive purge runs the existing purge flow', async () => {
+    const workspace = tempDir('purge-prompt-confirm-workspace')
+    const env = {
+      HOME: tempDir('purge-prompt-confirm-home'),
+      BOXDOWN_CACHE_HOME: tempDir('purge-prompt-confirm-cache'),
+      BOXDOWN_DATA_HOME: tempDir('purge-prompt-confirm-data'),
+      BOXDOWN_SSH_CONFIG: join(tempDir('purge-prompt-confirm-ssh'), 'config'),
+      BOXDOWN_CODEX_APP_CONFIG: join(tempDir('purge-prompt-confirm-codex-app'), 'config.json'),
+      BOXDOWN_CODEX_GLOBAL_STATE: join(tempDir('purge-prompt-confirm-codex-state'), '.codex-global-state.json')
+    }
+    const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+    const { input, output } = fakePromptStreams()
+
+    mkdirSync(context.workspaceCacheDir, { recursive: true })
+    writeWorkspaceMetadata(context, defaultSshAlias(context.workspaceBasename))
+
+    await withFakeDocker([
+      {
+        workspace,
+        id: 'purge-prompt-confirm-container',
+        imageId: 'sha256:purge-prompt-confirm-image'
+      }
+    ], async (logPath, dockerEnv) => {
+      const codePromise = withProcessEnv({
+        ...dockerEnv,
+        ...env
+      }, async () => runCli(['purge', '--workspace', workspace], {
+        promptInput: input,
+        promptOutput: output,
+        env: { ...process.env, CI: 'false' }
+      }))
+
+      input.write('\u001B[C')
+      input.write('\r')
+
+      const code = await codePromise
+      const calls = fakeDockerCalls(logPath)
+
+      assert.strictEqual(code, 0)
+      assert.ok(calls.includes('rm -f -v purge-prompt-confirm-container'))
+      assert.ok(calls.includes('image rm -f sha256:purge-prompt-confirm-image'))
       assert.strictEqual(existsSync(context.workspaceCacheDir), false)
       assert.strictEqual(existsSync(context.workspaceDataDir), false)
     })

@@ -3,11 +3,12 @@ import { existsSync } from 'node:fs'
 import { claudeSshConfigEntryForWorkspace, uninstallClaudeSshConfigHost } from './claude-app-config.ts'
 import { codexProjectEntryForWorkspace, uninstallCodexAppConfigProject, uninstallCodexGlobalStateProject } from './codex-app-config.ts'
 import { codingAgentFromCommand, type CodingAgentCli } from './coding-agents.ts'
+import { buildGeneratedDevcontainerConfig, publishContainerPortFromConfig } from './config.ts'
 import { doctorHasFailures, formatDoctorText, runDoctorChecks } from './doctor.ts'
 import { startDevcontainer, printPortHint, openShell, openCodingAgentCli, ensureContainerSshRuntime, runSshdProxy, refreshContainerGhAuth, refreshContainerCodingAgentClis, ensureContainerCodingAgentCli, findRunningContainerId, findWorkspaceContainer, stopWorkspaceContainer, removeWorkspaceContainer, listWorkspaceContainers, openSshTunnel, type TunnelPortForward } from './devcontainer.ts'
-import { promptMultiSelect, type PromptInput, type PromptOutput } from './interactive-select.ts'
+import { canPromptInteractively, promptConfirm, promptMultiSelect, promptText, type PromptInput, type PromptOutput } from './interactive-prompts.ts'
 import { createWorkspaceListEntries, formatWorkspaceListText } from './list.ts'
-import { listWorkspaceMetadata, writeWorkspaceMetadata } from './metadata.ts'
+import { listWorkspaceMetadata, readWorkspaceMetadata, writeWorkspaceMetadata } from './metadata.ts'
 import { createWorkspaceContext, defaultDataRoot, type WorkspaceContext } from './paths.ts'
 import { purgeWorkspace } from './purge.ts'
 import { defaultSshAlias, installSshConfig, uninstallSshConfig } from './ssh-config.ts'
@@ -67,7 +68,7 @@ export const USAGE = `Usage:
   boxdown ssh install [--workspace <path>] [--alias <name>] [--target <name>]...
   boxdown ssh uninstall [--workspace <path>] [--alias <name>]
   boxdown ssh-proxy [--workspace <path>] [--alias <name>]
-  boxdown tunnel --port <port> [--port <local:remote>] [--workspace <path>] [--alias <name>]
+  boxdown tunnel [--port <port>] [--port <local:remote>] [--workspace <path>] [--alias <name>]
   boxdown refresh-gh-token [--workspace <path>]
   boxdown refresh-gh-token-running [--workspace <path>]
 
@@ -399,8 +400,88 @@ export function parseTunnelPort (value: string): TunnelPortForward {
   throw new Error(`Invalid tunnel port: ${value}`)
 }
 
-async function runDownCommand (workspaces: string[] | undefined): Promise<number> {
-  const targetWorkspaces = workspaces === undefined || workspaces.length === 0 ? [undefined] : workspaces
+export function parseTunnelPortList (value: string): TunnelPortForward[] {
+  const tokens = value.split(/[,\s]+/u).filter((token) => token.length > 0)
+
+  if (tokens.length === 0) {
+    throw new Error('tunnel requires at least one --port value')
+  }
+
+  return tokens.map((token) => parseTunnelPort(token))
+}
+
+interface ResolvedDownWorkspaces {
+  workspaces: string[] | undefined
+  cancelled: boolean
+}
+
+async function resolveDownWorkspaces (
+  workspaces: string[] | undefined,
+  options: RunCliOptions
+): Promise<ResolvedDownWorkspaces> {
+  if (workspaces !== undefined && workspaces.length > 0) {
+    return { workspaces, cancelled: false }
+  }
+
+  const context = createWorkspaceContext()
+  const metadata = readWorkspaceMetadata(context)
+
+  if (metadata?.workspaceFolder === context.workspaceFolder) {
+    return { workspaces: undefined, cancelled: false }
+  }
+
+  const input = options.promptInput ?? process.stdin
+  const output = options.promptOutput ?? process.stdout
+  const env = options.env ?? process.env
+
+  if (!canPromptInteractively(input, output, env)) {
+    return { workspaces: undefined, cancelled: false }
+  }
+
+  const entries = createWorkspaceListEntries(
+    listWorkspaceMetadata(defaultDataRoot()),
+    await listWorkspaceContainers(),
+    existsSync
+  ).filter((entry) => entry.repoExists)
+
+  if (entries.length === 0) {
+    return { workspaces: undefined, cancelled: false }
+  }
+
+  const result = await promptMultiSelect<string>({
+    title: 'Remove Boxdown devcontainers?',
+    choices: entries.map((entry) => ({
+      value: entry.workspaceFolder,
+      label: entry.workspaceBasename,
+      description: `${entry.state} - ${entry.workspaceFolder}`
+    })),
+    skipLabel: 'Cancel',
+    summaryLabel: 'Down workspaces',
+    input,
+    output,
+    env
+  })
+
+  if (result.status === 'selected') {
+    return { workspaces: result.values, cancelled: false }
+  }
+
+  if (result.status === 'non-interactive') {
+    return { workspaces: undefined, cancelled: false }
+  }
+
+  return { workspaces: undefined, cancelled: true }
+}
+
+async function runDownCommand (workspaces: string[] | undefined, options: RunCliOptions): Promise<number> {
+  const resolved = await resolveDownWorkspaces(workspaces, options)
+
+  if (resolved.cancelled) {
+    process.stderr.write('Canceled down.\n')
+    return 1
+  }
+
+  const targetWorkspaces = resolved.workspaces === undefined || resolved.workspaces.length === 0 ? [undefined] : resolved.workspaces
   let failed = false
 
   for (const workspace of targetWorkspaces) {
@@ -420,6 +501,89 @@ interface ResolvedSshInstallTargets {
   targets: SshConfigInstallTarget[]
   cancelled: boolean
   skippedNonInteractive: boolean
+}
+
+interface ResolvedTunnelPorts {
+  tunnelPorts: TunnelPortForward[]
+  cancelled: boolean
+}
+
+async function resolveTunnelPorts (
+  parsed: ParsedCli,
+  context: ReturnType<typeof createWorkspaceContext>,
+  options: RunCliOptions
+): Promise<ResolvedTunnelPorts> {
+  if (parsed.tunnelPorts !== undefined && parsed.tunnelPorts.length > 0) {
+    return {
+      tunnelPorts: parsed.tunnelPorts,
+      cancelled: false
+    }
+  }
+
+  const input = options.promptInput ?? process.stdin
+  const output = options.promptOutput ?? process.stdout
+  const env = options.env ?? process.env
+
+  if (!canPromptInteractively(input, output, env)) {
+    return {
+      tunnelPorts: [],
+      cancelled: false
+    }
+  }
+
+  const defaultPort = publishContainerPortFromConfig(buildGeneratedDevcontainerConfig(context))
+  const result = await promptText({
+    title: 'Tunnel port(s) to forward?',
+    details: ['Use a port like 3030, or a mapping like 8080:3031.'],
+    defaultValue: defaultPort,
+    summaryLabel: 'Tunnel ports',
+    validate: (value) => {
+      try {
+        parseTunnelPortList(value)
+        return undefined
+      } catch (error) {
+        return error instanceof Error ? error.message : String(error)
+      }
+    },
+    input,
+    output,
+    env
+  })
+
+  if (result.status === 'submitted') {
+    return {
+      tunnelPorts: parseTunnelPortList(result.value),
+      cancelled: false
+    }
+  }
+
+  return {
+    tunnelPorts: [],
+    cancelled: result.status === 'cancelled'
+  }
+}
+
+async function confirmPurgeWorkspace (
+  context: ReturnType<typeof createWorkspaceContext>,
+  parsed: ParsedCli,
+  options: RunCliOptions
+): Promise<boolean> {
+  const result = await promptConfirm({
+    title: 'Purge Boxdown workspace?',
+    details: [
+      `Workspace: ${context.workspaceFolder}`,
+      'Removes devcontainer, recorded image, SSH/Codex entries, cache, and data.',
+      parsed.alias === undefined ? 'Alias: default and recorded aliases' : `Alias: ${parsed.alias}, default, and recorded aliases`
+    ],
+    confirmLabel: 'Purge',
+    cancelLabel: 'Cancel',
+    summaryLabel: 'Purge',
+    input: options.promptInput,
+    output: options.promptOutput,
+    env: options.env
+  })
+
+  return result.status === 'confirmed' || result.status === 'non-interactive'
 }
 
 async function resolveSshInstallTargets (
@@ -442,6 +606,7 @@ async function resolveSshInstallTargets (
       description: target.description
     })),
     skipLabel: 'Skip optional targets',
+    summaryLabel: 'Optional SSH targets',
     input: options.promptInput,
     output: options.promptOutput,
     env: options.env
@@ -504,14 +669,14 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
     }
 
     if (parsed.command === 'down') {
-      return runDownCommand(parsed.workspaces)
+      return runDownCommand(parsed.workspaces, options)
     }
 
     const context = createWorkspaceContext({ workspace: parsed.workspace })
     const alias = parsed.alias ?? defaultSshAlias(context.workspaceBasename)
     const aliasSource = parsed.alias === undefined ? 'default' : 'provided'
 
-    if (parsed.command !== 'ssh-install' && parsed.command !== 'setup' && commandWritesWorkspaceMetadata(parsed.command)) {
+    if (parsed.command !== 'ssh-install' && parsed.command !== 'setup' && parsed.command !== 'tunnel' && commandWritesWorkspaceMetadata(parsed.command)) {
       writeWorkspaceMetadata(context, alias)
     }
 
@@ -597,6 +762,11 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
     }
 
     if (parsed.command === 'purge') {
+      if (!await confirmPurgeWorkspace(context, parsed, options)) {
+        process.stderr.write('Canceled purge.\n')
+        return 1
+      }
+
       return purgeWorkspace(context, { alias: parsed.alias })
     }
 
@@ -644,11 +814,19 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
     }
 
     if (parsed.command === 'tunnel') {
-      const tunnelPorts = parsed.tunnelPorts ?? []
+      const resolvedTunnelPorts = await resolveTunnelPorts(parsed, context, options)
+
+      if (resolvedTunnelPorts.cancelled) {
+        process.stderr.write('Canceled tunnel.\n')
+        return 1
+      }
+
+      const tunnelPorts = resolvedTunnelPorts.tunnelPorts
       if (tunnelPorts.length === 0) {
         throw new Error('tunnel requires at least one --port value')
       }
 
+      writeWorkspaceMetadata(context, alias)
       await installSshConfig(context, alias, { quiet: true })
       await startDevcontainer(context, {
         recreate: parsed.recreate,

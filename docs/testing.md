@@ -78,10 +78,15 @@ run in an interactive terminal. The explicit `--target codex` and
 `--target claude` commands verify scriptable target installation, and the `CI=1`
 command verifies the non-interactive skip path without blocking.
 
+The plain `tunnel` command should prompt for ports in an interactive terminal.
+Use `boxdown tunnel --workspace /path/to/repo --port 3030` when testing the
+non-interactive or fully explicit path.
+
 When checking browser access, start a dev server inside the container and keep a
 foreground tunnel open from the host:
 
 ```sh
+boxdown tunnel --workspace /path/to/repo
 boxdown tunnel --workspace /path/to/repo --port 3030
 ```
 

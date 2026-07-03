@@ -99,9 +99,11 @@ After `up`, Boxdown asks Docker for the mapped host binding and prints the
 result as an HTTP URL when available.
 
 For dev servers that choose another port after the container is already running,
-use the SSH tunnel command instead:
+use the SSH tunnel command instead. Interactive terminals can omit `--port` to
+be prompted for the mapping:
 
 ```sh
+boxdown tunnel
 boxdown tunnel --port 3030
 boxdown tunnel --workspace /path/to/project --port 3030
 ```

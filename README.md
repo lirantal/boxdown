@@ -102,6 +102,10 @@ container to your host browser:
 npx boxdown tunnel --port 3030
 ```
 
+If `--port` is omitted in an interactive terminal, Boxdown asks which port or
+port mappings to forward and defaults to the generated devcontainer published
+port when available. Non-interactive runs still require `--port`.
+
 This keeps a foreground SSH tunnel open until you press Ctrl-C. The host and
 Codex in-app browser can then open `http://localhost:3030/`. Repeat `--port`
 or use `<local:remote>` mappings when needed:
@@ -112,7 +116,8 @@ npx boxdown tunnel --port 3030 --port 8080:3031
 
 Use `--workspace <path>` only when running the command from a different
 directory. Repeat it with `down` to remove multiple workspace containers in one
-command.
+command. When `down` runs from a directory that is not a known Boxdown
+workspace, interactive terminals show a workspace picker instead.
 
 Remove Boxdown's managed SSH host block and matching Codex/Claude app entries
 when you no longer need the alias:
@@ -178,7 +183,9 @@ Shared options:
 Use `boxdown purge` when you want to remove the workspace's Boxdown-managed
 environment residue: the devcontainer, its exact recorded Docker image, managed
 SSH/Codex/Claude entries, and Boxdown cache/data for that workspace. It does
-not delete the local repository directory or files inside it.
+not delete the local repository directory or files inside it. Interactive
+terminals ask for confirmation before purging; non-interactive runs keep the
+direct behavior.
 
 ## Contributing
 

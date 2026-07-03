@@ -69,8 +69,17 @@ To remove multiple workspace containers, repeat `--workspace`:
 boxdown down --workspace /path/to/repo-a --workspace /path/to/repo-b
 ```
 
+When `down` runs without `--workspace` from a directory that is not a known
+Boxdown workspace, interactive terminals show a multi-select list of known
+workspaces with existing repository paths. Non-interactive runs keep the
+current-directory behavior.
+
 Batch `down` continues after individual workspace failures, but exits nonzero if
 any requested workspace cannot be resolved or removed.
+
+Interactive `purge` runs ask for confirmation before removing devcontainer,
+image, SSH/Codex integration, cache, and data state. Non-interactive purge runs
+do not prompt so existing scripts keep working.
 
 ## Doctor
 
