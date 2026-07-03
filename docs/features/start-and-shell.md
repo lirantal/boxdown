@@ -17,6 +17,9 @@ boxdown antigravity
 --recreate
 ```
 
+Use `boxdown setup` when you want to prepare the devcontainer and SSH/app
+integration without opening an interactive shell.
+
 `boxdown shell` remains supported as an alias for `boxdown start`, but `start`
 is the canonical command used in help and documentation.
 `boxdown cc` remains supported as an alias for `boxdown claude`, but `claude`

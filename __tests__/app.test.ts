@@ -3,6 +3,7 @@ import { execFileSync, spawnSync } from 'node:child_process'
 import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
+import { PassThrough } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import { describe, test } from 'node:test'
 
@@ -16,7 +17,7 @@ import { doctorHasFailures, formatDoctorText } from '../src/doctor.ts'
 import { canonicalGithubRemoteUrl, configureWorkspaceGithubGitAuth } from '../src/github-git-auth.ts'
 import { parseJsonc } from '../src/jsonc.ts'
 import { createWorkspaceListEntries, formatWorkspaceListText } from '../src/list.ts'
-import { commandWritesWorkspaceMetadata, parseCliArgs, parseTunnelPort, USAGE } from '../src/main.ts'
+import { commandWritesWorkspaceMetadata, parseCliArgs, parseSetupTargetPromptAnswer, parseTunnelPort, promptSetupTarget, setupWorkspace, shouldPromptSetupTarget, USAGE } from '../src/main.ts'
 import { listWorkspaceMetadata, readWorkspaceMetadata, recordWorkspaceDockerImage, writeWorkspaceMetadata } from '../src/metadata.ts'
 import { createWorkspaceContext } from '../src/paths.ts'
 import { DEFAULT_TTY_MAX_COLUMNS, interactiveCommandScript, interactiveShellEnvArgs, interactiveShellScript } from '../src/shell.ts'
@@ -181,6 +182,24 @@ function fakeDockerCalls (logPath: string): string[] {
 }
 
 describe('CLI parsing', () => {
+  test('parses setup options', () => {
+    assert.deepStrictEqual(parseCliArgs(['setup']), {
+      command: 'setup',
+      workspace: undefined,
+      alias: undefined,
+      recreate: false,
+      json: false
+    })
+    assert.deepStrictEqual(parseCliArgs(['setup', '--workspace', '/tmp/project', '--alias', 'demo-devcontainer', '--recreate', '--target', 'codex']), {
+      command: 'setup',
+      workspace: '/tmp/project',
+      alias: 'demo-devcontainer',
+      target: 'codex',
+      recreate: true,
+      json: false
+    })
+  })
+
   test('parses start options', () => {
     assert.deepStrictEqual(parseCliArgs(['start', '--workspace', '/tmp/project', '--recreate']), {
       command: 'start',
@@ -396,12 +415,17 @@ describe('CLI parsing', () => {
     assert.throws(() => parseCliArgs(['ssh', 'uninstall', 'extra']), /Unknown ssh command: uninstall extra/)
     assert.throws(() => parseCliArgs(['install-ssh-config']), /Unknown command/)
     assert.throws(() => parseCliArgs(['start', '--json']), /--json is only supported with status and list/)
-    assert.throws(() => parseCliArgs(['ssh', 'install', '--target', 'cursor']), /Unsupported ssh install target: cursor/)
-    assert.throws(() => parseCliArgs(['start', '--target', 'codex']), /--target is only supported with ssh install/)
+    assert.throws(() => parseCliArgs(['ssh', 'install', '--target', 'cursor']), /Unsupported target: cursor/)
+    assert.throws(() => parseCliArgs(['setup', '--target', 'cursor']), /Unsupported target: cursor/)
+    assert.throws(() => parseCliArgs(['start', '--target', 'codex']), /--target is only supported with setup and ssh install/)
     assert.throws(() => parseCliArgs(['start', '--port', '3030']), /--port is only supported with tunnel/)
-    assert.throws(() => parseCliArgs(['codex', '--target', 'codex']), /--target is only supported with ssh install/)
+    assert.throws(() => parseCliArgs(['codex', '--target', 'codex']), /--target is only supported with setup and ssh install/)
     assert.throws(() => parseCliArgs(['codex', '--port', '3030']), /--port is only supported with tunnel/)
     assert.throws(() => parseCliArgs(['start', '--', '--ignored']), /passthrough is only supported/)
+    assert.throws(() => parseCliArgs(['setup', '--json']), /--json is only supported with status and list/)
+    assert.throws(() => parseCliArgs(['setup', '--port', '3030']), /--port is only supported with tunnel/)
+    assert.throws(() => parseCliArgs(['setup', '--workspace', '/tmp/a', '--workspace', '/tmp/b']), /--workspace can only be repeated with down/)
+    assert.throws(() => parseCliArgs(['setup', '--', '--ignored']), /passthrough is only supported/)
     assert.throws(() => parseCliArgs(['purge', '--json']), /--json is only supported with status and list/)
     assert.throws(() => parseCliArgs(['purge', '--port', '3030']), /--port is only supported with tunnel/)
     assert.throws(() => parseCliArgs(['purge', '--recreate']), /--recreate is not supported with purge/)
@@ -416,6 +440,8 @@ describe('CLI parsing', () => {
     const usageLines = USAGE.split(/\r?\n/)
 
     assert.match(USAGE, /Commands:/)
+    assert.match(USAGE, /boxdown setup \[--workspace <path>\] \[--alias <name>\] \[--recreate\] \[--target codex\]/)
+    assert.match(USAGE, /setup\s+Prepare the workspace devcontainer/)
     assert.match(USAGE, /start, shell\s+Start or reuse the workspace devcontainer/)
     assert.match(USAGE, /codex\s+Start or reuse the devcontainer, then launch Codex/)
     assert.match(USAGE, /claude, cc\s+Start or reuse the devcontainer, then launch Claude/)
@@ -442,7 +468,7 @@ describe('CLI parsing', () => {
     assert.match(USAGE, /ssh install\s+Install or update an SSH host alias/)
     assert.match(USAGE, /ssh uninstall\s+Remove Boxdown's managed SSH host alias/)
     assert.doesNotMatch(USAGE, /ssh-config/)
-    assert.match(USAGE, /--target codex\s+Also register the SSH alias/)
+    assert.match(USAGE, /--target codex\s+Also register the SSH alias[\s\S]*Supported by setup and ssh install\./)
     assert.match(USAGE, /ssh-proxy\s+Internal command used by the generated SSH/)
     assert.match(USAGE, /tunnel\s+Start or reuse the devcontainer/)
     assert.match(USAGE, /--port <port>\s+Tunnel a local port/)
@@ -451,7 +477,145 @@ describe('CLI parsing', () => {
   })
 })
 
+describe('setup target prompt', () => {
+  test('parses setup target prompt answers', () => {
+    assert.strictEqual(parseSetupTargetPromptAnswer(''), undefined)
+    assert.strictEqual(parseSetupTargetPromptAnswer('none'), undefined)
+    assert.strictEqual(parseSetupTargetPromptAnswer('1'), undefined)
+    assert.strictEqual(parseSetupTargetPromptAnswer('n'), undefined)
+    assert.strictEqual(parseSetupTargetPromptAnswer('codex'), 'codex')
+    assert.strictEqual(parseSetupTargetPromptAnswer('2'), 'codex')
+    assert.strictEqual(parseSetupTargetPromptAnswer('c'), 'codex')
+    assert.strictEqual(parseSetupTargetPromptAnswer('cursor'), 'invalid')
+  })
+
+  test('detects interactive setup prompt eligibility', () => {
+    assert.strictEqual(shouldPromptSetupTarget({ isTTY: true }, { isTTY: true }), true)
+    assert.strictEqual(shouldPromptSetupTarget({ isTTY: false }, { isTTY: true }), false)
+    assert.strictEqual(shouldPromptSetupTarget({ isTTY: true }, { isTTY: false }), false)
+    assert.strictEqual(shouldPromptSetupTarget({}, {}), false)
+  })
+
+  test('prompts for setup target with enter defaulting to none', async () => {
+    const input = new PassThrough()
+    const output = new PassThrough()
+    let outputText = ''
+
+    output.on('data', (chunk: Buffer) => {
+      outputText += chunk.toString('utf8')
+    })
+    input.end('\n')
+
+    assert.strictEqual(await promptSetupTarget(input, output), undefined)
+    assert.match(outputText, /Register this workspace with an app target/)
+    assert.match(outputText, /Target \[none\]: /)
+  })
+
+  test('prompts for setup target with Codex selection', async () => {
+    const input = new PassThrough()
+    const output = new PassThrough()
+
+    input.end('codex\n')
+
+    assert.strictEqual(await promptSetupTarget(input, output), 'codex')
+  })
+})
+
 describe('CLI execution', () => {
+  test('setup workflow starts devcontainer and installs SSH without opening a shell', async () => {
+    const workspace = tempDir('setup-workspace')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('setup-cache'),
+        BOXDOWN_DATA_HOME: tempDir('setup-data')
+      },
+      assetsDevcontainerDir
+    })
+    const alias = 'demo-devcontainer'
+    const calls: string[] = []
+
+    await setupWorkspace(context, alias, {
+      start: async (receivedContext, options) => {
+        assert.strictEqual(receivedContext, context)
+        assert.deepStrictEqual(options, { recreate: undefined })
+        calls.push('start')
+        return 'setup-container'
+      },
+      installSsh: async (receivedContext, receivedAlias) => {
+        assert.strictEqual(receivedContext, context)
+        assert.strictEqual(receivedAlias, alias)
+        calls.push('ssh')
+      }
+    })
+
+    assert.deepStrictEqual(calls, ['start', 'ssh'])
+  })
+
+  test('setup workflow passes recreate and installs Codex target when selected', async () => {
+    const workspace = tempDir('setup-codex-workspace')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('setup-codex-cache'),
+        BOXDOWN_DATA_HOME: tempDir('setup-codex-data')
+      },
+      assetsDevcontainerDir
+    })
+    const alias = 'demo-devcontainer'
+    const calls: string[] = []
+
+    await setupWorkspace(context, alias, {
+      recreate: true,
+      target: 'codex',
+      start: async (receivedContext, options) => {
+        assert.strictEqual(receivedContext, context)
+        assert.deepStrictEqual(options, { recreate: true })
+        calls.push('start')
+        return 'setup-container'
+      },
+      installSsh: async () => {
+        calls.push('ssh')
+      },
+      installTarget: (receivedContext, receivedAlias) => {
+        assert.strictEqual(receivedContext, context)
+        assert.strictEqual(receivedAlias, alias)
+        calls.push('codex')
+      }
+    })
+
+    assert.deepStrictEqual(calls, ['start', 'ssh', 'codex'])
+  })
+
+  test('setup workflow uses prompt-selected target when no target flag is provided', async () => {
+    const workspace = tempDir('setup-prompt-workspace')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('setup-prompt-cache'),
+        BOXDOWN_DATA_HOME: tempDir('setup-prompt-data')
+      },
+      assetsDevcontainerDir
+    })
+    const calls: string[] = []
+
+    await setupWorkspace(context, 'demo-devcontainer', {
+      promptTarget: async () => 'codex',
+      start: async () => {
+        calls.push('start')
+        return 'setup-container'
+      },
+      installSsh: async () => {
+        calls.push('ssh')
+      },
+      installTarget: () => {
+        calls.push('codex')
+      }
+    })
+
+    assert.deepStrictEqual(calls, ['start', 'ssh', 'codex'])
+  })
+
   test('removes each requested down workspace', async () => {
     const alpha = tempDir('down-alpha-workspace')
     const beta = tempDir('down-beta-workspace')
@@ -785,6 +949,7 @@ describe('workspace metadata', () => {
     assert.strictEqual(commandWritesWorkspaceMetadata('status'), false)
     assert.strictEqual(commandWritesWorkspaceMetadata('list'), false)
     assert.strictEqual(commandWritesWorkspaceMetadata('purge'), false)
+    assert.strictEqual(commandWritesWorkspaceMetadata('setup'), true)
     assert.strictEqual(commandWritesWorkspaceMetadata('start'), true)
     assert.strictEqual(commandWritesWorkspaceMetadata('ssh-install'), true)
     assert.strictEqual(commandWritesWorkspaceMetadata('ssh-uninstall'), false)

@@ -41,9 +41,9 @@ folders.
 ## External App Integrations
 
 External app configuration is always explicit. For example,
-`boxdown ssh install --target codex` writes Codex app remote project
-configuration under `~/.codex/codex-app/config.json`, but it does not make that
-file part of Boxdown workspace state.
+`boxdown setup --target codex` or `boxdown ssh install --target codex` writes
+Codex app remote project configuration under `~/.codex/codex-app/config.json`,
+but it does not make that file part of Boxdown workspace state.
 
 Boxdown writes the Codex app config entry needed to point Codex at the
 Boxdown-managed SSH alias and container-side project path. On uninstall, it also

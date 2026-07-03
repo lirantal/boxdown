@@ -28,7 +28,7 @@ npm install -g boxdown
 You can also run it without installing:
 
 ```sh
-npx boxdown start
+npx boxdown setup
 ```
 
 ## Usage
@@ -36,16 +36,27 @@ npx boxdown start
 From any project repository on your host:
 
 ```sh
-npx boxdown start
+npx boxdown setup
 ```
 
-Boxdown builds or reuses a Dev Container for the current directory, then opens a shell inside it. The target repository stays clean; Boxdown writes generated configuration and SSH keys under user cache/data directories instead of copying `.devcontainer/` into the project.
+Boxdown builds or reuses a Dev Container for the current directory and installs
+an SSH alias for remote tools. The target repository stays clean; Boxdown writes
+generated configuration and SSH keys under user cache/data directories instead
+of copying `.devcontainer/` into the project.
 
 Boxdown ships and invokes its own `@devcontainers/cli` dependency. It does not require a host/global Dev Containers CLI install.
 
+Open an interactive shell inside the container when you need one:
+
+```sh
+npx boxdown start
+```
+
 ### Portless SSH
 
-Install an SSH alias for the current project:
+`boxdown setup` installs an SSH alias for the current project. To only install
+or update that alias without starting the devcontainer, use the lower-level SSH
+command:
 
 ```sh
 npx boxdown ssh install
@@ -59,8 +70,14 @@ ssh <repo-name>-devcontainer 'whoami && pwd'
 
 Use the same alias in Cursor, Claude, Codex, or any SSH-capable tool.
 
-To also add the project to Codex's remote project sidebar, install the Codex
-target:
+To also add the project to Codex's remote project sidebar, pass the Codex
+target during setup:
+
+```sh
+npx boxdown setup --target codex
+```
+
+The lower-level SSH command also supports the same target:
 
 ```sh
 npx boxdown ssh install --target codex
@@ -98,6 +115,7 @@ npx boxdown ssh uninstall
 ### Commands
 
 ```sh
+boxdown setup
 boxdown start
 boxdown codex
 boxdown claude
@@ -142,7 +160,7 @@ Shared options:
 ```sh
 --workspace <path>  # target project directory, defaults to cwd; repeatable with down
 --alias <name>      # SSH alias, defaults to <repo-name>-devcontainer
---target codex      # also register the SSH alias as a Codex remote project
+--target codex      # with setup/ssh install, also register a Codex remote project
 --port <port>       # tunnel port for `boxdown tunnel`; repeatable
 --recreate          # recreate the devcontainer before starting
 --json              # JSON output for status and list

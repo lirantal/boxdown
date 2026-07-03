@@ -1,4 +1,5 @@
 import { existsSync } from 'node:fs'
+import { createInterface } from 'node:readline/promises'
 
 import { codexProjectEntryForWorkspace, installCodexAppConfigProject, uninstallCodexAppConfigProject, uninstallCodexGlobalStateProject } from './codex-app-config.ts'
 import { codingAgentFromCommand, type CodingAgentCli } from './coding-agents.ts'
@@ -6,13 +7,14 @@ import { doctorHasFailures, formatDoctorText, runDoctorChecks } from './doctor.t
 import { startDevcontainer, printPortHint, openShell, openCodingAgentCli, ensureContainerSshRuntime, runSshdProxy, refreshContainerGhAuth, refreshContainerCodingAgentClis, ensureContainerCodingAgentCli, findRunningContainerId, findWorkspaceContainer, stopWorkspaceContainer, removeWorkspaceContainer, listWorkspaceContainers, openSshTunnel, type TunnelPortForward } from './devcontainer.ts'
 import { createWorkspaceListEntries, formatWorkspaceListText } from './list.ts'
 import { listWorkspaceMetadata, writeWorkspaceMetadata } from './metadata.ts'
-import { createWorkspaceContext, defaultDataRoot } from './paths.ts'
+import { createWorkspaceContext, defaultDataRoot, type WorkspaceContext } from './paths.ts'
 import { purgeWorkspace } from './purge.ts'
 import { defaultSshAlias, installSshConfig, uninstallSshConfig } from './ssh-config.ts'
 import { createStatusInfo, formatStatusText, statusIsHealthy } from './status.ts'
 
 export type BoxdownCommand =
   | 'help'
+  | 'setup'
   | 'start'
   | 'list'
   | 'status'
@@ -29,6 +31,7 @@ export type BoxdownCommand =
   | 'coding-agent'
 
 export type SshConfigInstallTarget = 'codex'
+export type SetupTargetPromptResult = SshConfigInstallTarget | undefined
 
 export interface ParsedCli {
   command: BoxdownCommand
@@ -44,6 +47,7 @@ export interface ParsedCli {
 }
 
 export const USAGE = `Usage:
+  boxdown setup [--workspace <path>] [--alias <name>] [--recreate] [--target codex]
   boxdown start [--workspace <path>] [--recreate]
   boxdown codex [--workspace <path>] [--recreate] [-- <codex args...>]
   boxdown claude [--workspace <path>] [--recreate] [-- <claude args...>]
@@ -63,6 +67,8 @@ export const USAGE = `Usage:
   boxdown refresh-gh-token-running [--workspace <path>]
 
 Commands:
+  setup                    Prepare the workspace devcontainer and SSH/app
+                            integration without opening a shell.
   start, shell              Start or reuse the workspace devcontainer, then open
                             an interactive shell inside it.
   codex                     Start or reuse the devcontainer, then launch Codex.
@@ -103,6 +109,7 @@ Options:
                       Repeatable with down.
   --alias <name>      SSH host alias. Defaults to <repo-name>-devcontainer.
   --target codex      Also register the SSH alias as a Codex app remote project.
+                      Supported by setup and ssh install.
   --port <port>       Tunnel a local port to the same remote port, or use
                       <local:remote>. Repeatable. Supported by tunnel.
   --recreate          Remove the existing devcontainer before starting.
@@ -112,6 +119,7 @@ Options:
 
 export function commandWritesWorkspaceMetadata (command: BoxdownCommand): boolean {
   return [
+    'setup',
     'start',
     'ssh-install',
     'ssh-proxy',
@@ -153,8 +161,8 @@ export function parseCliArgs (argv: string[]): ParsedCli {
       throw new Error('-- passthrough is only supported with coding-agent commands')
     }
 
-    if (target !== undefined && command !== 'ssh-install') {
-      throw new Error('--target is only supported with ssh install')
+    if (target !== undefined && command !== 'setup' && command !== 'ssh-install') {
+      throw new Error('--target is only supported with setup and ssh install')
     }
 
     if (tunnelPorts.length > 0 && command !== 'tunnel') {
@@ -182,7 +190,7 @@ export function parseCliArgs (argv: string[]): ParsedCli {
     }
 
     if (target !== undefined) {
-      throw new Error('--target is only supported with ssh install')
+      throw new Error('--target is only supported with setup and ssh install')
     }
 
     if (tunnelPorts.length > 0) {
@@ -232,7 +240,7 @@ export function parseCliArgs (argv: string[]): ParsedCli {
       }
 
       if (value !== 'codex') {
-        throw new Error(`Unsupported ssh install target: ${value}`)
+        throw new Error(`Unsupported target: ${value}`)
       }
 
       target = value
@@ -280,6 +288,10 @@ export function parseCliArgs (argv: string[]): ParsedCli {
 
   if (positional[0] === 'start' || positional[0] === 'shell') {
     return parsed('start')
+  }
+
+  if (positional[0] === 'setup' && positional.length === 1) {
+    return parsed('setup')
   }
 
   const codingAgent = codingAgentFromCommand(positional[0] ?? '')
@@ -397,6 +409,97 @@ async function runDownCommand (workspaces: string[] | undefined): Promise<number
   return failed ? 1 : 0
 }
 
+type SetupTargetPromptAnswer = SetupTargetPromptResult | 'invalid'
+
+export function parseSetupTargetPromptAnswer (answer: string): SetupTargetPromptAnswer {
+  const normalized = answer.trim().toLowerCase()
+
+  if (normalized === '' || normalized === '1' || normalized === 'none' || normalized === 'n') {
+    return undefined
+  }
+
+  if (normalized === '2' || normalized === 'codex' || normalized === 'c') {
+    return 'codex'
+  }
+
+  return 'invalid'
+}
+
+export function shouldPromptSetupTarget (
+  input: Pick<NodeJS.ReadStream, 'isTTY'> = process.stdin,
+  output: Pick<NodeJS.WriteStream, 'isTTY'> = process.stdout
+): boolean {
+  return input.isTTY === true && output.isTTY === true
+}
+
+export async function promptSetupTarget (
+  input: NodeJS.ReadableStream = process.stdin,
+  output: NodeJS.WritableStream = process.stdout
+): Promise<SetupTargetPromptResult> {
+  const readline = createInterface({ input, output })
+
+  try {
+    while (true) {
+      const answer = await readline.question([
+        '\nRegister this workspace with an app target?',
+        '  1) none (default)',
+        '  2) codex',
+        'Target [none]: '
+      ].join('\n'))
+      const parsed = parseSetupTargetPromptAnswer(answer)
+
+      if (parsed !== 'invalid') {
+        return parsed
+      }
+
+      output.write('Please choose "codex" or press Enter for none.\n')
+    }
+  } finally {
+    readline.close()
+  }
+}
+
+function installCodexTarget (context: WorkspaceContext, alias: string): void {
+  const entry = codexProjectEntryForWorkspace(context, alias)
+  const result = installCodexAppConfigProject(entry)
+
+  process.stdout.write(`\nCodex app config: ${result.configPath}\n`)
+  process.stdout.write(result.changed
+    ? `Installed Codex remote project: ${entry.label} (${entry.remotePath})\n`
+    : `Codex remote project already up to date: ${entry.label} (${entry.remotePath})\n`)
+
+  if (result.backupPath !== undefined) {
+    process.stdout.write(`Codex app config backup: ${result.backupPath}\n`)
+  }
+
+  process.stdout.write('Restart Codex to apply the remote project entry.\n')
+}
+
+interface SetupWorkspaceOptions {
+  recreate?: boolean
+  target?: SshConfigInstallTarget
+  promptTarget?: () => Promise<SetupTargetPromptResult>
+  start?: typeof startDevcontainer
+  installSsh?: typeof installSshConfig
+  installTarget?: (context: WorkspaceContext, alias: string) => void
+}
+
+export async function setupWorkspace (
+  context: WorkspaceContext,
+  alias: string,
+  options: SetupWorkspaceOptions = {}
+): Promise<void> {
+  await (options.start ?? startDevcontainer)(context, { recreate: options.recreate })
+  await (options.installSsh ?? installSshConfig)(context, alias)
+
+  const target = options.target ?? (options.promptTarget === undefined ? undefined : await options.promptTarget())
+
+  if (target === 'codex') {
+    const installTarget = options.installTarget ?? installCodexTarget
+    installTarget(context, alias)
+  }
+}
+
 export async function runCli (argv: string[] = process.argv.slice(2)): Promise<number> {
   try {
     const parsed = parseCliArgs(argv)
@@ -436,19 +539,7 @@ export async function runCli (argv: string[] = process.argv.slice(2)): Promise<n
       await installSshConfig(context, alias)
 
       if (parsed.target === 'codex') {
-        const entry = codexProjectEntryForWorkspace(context, alias)
-        const result = installCodexAppConfigProject(entry)
-
-        process.stdout.write(`\nCodex app config: ${result.configPath}\n`)
-        process.stdout.write(result.changed
-          ? `Installed Codex remote project: ${entry.label} (${entry.remotePath})\n`
-          : `Codex remote project already up to date: ${entry.label} (${entry.remotePath})\n`)
-
-        if (result.backupPath !== undefined) {
-          process.stdout.write(`Codex app config backup: ${result.backupPath}\n`)
-        }
-
-        process.stdout.write('Restart Codex to apply the remote project entry.\n')
+        installCodexTarget(context, alias)
       }
 
       return 0
@@ -513,6 +604,15 @@ export async function runCli (argv: string[] = process.argv.slice(2)): Promise<n
 
     if (!existsSync(context.assetsDevcontainerDir)) {
       throw new Error(`Missing Boxdown devcontainer assets: ${context.assetsDevcontainerDir}`)
+    }
+
+    if (parsed.command === 'setup') {
+      await setupWorkspace(context, alias, {
+        recreate: parsed.recreate,
+        target: parsed.target,
+        promptTarget: parsed.target === undefined && shouldPromptSetupTarget() ? promptSetupTarget : undefined
+      })
+      return 0
     }
 
     if (parsed.command === 'ssh-proxy') {

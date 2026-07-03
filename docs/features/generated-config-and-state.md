@@ -50,8 +50,8 @@ Metadata may also record the last inspected Docker image ID for the workspace so
 ## External App Config
 
 External app integration config is not Boxdown workspace state. When requested
-with `boxdown ssh install --target codex`, Boxdown writes Codex's app
-config at:
+with `boxdown setup --target codex` or `boxdown ssh install --target codex`,
+Boxdown writes Codex's app config at:
 
 ```text
 ~/.codex/codex-app/config.json
