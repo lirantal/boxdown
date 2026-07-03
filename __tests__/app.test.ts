@@ -17,7 +17,7 @@ import { doctorHasFailures, formatDoctorText } from '../src/doctor.ts'
 import { canonicalGithubRemoteUrl, configureWorkspaceGithubGitAuth } from '../src/github-git-auth.ts'
 import { parseJsonc } from '../src/jsonc.ts'
 import { createWorkspaceListEntries, formatWorkspaceListText } from '../src/list.ts'
-import { commandWritesWorkspaceMetadata, parseCliArgs, parseTunnelPort, runCli, USAGE } from '../src/main.ts'
+import { commandWritesWorkspaceMetadata, parseCliArgs, parseTunnelPort, runCli, setupWorkspace, USAGE } from '../src/main.ts'
 import { listWorkspaceMetadata, readWorkspaceMetadata, recordWorkspaceDockerImage, writeWorkspaceMetadata } from '../src/metadata.ts'
 import { createWorkspaceContext } from '../src/paths.ts'
 import { promptMultiSelect, type PromptInput, type PromptOutput } from '../src/interactive-select.ts'
@@ -236,6 +236,32 @@ async function withProcessEnv<T> (overrides: Record<string, string>, run: () => 
 }
 
 describe('CLI parsing', () => {
+  test('parses setup options', () => {
+    assert.deepStrictEqual(parseCliArgs(['setup']), {
+      command: 'setup',
+      workspace: undefined,
+      alias: undefined,
+      recreate: false,
+      json: false
+    })
+    assert.deepStrictEqual(parseCliArgs(['setup', '--workspace', '/tmp/project', '--alias', 'demo-devcontainer', '--recreate', '--target', 'codex']), {
+      command: 'setup',
+      workspace: '/tmp/project',
+      alias: 'demo-devcontainer',
+      targets: ['codex'],
+      recreate: true,
+      json: false
+    })
+    assert.deepStrictEqual(parseCliArgs(['setup', '--target', 'codex', '--target', 'codex']), {
+      command: 'setup',
+      workspace: undefined,
+      alias: undefined,
+      targets: ['codex'],
+      recreate: false,
+      json: false
+    })
+  })
+
   test('parses start options', () => {
     assert.deepStrictEqual(parseCliArgs(['start', '--workspace', '/tmp/project', '--recreate']), {
       command: 'start',
@@ -460,11 +486,15 @@ describe('CLI parsing', () => {
     assert.throws(() => parseCliArgs(['install-ssh-config']), /Unknown command/)
     assert.throws(() => parseCliArgs(['start', '--json']), /--json is only supported with status and list/)
     assert.throws(() => parseCliArgs(['ssh', 'install', '--target', 'cursor']), /Unsupported ssh install target: cursor/)
-    assert.throws(() => parseCliArgs(['start', '--target', 'codex']), /--target is only supported with ssh install/)
+    assert.throws(() => parseCliArgs(['start', '--target', 'codex']), /--target is only supported with setup and ssh install/)
     assert.throws(() => parseCliArgs(['start', '--port', '3030']), /--port is only supported with tunnel/)
-    assert.throws(() => parseCliArgs(['codex', '--target', 'codex']), /--target is only supported with ssh install/)
+    assert.throws(() => parseCliArgs(['codex', '--target', 'codex']), /--target is only supported with setup and ssh install/)
     assert.throws(() => parseCliArgs(['codex', '--port', '3030']), /--port is only supported with tunnel/)
     assert.throws(() => parseCliArgs(['start', '--', '--ignored']), /passthrough is only supported/)
+    assert.throws(() => parseCliArgs(['setup', '--json']), /--json is only supported with status and list/)
+    assert.throws(() => parseCliArgs(['setup', '--port', '3030']), /--port is only supported with tunnel/)
+    assert.throws(() => parseCliArgs(['setup', '--workspace', '/tmp/a', '--workspace', '/tmp/b']), /--workspace can only be repeated with down/)
+    assert.throws(() => parseCliArgs(['setup', '--', '--ignored']), /passthrough is only supported/)
     assert.throws(() => parseCliArgs(['purge', '--json']), /--json is only supported with status and list/)
     assert.throws(() => parseCliArgs(['purge', '--port', '3030']), /--port is only supported with tunnel/)
     assert.throws(() => parseCliArgs(['purge', '--recreate']), /--recreate is not supported with purge/)
@@ -479,6 +509,8 @@ describe('CLI parsing', () => {
     const usageLines = USAGE.split(/\r?\n/)
 
     assert.match(USAGE, /Commands:/)
+    assert.match(USAGE, /boxdown setup \[--workspace <path>\] \[--alias <name>\] \[--recreate\] \[--target <name>\]\.\.\./)
+    assert.match(USAGE, /setup\s+Prepare the workspace devcontainer/)
     assert.match(USAGE, /start, shell\s+Start or reuse the workspace devcontainer/)
     assert.match(USAGE, /codex\s+Start or reuse the devcontainer, then launch Codex/)
     assert.match(USAGE, /claude, cc\s+Start or reuse the devcontainer, then launch Claude/)
@@ -506,7 +538,7 @@ describe('CLI parsing', () => {
     assert.match(USAGE, /ssh uninstall\s+Remove Boxdown's managed SSH host alias/)
     assert.doesNotMatch(USAGE, /ssh-config/)
     assert.match(USAGE, /--target <name>\s+Optional SSH install target/)
-    assert.match(USAGE, /Repeatable\. Supported: codex/)
+    assert.match(USAGE, /Repeatable\. Supported by[\s\S]*setup and ssh install: codex\./)
     assert.match(USAGE, /ssh-proxy\s+Internal command used by the generated SSH/)
     assert.match(USAGE, /tunnel\s+Start or reuse the devcontainer/)
     assert.match(USAGE, /--port <port>\s+Tunnel a local port/)
@@ -622,6 +654,72 @@ describe('interactive install target prompt', () => {
 })
 
 describe('CLI execution', () => {
+  test('setup workflow starts devcontainer and installs SSH without opening a shell', async () => {
+    const workspace = tempDir('setup-workspace')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('setup-cache'),
+        BOXDOWN_DATA_HOME: tempDir('setup-data')
+      },
+      assetsDevcontainerDir
+    })
+    const alias = 'demo-devcontainer'
+    const calls: string[] = []
+
+    await setupWorkspace(context, alias, {
+      start: async (receivedContext, options) => {
+        assert.strictEqual(receivedContext, context)
+        assert.deepStrictEqual(options, { recreate: undefined })
+        calls.push('start')
+        return 'setup-container'
+      },
+      installSsh: async (receivedContext, receivedAlias) => {
+        assert.strictEqual(receivedContext, context)
+        assert.strictEqual(receivedAlias, alias)
+        calls.push('ssh')
+      }
+    })
+
+    assert.deepStrictEqual(calls, ['start', 'ssh'])
+  })
+
+  test('setup workflow passes recreate and installs selected targets', async () => {
+    const workspace = tempDir('setup-codex-workspace')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('setup-codex-cache'),
+        BOXDOWN_DATA_HOME: tempDir('setup-codex-data')
+      },
+      assetsDevcontainerDir
+    })
+    const alias = 'demo-devcontainer'
+    const calls: string[] = []
+
+    await setupWorkspace(context, alias, {
+      recreate: true,
+      targets: ['codex'],
+      start: async (receivedContext, options) => {
+        assert.strictEqual(receivedContext, context)
+        assert.deepStrictEqual(options, { recreate: true })
+        calls.push('start')
+        return 'setup-container'
+      },
+      installSsh: async () => {
+        calls.push('ssh')
+      },
+      installTarget: async (receivedContext, receivedAlias, target) => {
+        assert.strictEqual(receivedContext, context)
+        assert.strictEqual(receivedAlias, alias)
+        assert.strictEqual(target, 'codex')
+        calls.push('codex')
+      }
+    })
+
+    assert.deepStrictEqual(calls, ['start', 'ssh', 'codex'])
+  })
+
   test('removes each requested down workspace', async () => {
     const alpha = tempDir('down-alpha-workspace')
     const beta = tempDir('down-beta-workspace')
@@ -1059,6 +1157,7 @@ describe('workspace metadata', () => {
     assert.strictEqual(commandWritesWorkspaceMetadata('status'), false)
     assert.strictEqual(commandWritesWorkspaceMetadata('list'), false)
     assert.strictEqual(commandWritesWorkspaceMetadata('purge'), false)
+    assert.strictEqual(commandWritesWorkspaceMetadata('setup'), true)
     assert.strictEqual(commandWritesWorkspaceMetadata('start'), true)
     assert.strictEqual(commandWritesWorkspaceMetadata('ssh-install'), true)
     assert.strictEqual(commandWritesWorkspaceMetadata('ssh-uninstall'), false)

@@ -19,6 +19,7 @@ repository.
 ## Feature Docs
 
 - [Feature index](./features/README.md)
+- [Setup command](./features/setup.md)
 - [Start command](./features/start-and-shell.md)
 - [Lifecycle commands](./features/lifecycle.md)
 - [SSH config and proxy workflow](./features/ssh-config-and-proxy.md)

@@ -3,6 +3,7 @@
 ## Commands
 
 ```sh
+boxdown setup --target codex
 boxdown ssh install
 boxdown ssh install --target codex
 boxdown ssh uninstall
@@ -12,6 +13,8 @@ boxdown tunnel --port 3030
 
 `boxdown ssh` is accepted as a convenience shortcut for
 `boxdown ssh install`, but docs use the explicit install form.
+`boxdown setup` is the higher-level workflow when you also want to start or
+recreate the devcontainer before installing the SSH alias.
 
 `ssh-proxy` is primarily an internal command launched by OpenSSH as a
 `ProxyCommand`.

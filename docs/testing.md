@@ -55,6 +55,8 @@ Confirm `assets/devcontainer/**` is included and `.ssh/` is not.
 Manual Docker acceptance is heavier and should be done intentionally:
 
 ```sh
+boxdown setup --workspace /path/to/repo
+boxdown setup --workspace /path/to/repo --target codex
 boxdown start --workspace /path/to/repo
 boxdown list
 boxdown list --json

@@ -20,6 +20,7 @@ Run the CLI from source:
 
 ```sh
 pnpm run start -- --help
+pnpm run start -- setup --workspace /path/to/project
 pnpm run start -- start --workspace /path/to/project
 pnpm run start -- ssh install --workspace /path/to/project
 ```
@@ -51,13 +52,13 @@ Use `--workspace` while developing so you do not accidentally target the
 Boxdown repo itself:
 
 ```sh
-pnpm run start -- start --workspace ~/projects/repos/example
-pnpm run start -- ssh install --workspace ~/projects/repos/example
+pnpm run start -- setup --workspace ~/projects/repos/example
+pnpm run start -- setup --workspace ~/projects/repos/example --target codex
 ```
 
 In an interactive terminal, `ssh install` asks whether to install optional SSH
 targets. Add `--target codex` when testing the Codex target explicitly, or set
 `CI=1` when you want to exercise the non-interactive skip path.
 
-Starting a real container writes Boxdown state under user cache/data directories
-and may pull images or install the Dev Containers CLI.
+Setting up a real container writes Boxdown state under user cache/data
+directories and may pull images or install the Dev Containers CLI.

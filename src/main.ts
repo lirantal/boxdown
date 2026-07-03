@@ -7,7 +7,7 @@ import { startDevcontainer, printPortHint, openShell, openCodingAgentCli, ensure
 import { promptMultiSelect, type PromptInput, type PromptOutput } from './interactive-select.ts'
 import { createWorkspaceListEntries, formatWorkspaceListText } from './list.ts'
 import { listWorkspaceMetadata, writeWorkspaceMetadata } from './metadata.ts'
-import { createWorkspaceContext, defaultDataRoot } from './paths.ts'
+import { createWorkspaceContext, defaultDataRoot, type WorkspaceContext } from './paths.ts'
 import { purgeWorkspace } from './purge.ts'
 import { defaultSshAlias, installSshConfig, uninstallSshConfig } from './ssh-config.ts'
 import { dedupeSshInstallTargets, installSshInstallTarget, isSshConfigInstallTarget, SSH_INSTALL_TARGETS, sshInstallTargetFlagHintsText, supportedSshInstallTargetsText, type SshConfigInstallTarget } from './ssh-install-targets.ts'
@@ -15,6 +15,7 @@ import { createStatusInfo, formatStatusText, statusIsHealthy } from './status.ts
 
 export type BoxdownCommand =
   | 'help'
+  | 'setup'
   | 'start'
   | 'list'
   | 'status'
@@ -50,6 +51,7 @@ export interface RunCliOptions {
 }
 
 export const USAGE = `Usage:
+  boxdown setup [--workspace <path>] [--alias <name>] [--recreate] [--target <name>]...
   boxdown start [--workspace <path>] [--recreate]
   boxdown codex [--workspace <path>] [--recreate] [-- <codex args...>]
   boxdown claude [--workspace <path>] [--recreate] [-- <claude args...>]
@@ -69,6 +71,8 @@ export const USAGE = `Usage:
   boxdown refresh-gh-token-running [--workspace <path>]
 
 Commands:
+  setup                    Prepare the workspace devcontainer and SSH/app
+                            integration without opening a shell.
   start, shell              Start or reuse the workspace devcontainer, then open
                             an interactive shell inside it.
   codex                     Start or reuse the devcontainer, then launch Codex.
@@ -108,7 +112,8 @@ Options:
   --workspace <path>  Target project directory. Defaults to the current directory.
                       Repeatable with down.
   --alias <name>      SSH host alias. Defaults to <repo-name>-devcontainer.
-  --target <name>     Optional SSH install target. Repeatable. Supported: codex.
+  --target <name>     Optional SSH install target. Repeatable. Supported by
+                      setup and ssh install: codex.
   --port <port>       Tunnel a local port to the same remote port, or use
                       <local:remote>. Repeatable. Supported by tunnel.
   --recreate          Remove the existing devcontainer before starting.
@@ -118,6 +123,7 @@ Options:
 
 export function commandWritesWorkspaceMetadata (command: BoxdownCommand): boolean {
   return [
+    'setup',
     'start',
     'ssh-install',
     'ssh-proxy',
@@ -159,8 +165,8 @@ export function parseCliArgs (argv: string[]): ParsedCli {
       throw new Error('-- passthrough is only supported with coding-agent commands')
     }
 
-    if (targets.length > 0 && command !== 'ssh-install') {
-      throw new Error('--target is only supported with ssh install')
+    if (targets.length > 0 && command !== 'setup' && command !== 'ssh-install') {
+      throw new Error('--target is only supported with setup and ssh install')
     }
 
     if (tunnelPorts.length > 0 && command !== 'tunnel') {
@@ -190,7 +196,7 @@ export function parseCliArgs (argv: string[]): ParsedCli {
     }
 
     if (targets.length > 0) {
-      throw new Error('--target is only supported with ssh install')
+      throw new Error('--target is only supported with setup and ssh install')
     }
 
     if (tunnelPorts.length > 0) {
@@ -288,6 +294,10 @@ export function parseCliArgs (argv: string[]): ParsedCli {
 
   if (positional[0] === 'start' || positional[0] === 'shell') {
     return parsed('start')
+  }
+
+  if (positional[0] === 'setup' && positional.length === 1) {
+    return parsed('setup')
   }
 
   const codingAgent = codingAgentFromCommand(positional[0] ?? '')
@@ -443,6 +453,32 @@ async function resolveSshInstallTargets (
   }
 }
 
+function printSkippedSshInstallTargets (command: 'setup' | 'ssh install'): void {
+  process.stdout.write(`\nNo optional SSH install targets selected. Run boxdown ${command} ${sshInstallTargetFlagHintsText()} to install optional targets explicitly. Supported targets: ${supportedSshInstallTargetsText()}.\n`)
+}
+
+interface SetupWorkspaceOptions {
+  recreate?: boolean
+  targets?: SshConfigInstallTarget[]
+  start?: typeof startDevcontainer
+  installSsh?: typeof installSshConfig
+  installTarget?: typeof installSshInstallTarget
+}
+
+export async function setupWorkspace (
+  context: WorkspaceContext,
+  alias: string,
+  options: SetupWorkspaceOptions = {}
+): Promise<void> {
+  await (options.start ?? startDevcontainer)(context, { recreate: options.recreate })
+  await (options.installSsh ?? installSshConfig)(context, alias)
+
+  const installTarget = options.installTarget ?? installSshInstallTarget
+  for (const target of options.targets ?? []) {
+    await installTarget(context, alias, target)
+  }
+}
+
 export async function runCli (argv: string[] = process.argv.slice(2), options: RunCliOptions = {}): Promise<number> {
   try {
     const parsed = parseCliArgs(argv)
@@ -474,7 +510,7 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
     const alias = parsed.alias ?? defaultSshAlias(context.workspaceBasename)
     const aliasSource = parsed.alias === undefined ? 'default' : 'provided'
 
-    if (parsed.command !== 'ssh-install' && commandWritesWorkspaceMetadata(parsed.command)) {
+    if (parsed.command !== 'ssh-install' && parsed.command !== 'setup' && commandWritesWorkspaceMetadata(parsed.command)) {
       writeWorkspaceMetadata(context, alias)
     }
 
@@ -490,7 +526,7 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
       await installSshConfig(context, alias)
 
       if (resolvedTargets.skippedNonInteractive) {
-        process.stdout.write(`\nNo optional SSH install targets selected. Run boxdown ssh install ${sshInstallTargetFlagHintsText()} to install optional targets explicitly. Supported targets: ${supportedSshInstallTargetsText()}.\n`)
+        printSkippedSshInstallTargets('ssh install')
       }
 
       for (const target of resolvedTargets.targets) {
@@ -559,6 +595,27 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
 
     if (!existsSync(context.assetsDevcontainerDir)) {
       throw new Error(`Missing Boxdown devcontainer assets: ${context.assetsDevcontainerDir}`)
+    }
+
+    if (parsed.command === 'setup') {
+      const resolvedTargets = await resolveSshInstallTargets(parsed, options)
+
+      if (resolvedTargets.cancelled) {
+        process.stderr.write('Canceled setup.\n')
+        return 1
+      }
+
+      writeWorkspaceMetadata(context, alias)
+      await setupWorkspace(context, alias, {
+        recreate: parsed.recreate,
+        targets: resolvedTargets.targets
+      })
+
+      if (resolvedTargets.skippedNonInteractive) {
+        printSkippedSshInstallTargets('setup')
+      }
+
+      return 0
     }
 
     if (parsed.command === 'ssh-proxy') {
