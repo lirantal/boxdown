@@ -278,18 +278,48 @@ export async function removeDockerImage (imageId: string): Promise<boolean> {
 export async function startDevcontainer (context: WorkspaceContext, options: StartOptions = {}): Promise<string> {
   const progress = options.progress
   const proxyMode = options.proxyMode ?? false
+  const hasSshIdentityStep = progress?.hasStep('ssh-identity') === true
+  const hasConfigStep = progress?.hasStep('devcontainer-config') === true
+  const hasStartStep = progress?.hasStep('devcontainer-start') === true
 
-  progress?.item('Preparing SSH identity')
-  await ensureHostSshKey(context, {
-    quiet: proxyMode,
-    progress
-  })
+  if (hasSshIdentityStep) {
+    progress?.startStep('ssh-identity')
+  } else {
+    progress?.item('Preparing SSH identity')
+  }
 
-  if (progress !== undefined) {
+  try {
+    await ensureHostSshKey(context, {
+      quiet: proxyMode,
+      progress
+    })
+    if (hasSshIdentityStep) {
+      progress?.completeStep('ssh-identity')
+    }
+  } catch (error) {
+    if (hasSshIdentityStep) {
+      progress?.failStep('ssh-identity')
+    }
+    throw error
+  }
+
+  if (hasConfigStep) {
+    progress?.startStep('devcontainer-config')
+  } else if (progress !== undefined) {
     progress.item('Writing generated devcontainer config')
     progress.detail(context.generatedConfigPath)
   }
-  writeGeneratedDevcontainerConfig(context)
+  try {
+    writeGeneratedDevcontainerConfig(context)
+    if (hasConfigStep) {
+      progress?.completeStep('devcontainer-config')
+    }
+  } catch (error) {
+    if (hasConfigStep) {
+      progress?.failStep('devcontainer-config')
+    }
+    throw error
+  }
 
   if (options.reuseRunning === true && options.recreate !== true) {
     const runningContainerId = await findRunningContainerId(context)
@@ -320,7 +350,7 @@ export async function startDevcontainer (context: WorkspaceContext, options: Sta
     args.push('--remove-existing-container')
     if (progress === undefined) {
       log('Removing existing dev container so create-time settings apply.', proxyMode)
-    } else {
+    } else if (!hasStartStep) {
       progress.item('Removing existing devcontainer before start')
     }
   }
@@ -333,6 +363,7 @@ export async function startDevcontainer (context: WorkspaceContext, options: Sta
     : await runProgressCommand('devcontainer up', cli.command, [...cli.argsPrefix, ...args], {
         progress,
         spinnerLabel: 'Starting devcontainer',
+        stepId: 'devcontainer-start',
         verboseStdout: proxyMode ? 'stderr' : 'stdout',
         verboseStderr: 'stderr'
       })
@@ -348,6 +379,9 @@ export async function startDevcontainer (context: WorkspaceContext, options: Sta
   const containerId = parseContainerIdFromUpOutput(`${result.stdout}\n${result.stderr}`) ?? await findRunningContainerId(context)
 
   if (containerId === undefined) {
+    if (hasStartStep) {
+      progress?.failStep('devcontainer-start')
+    }
     throw new Error(`Could not resolve devcontainer ID for ${context.workspaceFolder}`)
   }
 

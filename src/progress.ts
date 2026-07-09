@@ -22,6 +22,7 @@ export interface ProgressCommandOptions extends Pick<BufferedCommandOptions, 'cw
   verboseStdout?: ProgressOutputTarget | false
   verboseStderr?: ProgressOutputTarget | false
   spinnerLabel?: string
+  stepId?: string
 }
 
 export interface ResolveProgressModeOptions {
@@ -113,6 +114,7 @@ export class ProgressReporter {
   #steps: ProgressStep[] = []
   #renderedStepLineCount = 0
   #stepFrameIndex = 0
+  #stepTimer: ReturnType<typeof setInterval> | undefined
 
   constructor (options: ProgressReporterOptions = {}) {
     this.mode = options.mode ?? (options.verbose === true ? 'verbose' : 'interactive')
@@ -143,6 +145,7 @@ export class ProgressReporter {
 
   end (): void {
     this.stopSpinner()
+    this.#stopStepTimer()
 
     if (this.mode !== 'interactive') {
       return
@@ -188,6 +191,10 @@ export class ProgressReporter {
   }
 
   marker (message: string): void {
+    if (this.#steps.length > 0) {
+      return
+    }
+
     const normalized = normalizeMessage(message)
 
     if (normalized.length > 0) {
@@ -196,6 +203,7 @@ export class ProgressReporter {
   }
 
   setSteps (steps: readonly ProgressStepDefinition[]): void {
+    this.#stopStepTimer()
     this.#steps = steps.map((step) => ({
       ...step,
       state: 'pending'
@@ -207,18 +215,26 @@ export class ProgressReporter {
 
   startStep (id: string): void {
     this.#updateStep(id, 'running')
+    this.#startStepTimer()
   }
 
   completeStep (id: string): void {
     this.#updateStep(id, 'complete')
+    this.#stopStepTimerIfIdle()
   }
 
   failStep (id: string): void {
     this.#updateStep(id, 'failed')
+    this.#stopStepTimerIfIdle()
   }
 
   skipStep (id: string): void {
     this.#updateStep(id, 'skipped')
+    this.#stopStepTimerIfIdle()
+  }
+
+  hasStep (id: string): boolean {
+    return this.#steps.some((step) => step.id === id)
   }
 
   startSpinner (message: string): void {
@@ -386,6 +402,34 @@ export class ProgressReporter {
 
     return color('□', 'dim')
   }
+
+  #startStepTimer (): void {
+    if (this.mode !== 'interactive' || !this.#isTTY || this.#stepTimer !== undefined) {
+      return
+    }
+
+    this.#stepTimer = setInterval(() => {
+      this.tickSpinner()
+    }, this.#spinnerIntervalMs)
+    this.#stepTimer.unref?.()
+  }
+
+  #stopStepTimerIfIdle (): void {
+    if (this.#steps.some((step) => step.state === 'running')) {
+      return
+    }
+
+    this.#stopStepTimer()
+  }
+
+  #stopStepTimer (): void {
+    if (this.#stepTimer === undefined) {
+      return
+    }
+
+    clearInterval(this.#stepTimer)
+    this.#stepTimer = undefined
+  }
 }
 
 export function createProgress (options: ProgressReporterOptions = {}): ProgressReporter {
@@ -488,8 +532,13 @@ export async function runProgressCommand (
   const progress = options.progress
   const verbose = progress?.verbose ?? true
   const markerSink = progress !== undefined && !verbose ? createMarkerSink(progress) : undefined
+  const checklistStepId = progress !== undefined && options.stepId !== undefined && progress.hasStep(options.stepId)
+    ? options.stepId
+    : undefined
 
-  if (progress !== undefined && !verbose && options.spinnerLabel !== undefined) {
+  if (progress !== undefined && !verbose && checklistStepId !== undefined) {
+    progress.startStep(checklistStepId)
+  } else if (progress !== undefined && !verbose && options.spinnerLabel !== undefined) {
     progress.startSpinner(options.spinnerLabel)
   }
 
@@ -505,11 +554,23 @@ export async function runProgressCommand (
     })
 
     markerSink?.flush()
-    progress?.stopSpinner(result.code === 0 ? 'complete' : 'clear')
+    if (checklistStepId !== undefined) {
+      if (result.code === 0) {
+        progress?.completeStep(checklistStepId)
+      } else {
+        progress?.failStep(checklistStepId)
+      }
+    } else {
+      progress?.stopSpinner(result.code === 0 ? 'complete' : 'clear')
+    }
     return result
   } catch (error) {
     markerSink?.flush()
-    progress?.stopSpinner()
+    if (checklistStepId !== undefined) {
+      progress?.failStep(checklistStepId)
+    } else {
+      progress?.stopSpinner()
+    }
     throw error
   }
 }

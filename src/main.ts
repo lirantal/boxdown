@@ -10,7 +10,7 @@ import { canPromptInteractively, promptConfirm, promptMultiSelect, promptText, t
 import { createWorkspaceListEntries, formatWorkspaceListText } from './list.ts'
 import { listWorkspaceMetadata, readWorkspaceMetadata, writeWorkspaceMetadata } from './metadata.ts'
 import { createWorkspaceContext, defaultDataRoot, type WorkspaceContext } from './paths.ts'
-import { createProgress, resolveProgressMode, type ProgressReporter, type ProgressOutputTarget } from './progress.ts'
+import { createProgress, resolveProgressMode, type ProgressReporter, type ProgressOutputTarget, type ProgressStepDefinition } from './progress.ts'
 import { purgeWorkspace } from './purge.ts'
 import { defaultSshAlias, installSshConfig, uninstallSshConfig } from './ssh-config.ts'
 import { dedupeSshInstallTargets, installSshInstallTarget, isSshConfigInstallTarget, SSH_INSTALL_TARGETS, sshInstallTargetFlagHintsText, supportedSshInstallTargetsText, type SshConfigInstallTarget } from './ssh-install-targets.ts'
@@ -653,22 +653,55 @@ export async function setupWorkspace (
     ...(options.progress === undefined ? {} : { progress: options.progress })
   })
 
+  const hasSshAliasStep = options.progress?.hasStep('ssh-alias') === true
+
   if (options.progress?.mode === 'interactive') {
-    options.progress.item('Installing SSH alias')
-    options.progress.detail(alias)
-    await (options.installSsh ?? installSshConfig)(context, alias, { quiet: true })
+    if (hasSshAliasStep) {
+      options.progress.startStep('ssh-alias')
+    } else {
+      options.progress.item('Installing SSH alias')
+      options.progress.detail(alias)
+    }
+
+    try {
+      await (options.installSsh ?? installSshConfig)(context, alias, { quiet: true })
+      if (hasSshAliasStep) {
+        options.progress.completeStep('ssh-alias')
+      }
+    } catch (error) {
+      if (hasSshAliasStep) {
+        options.progress.failStep('ssh-alias')
+      }
+      throw error
+    }
   } else {
     await (options.installSsh ?? installSshConfig)(context, alias)
   }
 
   const installTarget = options.installTarget ?? installSshInstallTarget
   for (const target of options.targets ?? []) {
-    if (options.progress?.mode === 'interactive') {
+    const stepId = `ssh-target:${target}`
+    const hasTargetStep = options.progress?.hasStep(stepId) === true
+
+    if (hasTargetStep) {
+      options.progress?.startStep(stepId)
+    } else if (options.progress?.mode === 'interactive') {
       options.progress.item(`Installing ${target} SSH target`)
     }
-    await installTarget(context, alias, target, {
-      quiet: options.progress?.mode === 'interactive'
-    })
+
+    try {
+      await installTarget(context, alias, target, {
+        quiet: options.progress?.mode === 'interactive'
+      })
+      if (hasTargetStep) {
+        options.progress?.completeStep(stepId)
+      }
+    } catch (error) {
+      if (hasTargetStep) {
+        options.progress?.failStep(stepId)
+      }
+      throw error
+    }
   }
 }
 
@@ -686,6 +719,30 @@ function createCliProgress (
     }),
     target
   })
+}
+
+function startProgressSteps (): ProgressStepDefinition[] {
+  return [
+    { id: 'ssh-identity', label: 'Preparing SSH identity' },
+    { id: 'devcontainer-config', label: 'Writing generated devcontainer config' },
+    { id: 'devcontainer-start', label: 'Starting devcontainer' }
+  ]
+}
+
+function sshTargetProgressLabel (target: SshConfigInstallTarget): string {
+  const label = SSH_INSTALL_TARGETS.find((candidate) => candidate.value === target)?.label ?? target
+  return `Installing ${label} SSH target`
+}
+
+function setupProgressSteps (targets: readonly SshConfigInstallTarget[]): ProgressStepDefinition[] {
+  return [
+    ...startProgressSteps(),
+    { id: 'ssh-alias', label: 'Installing SSH alias' },
+    ...targets.map((target) => ({
+      id: `ssh-target:${target}`,
+      label: sshTargetProgressLabel(target)
+    }))
+  ]
 }
 
 async function withProgressSection<T> (
@@ -855,6 +912,7 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
         `Workspace: ${context.workspaceFolder}`,
         `SSH alias: ${alias}`
       ], async () => {
+        progress.setSteps(setupProgressSteps(resolvedTargets.targets))
         await setupWorkspace(context, alias, {
           recreate: parsed.recreate,
           targets: resolvedTargets.targets,
@@ -980,6 +1038,7 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
     const containerId = await withProgressSection(progress, 'Boxdown start', [
       `Workspace: ${context.workspaceFolder}`
     ], async () => {
+      progress.setSteps(startProgressSteps())
       return await startDevcontainer(context, {
         recreate: parsed.recreate,
         progress

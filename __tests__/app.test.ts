@@ -2212,6 +2212,45 @@ describe('progress output', () => {
     ])
   })
 
+  test('progress commands complete matching checklist steps', async () => {
+    const lines: string[] = []
+    const raw: string[] = []
+    const progress = createProgress({
+      isTTY: true,
+      spinnerFrames: ['◒', '◐'],
+      spinnerIntervalMs: 60_000,
+      writeRaw: (target, message) => {
+        raw.push(`${target}:${message}`)
+      },
+      write: (target, message) => {
+        lines.push(`${target}:${message}`)
+      }
+    })
+
+    progress.section('Boxdown setup')
+    progress.setSteps([{ id: 'demo', label: 'Running demo command' }])
+    const result = await runProgressCommand('demo command', 'bash', [
+      '-c',
+      'printf "done\\n"'
+    ], {
+      progress,
+      spinnerLabel: 'Fallback spinner',
+      stepId: 'demo'
+    })
+    progress.end()
+
+    const rendered = raw.join('')
+    assert.strictEqual(result.code, 0)
+    assert.deepStrictEqual(lines, [
+      `stdout:${formatPromptTitle('Boxdown setup')}`,
+      `stdout:${formatPromptEnd()}`
+    ])
+    assert.match(result.stdout, /done/)
+    assert.ok(rendered.includes(`${color('◒', 'cyan')} Running demo command`))
+    assert.ok(rendered.includes(`${color('✔', 'green')} Running demo command`))
+    assert.ok(!rendered.includes('Fallback spinner'))
+  })
+
   test('hidden command helpers use friendly spinner labels', () => {
     const devcontainerSource = readFileSync(fileURLToPath(new URL('../src/devcontainer.ts', import.meta.url)), 'utf8')
     const sshKeySource = readFileSync(fileURLToPath(new URL('../src/ssh-key.ts', import.meta.url)), 'utf8')
