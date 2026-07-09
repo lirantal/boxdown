@@ -2,7 +2,6 @@ import { existsSync } from 'node:fs'
 
 import { claudeSshConfigEntryForWorkspace, uninstallClaudeSshConfigHost } from './claude-app-config.ts'
 import { codexProjectEntryForWorkspace, legacyCodexRemotePathForWorkspace, uninstallCodexAppConfigProject, uninstallCodexGlobalStateProject } from './codex-app-config.ts'
-import { runCodexRepair } from './codex-repair.ts'
 import { codingAgentBinary, codingAgentFromCommand, type CodingAgentCli } from './coding-agents.ts'
 import { buildGeneratedDevcontainerConfig, publishContainerPortFromConfig } from './config.ts'
 import { doctorHasFailures, formatDoctorText, runDoctorChecks } from './doctor.ts'
@@ -30,7 +29,6 @@ export type BoxdownCommand =
   | 'doctor'
   | 'ssh-install'
   | 'ssh-uninstall'
-  | 'codex-repair'
   | 'ssh-proxy'
   | 'tunnel'
   | 'refresh-gh-token'
@@ -46,7 +44,6 @@ export interface ParsedCli {
   alias?: string
   targets?: SshConfigInstallTarget[]
   tunnelPorts?: TunnelPortForward[]
-  codexRepairApply?: boolean
   recreate: boolean
   json: boolean
   verbose: boolean
@@ -73,7 +70,6 @@ export const USAGE = `Usage:
   boxdown doctor [--workspace <path>]
   boxdown ssh install [--workspace <path>] [--alias <name>] [--target <name>]...
   boxdown ssh uninstall [--workspace <path>] [--alias <name>]
-  boxdown codex repair [--workspace <path>] [--alias <name>] [--dry-run|--apply]
   boxdown ssh-proxy [--workspace <path>] [--alias <name>]
   boxdown tunnel [--port <port>] [--port <local:remote>] [--workspace <path>] [--alias <name>]
   boxdown refresh-gh-token [--workspace <path>]
@@ -107,9 +103,6 @@ Commands:
                             devcontainer.
   ssh uninstall             Remove Boxdown's managed SSH host alias block and
                             matching Codex/Claude app entries.
-  codex repair              Inspect or repair host and remote Codex path
-                            identity from /home/node/<repo> to
-                            /workspaces/<repo>.
   ssh-proxy                 Internal command used by the generated SSH
                             ProxyCommand. Starts or reuses the devcontainer and
                             bridges SSH over docker exec.
@@ -128,10 +121,6 @@ Options:
                       setup and ssh install: codex, claude.
   --port <port>       Tunnel a local port to the same remote port, or use
                       <local:remote>. Repeatable. Supported by tunnel.
-  --dry-run           Inspect host and remote Codex path state without mutation.
-                      Supported by codex repair and used by default.
-  --apply             Back up and repair host and remote Codex path state.
-                      Supported by codex repair.
   --recreate          Remove the existing devcontainer before starting.
   --json              Print JSON output. Supported by status and list.
   --verbose           Stream raw Docker, devcontainer, and hook command output.
@@ -159,8 +148,6 @@ export function parseCliArgs (argv: string[]): ParsedCli {
   let alias: string | undefined
   const targets: SshConfigInstallTarget[] = []
   const tunnelPorts: TunnelPortForward[] = []
-  let codexRepairApply = false
-  let codexRepairDryRun = false
   let recreate = false
   let json = false
   let verbose = false
@@ -195,14 +182,6 @@ export function parseCliArgs (argv: string[]): ParsedCli {
       throw new Error('--port is only supported with tunnel')
     }
 
-    if ((codexRepairApply || codexRepairDryRun) && command !== 'codex-repair') {
-      throw new Error('--dry-run and --apply are only supported with codex repair')
-    }
-
-    if (codexRepairApply && codexRepairDryRun) {
-      throw new Error('--dry-run and --apply cannot be combined')
-    }
-
     if (recreate && command === 'purge') {
       throw new Error('--recreate is not supported with purge')
     }
@@ -213,7 +192,6 @@ export function parseCliArgs (argv: string[]): ParsedCli {
       command,
       ...workspaceFields(command),
       alias,
-      ...(command === 'codex-repair' ? { codexRepairApply } : {}),
       ...(parsedTargets.length === 0 ? {} : { targets: parsedTargets }),
       ...(tunnelPorts.length === 0 ? {} : { tunnelPorts }),
       recreate,
@@ -229,10 +207,6 @@ export function parseCliArgs (argv: string[]): ParsedCli {
 
     if (targets.length > 0) {
       throw new Error('--target is only supported with setup and ssh install')
-    }
-
-    if (codexRepairApply || codexRepairDryRun) {
-      throw new Error('--dry-run and --apply are only supported with codex repair')
     }
 
     if (tunnelPorts.length > 0) {
@@ -313,16 +287,6 @@ export function parseCliArgs (argv: string[]): ParsedCli {
       continue
     }
 
-    if (arg === '--dry-run') {
-      codexRepairDryRun = true
-      continue
-    }
-
-    if (arg === '--apply') {
-      codexRepairApply = true
-      continue
-    }
-
     if (arg === '--json') {
       json = true
       continue
@@ -352,8 +316,8 @@ export function parseCliArgs (argv: string[]): ParsedCli {
     return parsed('setup')
   }
 
-  if (positional[0] === 'codex' && positional[1] === 'repair' && positional.length === 2) {
-    return parsed('codex-repair')
+  if (positional[0] === 'codex' && positional[1] === 'repair') {
+    throw new Error(`Unknown command: ${positional.join(' ')}`)
   }
 
   const codingAgent = codingAgentFromCommand(positional[0] ?? '')
@@ -974,12 +938,6 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
 
       process.stdout.write('Restart Codex and Claude to apply the remote project removal.\n')
       return 0
-    }
-
-    if (parsed.command === 'codex-repair') {
-      return runCodexRepair(context, alias, {
-        apply: parsed.codexRepairApply === true
-      })
     }
 
     if (parsed.command === 'status') {

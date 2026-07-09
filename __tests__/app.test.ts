@@ -1,6 +1,6 @@
 import assert from 'node:assert'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readlinkSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { PassThrough } from 'node:stream'
@@ -9,7 +9,6 @@ import { describe, test } from 'node:test'
 
 import { claudeSshConfigEntryForWorkspace, defaultClaudeSshConfigsPath, installClaudeSshConfigHost, mergeClaudeSshConfigHost, parseClaudeSshConfigs, removeClaudeSshConfigHost, uninstallClaudeSshConfigHost } from '../src/claude-app-config.ts'
 import { canonicalCodexRemotePathForWorkspace, codexDiscoveredRemoteHostId, codexProjectEntryForWorkspace, defaultCodexAppConfigPath, defaultCodexGlobalStatePath, installCodexAppConfigProject, installCodexGlobalStateProject, legacyCodexRemotePathForWorkspace, mergeCodexAppProject, normalizeCodexGlobalStateProject, parseCodexAppConfig, removeCodexAppProject, removeCodexGlobalStateProject, uninstallCodexAppConfigProject, uninstallCodexGlobalStateProject } from '../src/codex-app-config.ts'
-import { buildCodexRepairScript, repairHostCodexPathIdentity } from '../src/codex-repair.ts'
 import { codingAgentBinary, codingAgentFromCommand } from '../src/coding-agents.ts'
 import { color, formatPromptEnd, formatPromptTitle, promptRail, selectedMark } from '../src/cli-style.ts'
 import { buildGeneratedDevcontainerConfig, publishContainerPortFromConfig } from '../src/config.ts'
@@ -543,30 +542,10 @@ describe('CLI parsing', () => {
     assert.throws(() => parseCliArgs(['purge', '--workspace', '/tmp/a', '--workspace', '/tmp/b']), /--workspace can only be repeated with down/)
   })
 
-  test('parses Codex repair command', () => {
-    assert.deepStrictEqual(parseCliArgs(['codex', 'repair']), {
-      command: 'codex-repair',
-      workspace: undefined,
-      alias: undefined,
-      codexRepairApply: false,
-      recreate: false,
-      json: false,
-      verbose: false
-    })
-    assert.deepStrictEqual(parseCliArgs(['codex', 'repair', '--apply']), {
-      command: 'codex-repair',
-      workspace: undefined,
-      alias: undefined,
-      codexRepairApply: true,
-      recreate: false,
-      json: false,
-      verbose: false
-    })
-  })
-
   test('rejects unknown commands', () => {
     assert.throws(() => parseCliArgs(['ssh-config']), /Unknown command: ssh-config/)
     assert.throws(() => parseCliArgs(['ssh-config', 'install']), /Unknown command: ssh-config install/)
+    assert.throws(() => parseCliArgs(['codex', 'repair']), /Unknown command: codex repair/)
     assert.throws(() => parseCliArgs(['ssh', 'remove']), /Unknown ssh command: remove/)
     assert.throws(() => parseCliArgs(['ssh', 'install', 'extra']), /Unknown ssh command: install extra/)
     assert.throws(() => parseCliArgs(['ssh', 'uninstall', 'extra']), /Unknown ssh command: uninstall extra/)
@@ -577,8 +556,8 @@ describe('CLI parsing', () => {
     assert.throws(() => parseCliArgs(['start', '--port', '3030']), /--port is only supported with tunnel/)
     assert.throws(() => parseCliArgs(['codex', '--target', 'codex']), /--target is only supported with setup and ssh install/)
     assert.throws(() => parseCliArgs(['codex', '--port', '3030']), /--port is only supported with tunnel/)
-    assert.throws(() => parseCliArgs(['codex', 'repair', '--dry-run', '--apply']), /--dry-run and --apply cannot be combined/)
-    assert.throws(() => parseCliArgs(['start', '--dry-run']), /--dry-run and --apply are only supported with codex repair/)
+    assert.throws(() => parseCliArgs(['start', '--dry-run']), /Unknown option: --dry-run/)
+    assert.throws(() => parseCliArgs(['start', '--apply']), /Unknown option: --apply/)
     assert.throws(() => parseCliArgs(['start', '--', '--ignored']), /passthrough is only supported/)
     assert.throws(() => parseCliArgs(['setup', '--json']), /--json is only supported with status and list/)
     assert.throws(() => parseCliArgs(['setup', '--port', '3030']), /--port is only supported with tunnel/)
@@ -3892,277 +3871,6 @@ describe('Codex app config injection', () => {
       remotePath: `/workspaces/${context.workspaceBasename}`,
       label: context.workspaceBasename
     })
-  })
-})
-
-describe('Codex path repair', () => {
-  function python3Available (): boolean {
-    try {
-      execFileSync('python3', ['--version'])
-      return true
-    } catch {
-      return false
-    }
-  }
-
-  function runRepairPython (script: string): Record<string, unknown> {
-    return JSON.parse(execFileSync('python3', ['-c', script]).toString('utf8')) as Record<string, unknown>
-  }
-
-  function queryRepairSqliteCounts (databasePath: string, legacyPath: string, canonicalPath: string): Record<string, number> {
-    const script = [
-      'import json, sqlite3, sys',
-      'database_path, legacy_path, canonical_path = sys.argv[1:4]',
-      'con = sqlite3.connect(database_path)',
-      'rows = dict(con.execute("select cwd, count(*) from threads where cwd in (?, ?) group by cwd", (legacy_path, canonical_path)))',
-      'print(json.dumps({legacy_path: rows.get(legacy_path, 0), canonical_path: rows.get(canonical_path, 0)}))'
-    ].join('\n')
-
-    return JSON.parse(execFileSync('python3', ['-c', script, databasePath, legacyPath, canonicalPath]).toString('utf8')) as Record<string, number>
-  }
-
-  test('dry-runs and applies host Codex path identity repair', () => {
-    const home = tempDir('codex-host-repair-home')
-    const context = createWorkspaceContext({
-      workspace: tempDir('codex-host-repair-workspace'),
-      env: {
-        BOXDOWN_CACHE_HOME: tempDir('codex-host-repair-cache'),
-        BOXDOWN_DATA_HOME: tempDir('codex-host-repair-data')
-      },
-      assetsDevcontainerDir
-    })
-    const alias = 'demo-devcontainer'
-    const otherAlias = 'other-devcontainer'
-    const hostId = codexDiscoveredRemoteHostId(alias)
-    const otherHostId = codexDiscoveredRemoteHostId(otherAlias)
-    const canonicalPath = `/workspaces/${context.workspaceBasename}`
-    const legacyPath = `/home/node/${context.workspaceBasename}`
-    const env = {
-      HOME: home
-    }
-    const appConfigPath = defaultCodexAppConfigPath(env)
-    const globalStatePath = defaultCodexGlobalStatePath(env)
-
-    mkdirSync(join(home, '.codex', 'codex-app'), { recursive: true })
-    writeFileSync(appConfigPath, `${JSON.stringify({
-      version: 1,
-      remoteConnections: [
-        {
-          sshAlias: alias,
-          projects: [
-            {
-              remotePath: legacyPath,
-              label: 'Legacy'
-            },
-            {
-              remotePath: canonicalPath,
-              label: 'Canonical'
-            }
-          ]
-        },
-        {
-          sshAlias: otherAlias,
-          projects: [
-            {
-              remotePath: legacyPath,
-              label: 'Other'
-            }
-          ]
-        }
-      ]
-    }, null, 2)}\n`)
-    writeFileSync(globalStatePath, `${JSON.stringify({
-      'project-order': ['legacy-project-id', 'canonical-project-id', 'other-project-id'],
-      'sidebar-collapsed-groups': {
-        'legacy-project-id': true,
-        'canonical-project-id': true,
-        'other-project-id': true
-      },
-      'remote-projects': [
-        {
-          id: 'legacy-project-id',
-          hostId,
-          remotePath: legacyPath,
-          label: 'Legacy'
-        },
-        {
-          id: 'canonical-project-id',
-          hostId,
-          remotePath: canonicalPath,
-          label: 'Canonical'
-        },
-        {
-          id: 'other-project-id',
-          hostId: otherHostId,
-          remotePath: legacyPath,
-          label: 'Other'
-        }
-      ],
-      'electron-persisted-atom-state': {
-        'remote-projects': [
-          {
-            id: 'legacy-project-id',
-            hostId,
-            remotePath: legacyPath,
-            label: 'Legacy'
-          }
-        ]
-      }
-    })}\n`)
-
-    const dryRun = repairHostCodexPathIdentity(context, alias, { env })
-    const dryRunConfig = parseCodexAppConfig(JSON.parse(readFileSync(appConfigPath, 'utf8')))
-
-    assert.deepStrictEqual(dryRun.appConfig, {
-      path: appConfigPath,
-      exists: true,
-      legacy: 1,
-      canonical: 1,
-      changed: false
-    })
-    assert.deepStrictEqual(dryRun.globalState, {
-      path: globalStatePath,
-      exists: true,
-      legacy: 2,
-      canonical: 1,
-      changed: false
-    })
-    assert.strictEqual(dryRunConfig.remoteConnections[0]?.projects.length, 2)
-
-    const apply = repairHostCodexPathIdentity(context, alias, {
-      apply: true,
-      env,
-      now: new Date('2026-01-01T00:00:00.000Z')
-    })
-    const nextConfig = parseCodexAppConfig(JSON.parse(readFileSync(appConfigPath, 'utf8')))
-    const nextState = JSON.parse(readFileSync(globalStatePath, 'utf8'))
-
-    assert.strictEqual(apply.appConfig.changed, true)
-    assert.strictEqual(apply.appConfig.backupPath, `${appConfigPath}.2026-01-01T00-00-00-000Z.bak`)
-    assert.strictEqual(apply.globalState.changed, true)
-    assert.strictEqual(apply.globalState.backupPath, `${globalStatePath}.2026-01-01T00-00-00-000Z.bak`)
-    assert.deepStrictEqual(nextConfig.remoteConnections, [
-      {
-        sshAlias: alias,
-        projects: [
-          {
-            remotePath: canonicalPath,
-            label: context.workspaceBasename
-          }
-        ]
-      },
-      {
-        sshAlias: otherAlias,
-        projects: [
-          {
-            remotePath: legacyPath,
-            label: 'Other'
-          }
-        ]
-      }
-    ])
-    assert.deepStrictEqual(nextState['remote-projects'], [
-      {
-        id: 'legacy-project-id',
-        hostId,
-        remotePath: canonicalPath,
-        label: 'Legacy'
-      },
-      {
-        id: 'other-project-id',
-        hostId: otherHostId,
-        remotePath: legacyPath,
-        label: 'Other'
-      }
-    ])
-    assert.deepStrictEqual(nextState['project-order'], ['legacy-project-id', 'other-project-id'])
-    assert.deepStrictEqual(nextState['sidebar-collapsed-groups'], {
-      'legacy-project-id': true,
-      'other-project-id': true
-    })
-  })
-
-  test('dry-runs and applies remote Codex path repair with backups', () => {
-    if (!python3Available()) {
-      return
-    }
-
-    const root = tempDir('codex-repair')
-    const context = createWorkspaceContext({
-      workspace: tempDir('codex-repair-workspace'),
-      env: {
-        BOXDOWN_CACHE_HOME: tempDir('codex-repair-cache'),
-        BOXDOWN_DATA_HOME: tempDir('codex-repair-data')
-      },
-      assetsDevcontainerDir
-    })
-    const canonicalPathInput = join(root, 'workspaces', 'demo')
-    const legacyPath = join(root, 'home', 'node', 'demo')
-    const codexHome = join(root, '.codex')
-    const databasePath = join(codexHome, 'state_5.sqlite')
-    const sessionIndexPath = join(codexHome, 'session_index.jsonl')
-    const configPath = join(codexHome, 'config.toml')
-
-    mkdirSync(canonicalPathInput, { recursive: true })
-    mkdirSync(join(root, 'home', 'node'), { recursive: true })
-    mkdirSync(codexHome, { recursive: true })
-    const canonicalPath = realpathSync(canonicalPathInput)
-    symlinkSync(canonicalPath, legacyPath, 'dir')
-
-    const createSqlite = [
-      'import sqlite3, sys',
-      'database_path, legacy_path, canonical_path = sys.argv[1:4]',
-      'con = sqlite3.connect(database_path)',
-      'con.execute("create table threads (cwd text not null)")',
-      'con.executemany("insert into threads (cwd) values (?)", [(legacy_path,), (canonical_path,), ("/elsewhere",)])',
-      'con.commit()'
-    ].join('\n')
-    execFileSync('python3', ['-c', createSqlite, databasePath, legacyPath, canonicalPath])
-    writeFileSync(sessionIndexPath, `{"cwd":${JSON.stringify(legacyPath)}}\n`)
-    writeFileSync(configPath, [
-      `[projects.${JSON.stringify(canonicalPath)}]`,
-      'trust_level = "trusted"',
-      '',
-      `[projects.${JSON.stringify(legacyPath)}]`,
-      'trust_level = "trusted"',
-      ''
-    ].join('\n'))
-
-    const dryRun = runRepairPython(buildCodexRepairScript(context, {
-      legacyPath,
-      canonicalPath,
-      codexHome,
-      now: new Date('2026-01-01T00:00:00.000Z')
-    }))
-
-    assert.strictEqual(dryRun.ok, true)
-    assert.strictEqual(dryRun.mode, 'dry-run')
-    assert.deepStrictEqual(queryRepairSqliteCounts(databasePath, legacyPath, canonicalPath), {
-      [legacyPath]: 1,
-      [canonicalPath]: 1
-    })
-    assert.strictEqual(readFileSync(sessionIndexPath, 'utf8').includes(legacyPath), true)
-
-    const apply = runRepairPython(buildCodexRepairScript(context, {
-      apply: true,
-      legacyPath,
-      canonicalPath,
-      codexHome,
-      now: new Date('2026-01-01T00:00:00.000Z')
-    }))
-
-    assert.strictEqual(apply.ok, true)
-    assert.strictEqual(apply.mode, 'apply')
-    assert.deepStrictEqual(queryRepairSqliteCounts(databasePath, legacyPath, canonicalPath), {
-      [legacyPath]: 0,
-      [canonicalPath]: 2
-    })
-    assert.strictEqual(readFileSync(sessionIndexPath, 'utf8').includes(legacyPath), false)
-    assert.strictEqual(readFileSync(sessionIndexPath, 'utf8').includes(canonicalPath), true)
-    assert.strictEqual(readFileSync(configPath, 'utf8').includes(legacyPath), false)
-    assert.strictEqual(existsSync(join(codexHome, 'backups', 'boxdown-codex-path-repair', '20260101T000000Z', 'state_5.sqlite')), true)
-    assert.strictEqual(existsSync(join(codexHome, 'backups', 'boxdown-codex-path-repair', '20260101T000000Z', 'session_index.jsonl')), true)
-    assert.strictEqual(existsSync(join(codexHome, 'backups', 'boxdown-codex-path-repair', '20260101T000000Z', 'config.toml')), true)
   })
 })
 

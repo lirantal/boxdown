@@ -24,7 +24,7 @@ Unit tests should avoid starting Docker. Prefer pure tests for:
 - SSH install target parsing and prompt behavior, including explicit target
   flags, prompt selection, prompt skip/cancel, and non-TTY fallback.
 - Codex app/global-state target installation, legacy path migration,
-  idempotent project injection, and Codex repair dry-run/apply behavior.
+  and idempotent project injection.
 - Lifecycle status and doctor output formatting.
 - Workspace metadata and list output formatting.
 - Safety invariants, such as not packaging `.ssh/` key material.

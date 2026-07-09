@@ -98,24 +98,6 @@ installs the Codex target. Restart Codex after installing the target so Codex
 applies the app config, discovers the SSH alias from normal OpenSSH config, and
 creates or updates its sidebar project entry.
 
-If an existing remote project shows no chats because host/sidebar or remote
-thread state was split between `/home/node/<repo-name>` and
-`/workspaces/<repo-name>`, inspect it with:
-
-```bash
-boxdown codex repair --workspace /path/to/repo
-```
-
-After reviewing the dry-run output, repair the host/sidebar and remote Codex
-state with:
-
-```bash
-boxdown codex repair --workspace /path/to/repo --apply
-```
-
-The repair command backs up matching host Codex state and remote Codex files
-before changing them.
-
 ## Claude App Target
 
 Selecting Claude from the interactive prompt or running
