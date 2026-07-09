@@ -435,6 +435,16 @@ interface ResolvedDownWorkspaces {
   cancelled: boolean
 }
 
+interface PurgeTarget {
+  context: WorkspaceContext
+  argv: string[]
+}
+
+interface ResolvedPurgeTargets {
+  targets: PurgeTarget[]
+  cancelled: boolean
+}
+
 function createLifecycleLogger (context: WorkspaceContext, command: string, argv: string[]): WorkspaceCommandLogger {
   const logger = createWorkspaceCommandLogger(context)
   logger.section(`boxdown ${command}`, {
@@ -511,6 +521,69 @@ function resolvePurgeWorkspaceContext (workspace: string | undefined): Workspace
   }
 
   throw new Error(`Workspace does not exist and no Boxdown list entry matches PATH, SSH ALIAS, or REPO: ${workspace}`)
+}
+
+async function resolvePurgeTargets (
+  parsed: ParsedCli,
+  _options: RunCliOptions,
+  argv: string[]
+): Promise<ResolvedPurgeTargets> {
+  if (parsed.workspace !== undefined) {
+    return {
+      targets: [{
+        context: resolvePurgeWorkspaceContext(parsed.workspace),
+        argv
+      }],
+      cancelled: false
+    }
+  }
+
+  const context = createWorkspaceContext()
+  const metadata = readWorkspaceMetadata(context)
+
+  if (metadata?.workspaceFolder === context.workspaceFolder) {
+    return {
+      targets: [{
+        context,
+        argv
+      }],
+      cancelled: false
+    }
+  }
+
+  throw new Error('Current directory is not a tracked Boxdown workspace. Run boxdown purge from a tracked workspace or pass --workspace <PATH|SSH ALIAS|REPO>.')
+}
+
+async function runPurgeCommand (parsed: ParsedCli, argv: string[], options: RunCliOptions): Promise<number> {
+  const resolved = await resolvePurgeTargets(parsed, options, argv)
+
+  if (resolved.cancelled) {
+    process.stderr.write('Canceled purge.\n')
+    return 1
+  }
+
+  let failed = false
+
+  for (const target of resolved.targets) {
+    if (!await confirmPurgeWorkspace(target.context, parsed, options)) {
+      process.stderr.write('Canceled purge.\n')
+      return 1
+    }
+
+    try {
+      const code = await runLoggedLifecycle(target.context, 'purge', target.argv, async (logger) => purgeWorkspace(target.context, {
+        alias: parsed.alias,
+        logger
+      }))
+
+      failed = code !== 0 || failed
+    } catch (error) {
+      failed = true
+      process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`)
+    }
+  }
+
+  return failed ? 1 : 0
 }
 
 async function resolveDownWorkspaces (
@@ -919,9 +992,11 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
       return runDownCommand(parsed.workspaces, options)
     }
 
-    const context = parsed.command === 'purge'
-      ? resolvePurgeWorkspaceContext(parsed.workspace)
-      : createWorkspaceContext({ workspace: parsed.workspace })
+    if (parsed.command === 'purge') {
+      return runPurgeCommand(parsed, argv, options)
+    }
+
+    const context = createWorkspaceContext({ workspace: parsed.workspace })
     const alias = parsed.alias ?? defaultSshAlias(context.workspaceBasename)
     const aliasSource = parsed.alias === undefined ? 'default' : 'provided'
 
@@ -1015,18 +1090,6 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
         await stopWorkspaceContainer(context, { logger })
         return 0
       })
-    }
-
-    if (parsed.command === 'purge') {
-      if (!await confirmPurgeWorkspace(context, parsed, options)) {
-        process.stderr.write('Canceled purge.\n')
-        return 1
-      }
-
-      return runLoggedLifecycle(context, 'purge', argv, async (logger) => purgeWorkspace(context, {
-        alias: parsed.alias,
-        logger
-      }))
     }
 
     if (parsed.command === 'doctor') {
