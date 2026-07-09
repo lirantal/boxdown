@@ -40,6 +40,8 @@ export interface StatusInfo {
     workspaceDataDir: string
     generatedConfigPath: string
     generatedConfigExists: boolean
+    logPath: string
+    logExists: boolean
     assetsDevcontainerDir: string
     assetsDevcontainerExists: boolean
   }
@@ -216,6 +218,8 @@ export function createStatusInfo (
       workspaceDataDir: context.workspaceDataDir,
       generatedConfigPath: context.generatedConfigPath,
       generatedConfigExists: exists(context.generatedConfigPath),
+      logPath: context.workspaceLogPath,
+      logExists: exists(context.workspaceLogPath),
       assetsDevcontainerDir: context.assetsDevcontainerDir,
       assetsDevcontainerExists: exists(context.assetsDevcontainerDir)
     },
@@ -297,6 +301,7 @@ export function formatStatusText (status: StatusInfo, options: { color?: boolean
     `  Workspace cache: ${status.paths.workspaceCacheDir}`,
     `  Workspace data: ${status.paths.workspaceDataDir}`,
     `  Generated config: ${status.paths.generatedConfigPath} (${existenceText(status.paths.generatedConfigExists, colorEnabled)})`,
+    `  Command log: ${status.paths.logPath} (${existenceText(status.paths.logExists, colorEnabled)})`,
     `  Devcontainer assets: ${status.paths.assetsDevcontainerDir} (${existenceText(status.paths.assetsDevcontainerExists, colorEnabled)})`,
     '',
     'SSH:',

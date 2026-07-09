@@ -35,6 +35,16 @@ Boxdown-specific override is not set.
 SSH private keys live in persistent data. A public-key-only runtime directory is
 used for the container mount.
 
+Boxdown-managed lifecycle command output is appended to one per-workspace log
+file:
+
+```text
+~/.local/share/boxdown/workspaces/<workspace-hash>/boxdown.log
+```
+
+The log lives with the workspace's persistent data so `boxdown status` can show
+its path and `boxdown purge` removes it with the rest of the workspace data.
+
 Each touched workspace also records inventory metadata at:
 
 ```text

@@ -1801,6 +1801,7 @@ describe('workspace state', () => {
     assert.match(context.workspaceId, /^[a-f0-9]{16}$/)
     assert.ok(context.generatedConfigPath.startsWith(cache))
     assert.ok(context.sshKeyPath.startsWith(data))
+    assert.strictEqual(context.workspaceLogPath, join(context.workspaceDataDir, 'boxdown.log'))
     assert.strictEqual(context.assetsDevcontainerDir, assetsDevcontainerDir)
   })
 })
@@ -1881,6 +1882,7 @@ describe('status output', () => {
     const exists = (path: string): boolean => [
       sshConfigPath,
       context.generatedConfigPath,
+      context.workspaceLogPath,
       context.assetsDevcontainerDir,
       context.sshKeyPath,
       context.sshPublicKeyPath,
@@ -1911,13 +1913,18 @@ describe('status output', () => {
     assert.strictEqual(statusIsHealthy(absent), false)
     assert.strictEqual(running.ssh.aliasSource, 'default')
     assert.strictEqual(running.ssh.managedBlockState, 'installed')
+    assert.strictEqual(running.paths.logPath, context.workspaceLogPath)
+    assert.strictEqual(running.paths.logExists, true)
     assert.strictEqual(absent.ssh.managedBlockState, 'missing')
+    assert.strictEqual(absent.paths.logExists, false)
     assert.match(formatStatusText(running), /SSH alias: demo-devcontainer \(computed default; installed\)/)
     assert.match(formatStatusText(stopped), /SSH alias: demo-devcontainer \(provided; installed\)/)
     assert.match(formatStatusText(running), /State: running/)
     assert.match(formatStatusText(stopped), /State: exited/)
     assert.match(formatStatusText(running), /Generated config: .* \(exists\)/)
+    assert.match(formatStatusText(running), /Command log: .*boxdown\.log \(exists\)/)
     assert.match(formatStatusText(absent), /Generated config: .* \(missing\)/)
+    assert.match(formatStatusText(absent), /Command log: .*boxdown\.log \(missing\)/)
     assert.match(formatStatusText(running), /SSH config: .* \(exists\)/)
     assert.match(formatStatusText(running), /Boxdown SSH block: installed/)
     assert.match(formatStatusText(absent), /State: absent/)

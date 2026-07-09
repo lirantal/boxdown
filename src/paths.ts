@@ -35,6 +35,7 @@ export interface WorkspaceContext {
   sshPublicKeyPath: string
   sshPublicKeyRuntimeDir: string
   sshPublicKeyRuntimePath: string
+  workspaceLogPath: string
 }
 
 export function packageRootFromImportMeta (importMetaUrl = import.meta.url): string {
@@ -130,6 +131,7 @@ export function createWorkspaceContext (options: WorkspaceContextOptions = {}): 
     sshKeyPath: join(workspaceDataDir, 'ssh', 'id_ed25519'),
     sshPublicKeyPath: join(workspaceDataDir, 'ssh', 'id_ed25519.pub'),
     sshPublicKeyRuntimeDir: join(workspaceDataDir, 'ssh-public'),
-    sshPublicKeyRuntimePath: join(workspaceDataDir, 'ssh-public', 'id_ed25519.pub')
+    sshPublicKeyRuntimePath: join(workspaceDataDir, 'ssh-public', 'id_ed25519.pub'),
+    workspaceLogPath: join(workspaceDataDir, 'boxdown.log')
   }
 }

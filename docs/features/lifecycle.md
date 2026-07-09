@@ -32,8 +32,9 @@ shown as `missing`.
 ## Status
 
 `status` is read-only. It reports the resolved workspace, intended cache/data
-paths, generated config path, SSH key paths, SSH alias, and the matching Docker
-container state without recording the workspace in Boxdown metadata.
+paths, generated config path, command log path, SSH key paths, SSH alias, and
+the matching Docker container state without recording the workspace in Boxdown
+metadata.
 
 Human output distinguishes intended values from detected state. For example, an
 SSH alias can be shown as a computed default even when the matching Boxdown SSH
@@ -60,8 +61,9 @@ Boxdown cache, generated config, data directories, or SSH keys.
 `purge` removes the workspace devcontainer with Docker, force-removes the exact
 Docker image ID Boxdown can inspect or has recorded for the workspace, removes
 Boxdown-managed SSH/Codex/Claude entries for the computed, recorded, and
-provided aliases, and deletes the workspace's Boxdown cache/data directories. It
-does not delete the target repository directory or files inside it.
+provided aliases, and deletes the workspace's Boxdown cache/data directories,
+including the per-workspace command log. It does not delete the target
+repository directory or files inside it.
 
 To remove multiple workspace containers, repeat `--workspace`:
 

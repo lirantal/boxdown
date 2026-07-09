@@ -46,7 +46,9 @@ of copying `.devcontainer/` into the project.
 
 Startup commands print concise progress by default and hide raw Docker,
 Dev Containers, and lifecycle hook logs unless a step fails. Add `--verbose` to
-stream the full command output while setup/start work runs.
+stream the full command output while setup/start work runs. Boxdown also keeps
+one per-workspace command log under its data directory; `boxdown status` shows
+the exact path.
 
 Open an interactive shell inside the container when you need one:
 
@@ -186,10 +188,10 @@ Shared options:
 
 Use `boxdown purge` when you want to remove the workspace's Boxdown-managed
 environment residue: the devcontainer, its exact recorded Docker image, managed
-SSH/Codex/Claude entries, and Boxdown cache/data for that workspace. It does
-not delete the local repository directory or files inside it. Interactive
-terminals ask for confirmation before purging; non-interactive runs keep the
-direct behavior.
+SSH/Codex/Claude entries, command log, and Boxdown cache/data for that
+workspace. It does not delete the local repository directory or files inside it.
+Interactive terminals ask for confirmation before purging; non-interactive runs
+keep the direct behavior.
 
 ## Contributing
 
