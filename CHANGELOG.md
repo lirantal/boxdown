@@ -1,5 +1,11 @@
 # boxdown
 
+## 1.1.0
+
+### Minor Changes
+
+- [`d761452`](https://github.com/lirantal/boxdown/commit/d761452b5f547d0992da8d0cad1235903606109e) Thanks [@lirantal](https://github.com/lirantal)! - Add append-only per-workspace lifecycle command logs and expose the log path in `boxdown status`.
+
 ## 1.0.0
 
 ### Major Changes
