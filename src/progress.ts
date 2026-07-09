@@ -10,6 +10,7 @@ export interface ProgressReporterOptions {
 }
 
 export interface ProgressCommandOptions extends Pick<BufferedCommandOptions, 'cwd' | 'env' | 'input'> {
+  logger?: BufferedCommandOptions['logger']
   progress?: ProgressReporter
   verboseStdout?: ProgressOutputTarget | false
   verboseStderr?: ProgressOutputTarget | false
@@ -181,6 +182,7 @@ export async function runProgressCommand (
     cwd: options.cwd,
     env: progress?.commandEnv(options.env) ?? options.env,
     input: options.input,
+    logger: options.logger,
     mirrorStdout: verbose ? (options.verboseStdout ?? 'stdout') : false,
     mirrorStderr: verbose ? (options.verboseStderr ?? 'stderr') : false,
     onStdout: markerSink?.write,

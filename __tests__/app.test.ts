@@ -18,11 +18,12 @@ import { doctorHasFailures, formatDoctorText } from '../src/doctor.ts'
 import { canonicalGithubRemoteUrl, configureWorkspaceGithubGitAuth } from '../src/github-git-auth.ts'
 import { parseJsonc } from '../src/jsonc.ts'
 import { createWorkspaceListEntries, formatWorkspaceListText } from '../src/list.ts'
+import { createWorkspaceCommandLogger, withLoggedProcessOutput } from '../src/logging.ts'
 import { commandWritesWorkspaceMetadata, parseCliArgs, parseTunnelPort, parseTunnelPortList, runCli, setupWorkspace, USAGE } from '../src/main.ts'
 import { listWorkspaceMetadata, readWorkspaceMetadata, recordWorkspaceDockerImage, writeWorkspaceMetadata } from '../src/metadata.ts'
 import { createWorkspaceContext } from '../src/paths.ts'
 import { promptConfirm, promptMultiSelect, promptText, type PromptInput, type PromptOutput } from '../src/interactive-prompts.ts'
-import { buildHostToolPath } from '../src/process.ts'
+import { buildHostToolPath, runBuffered, runInteractive } from '../src/process.ts'
 import { createProgress, formatCommandFailure, runProgressCommand } from '../src/progress.ts'
 import { DEFAULT_TTY_MAX_COLUMNS, interactiveCommandScript, interactiveShellEnvArgs, interactiveShellScript } from '../src/shell.ts'
 import { buildSshConfigBlock, defaultSshAlias, installSshConfig, removeSshConfigBlock, replaceSshConfigBlock, uninstallSshConfig } from '../src/ssh-config.ts'
@@ -2025,6 +2026,62 @@ describe('doctor output', () => {
 })
 
 describe('progress output', () => {
+  test('workspace logger appends sections and Boxdown output', async () => {
+    const workspace = tempDir('logger-workspace')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('logger-cache'),
+        BOXDOWN_DATA_HOME: tempDir('logger-data')
+      },
+      assetsDevcontainerDir
+    })
+    const logger = createWorkspaceCommandLogger(context, {
+      now: () => new Date('2026-01-01T00:00:00.000Z')
+    })
+
+    logger.section('first command', { command: 'setup' })
+    logger.section('second command', { command: 'start' })
+    await withLoggedProcessOutput(logger, async () => {
+      process.stdout.write('visible message\n')
+    })
+
+    const log = readFileSync(context.workspaceLogPath, 'utf8')
+
+    assert.match(log, /2026-01-01T00:00:00\.000Z.*=== first command ===/)
+    assert.match(log, /command: setup/)
+    assert.match(log, /=== second command ===/)
+    assert.match(log, /\[boxdown\] visible message/)
+  })
+
+  test('buffered commands log hidden stdout and stderr', async () => {
+    const workspace = tempDir('logger-buffered-workspace')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('logger-buffered-cache'),
+        BOXDOWN_DATA_HOME: tempDir('logger-buffered-data')
+      },
+      assetsDevcontainerDir
+    })
+    const logger = createWorkspaceCommandLogger(context)
+    const result = await runBuffered('bash', [
+      '-c',
+      'printf "hidden stdout\\n"; printf "hidden stderr\\n" >&2'
+    ], {
+      logger,
+      mirrorStdout: false,
+      mirrorStderr: false
+    })
+    const log = readFileSync(context.workspaceLogPath, 'utf8')
+
+    assert.strictEqual(result.code, 0)
+    assert.match(log, /command start: \["bash","-c",/)
+    assert.match(log, /\[stdout\] hidden stdout/)
+    assert.match(log, /\[stderr\] hidden stderr/)
+    assert.match(log, /command exit: 0/)
+  })
+
   test('captures raw command output while surfacing progress markers', async () => {
     const lines: string[] = []
     const progress = createProgress({
@@ -2072,6 +2129,63 @@ describe('progress output', () => {
     assert.match(result.stdout, /BOXDOWN_PROGRESS: raw marker/)
     assert.match(result.stdout, /0\/1/)
     assert.deepStrictEqual(lines, [])
+  })
+
+  test('progress commands log raw output while surfacing markers', async () => {
+    const workspace = tempDir('logger-progress-workspace')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('logger-progress-cache'),
+        BOXDOWN_DATA_HOME: tempDir('logger-progress-data')
+      },
+      assetsDevcontainerDir
+    })
+    const lines: string[] = []
+    const logger = createWorkspaceCommandLogger(context)
+    const progress = createProgress({
+      write: (target, message) => {
+        lines.push(`${target}:${message}`)
+      }
+    })
+    const result = await runProgressCommand('demo command', 'bash', [
+      '-c',
+      'printf "hidden stdout\\n"; printf "BOXDOWN_PROGRESS: configuring\\n" >&2'
+    ], {
+      logger,
+      progress
+    })
+    const log = readFileSync(context.workspaceLogPath, 'utf8')
+
+    assert.strictEqual(result.code, 0)
+    assert.ok(lines.includes('stdout:- configuring'))
+    assert.match(log, /\[stdout\] hidden stdout/)
+    assert.match(log, /\[stderr\] BOXDOWN_PROGRESS: configuring/)
+  })
+
+  test('interactive commands log metadata without capturing inherited bytes', async () => {
+    const workspace = tempDir('logger-interactive-workspace')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('logger-interactive-cache'),
+        BOXDOWN_DATA_HOME: tempDir('logger-interactive-data')
+      },
+      assetsDevcontainerDir
+    })
+    const logger = createWorkspaceCommandLogger(context)
+    const code = await runInteractive('bash', ['-c', 'printf "%s\\n" "$BOXDOWN_TEST_INTERACTIVE_OUTPUT"'], {
+      env: {
+        BOXDOWN_TEST_INTERACTIVE_OUTPUT: 'interactive stdout'
+      },
+      logger
+    })
+    const log = readFileSync(context.workspaceLogPath, 'utf8')
+
+    assert.strictEqual(code, 0)
+    assert.match(log, /command start: \["bash","-c","printf/)
+    assert.match(log, /command exit: 0/)
+    assert.doesNotMatch(log, /interactive stdout/)
   })
 
   test('formats concise failure tails without progress marker lines', () => {
