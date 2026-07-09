@@ -309,8 +309,6 @@ export async function startDevcontainer (context: WorkspaceContext, options: Sta
   const cli = resolveDevcontainerCli(context)
   if (progress === undefined) {
     log(`Starting devcontainer for: ${context.workspaceFolder}`, proxyMode)
-  } else {
-    progress.item('Starting devcontainer')
   }
 
   const args = [
@@ -334,6 +332,7 @@ export async function startDevcontainer (context: WorkspaceContext, options: Sta
       })
     : await runProgressCommand('devcontainer up', cli.command, [...cli.argsPrefix, ...args], {
         progress,
+        spinnerLabel: 'Starting devcontainer',
         verboseStdout: proxyMode ? 'stderr' : 'stdout',
         verboseStderr: 'stderr'
       })
@@ -424,7 +423,6 @@ export async function openCodingAgentCli (context: WorkspaceContext, agent: Codi
 
 export async function ensureContainerSshRuntime (context: WorkspaceContext, options: ContainerCommandOptions = {}): Promise<void> {
   const cli = resolveDevcontainerCli(context)
-  options.progress?.item('Preparing container SSH runtime')
   const args = [
     ...cli.argsPrefix,
     'exec',
@@ -442,6 +440,7 @@ export async function ensureContainerSshRuntime (context: WorkspaceContext, opti
       })
     : await runProgressCommand('prepare SSH runtime', cli.command, args, {
         progress: options.progress,
+        spinnerLabel: 'Preparing container SSH runtime',
         verboseStdout: 'stderr',
         verboseStderr: 'stderr'
       })
@@ -462,9 +461,9 @@ export async function refreshContainerCodingAgentClis (
   options: ContainerCommandOptions = {}
 ): Promise<void> {
   const cli = resolveDevcontainerCli(context)
-  options.progress?.item(agents.length === 0
+  const spinnerLabel = agents.length === 0
     ? 'Refreshing default coding-agent CLIs'
-    : `Refreshing coding-agent CLIs: ${agents.map(codingAgentBinary).join(', ')}`)
+    : `Refreshing coding-agent CLIs: ${agents.map(codingAgentBinary).join(', ')}`
   const args = [
     ...cli.argsPrefix,
     'exec',
@@ -483,6 +482,7 @@ export async function refreshContainerCodingAgentClis (
       })
     : await runProgressCommand('refresh coding-agent CLIs', cli.command, args, {
         progress: options.progress,
+        spinnerLabel,
         verboseStdout: proxyMode ? 'stderr' : 'stdout',
         verboseStderr: 'stderr'
       })
@@ -502,7 +502,7 @@ export async function ensureContainerCodingAgentCli (
   options: ContainerCommandOptions = {}
 ): Promise<void> {
   const cli = resolveDevcontainerCli(context)
-  options.progress?.item(`Preparing ${codingAgentBinary(agent)} inside the devcontainer`)
+  const spinnerLabel = `Preparing ${codingAgentBinary(agent)} inside the devcontainer`
   const args = [
     ...cli.argsPrefix,
     'exec',
@@ -521,6 +521,7 @@ export async function ensureContainerCodingAgentCli (
       })
     : await runProgressCommand(`prepare ${codingAgentBinary(agent)}`, cli.command, args, {
         progress: options.progress,
+        spinnerLabel,
         verboseStdout: 'stdout',
         verboseStderr: 'stderr'
       })
@@ -609,7 +610,6 @@ export async function refreshContainerGhAuth (context: WorkspaceContext, options
   }
 
   const cli = resolveDevcontainerCli(context)
-  progress?.item('Refreshing GitHub CLI auth inside the devcontainer')
   const loginArgs = [
     ...cli.argsPrefix,
     'exec',
@@ -634,6 +634,7 @@ export async function refreshContainerGhAuth (context: WorkspaceContext, options
     : await runProgressCommand('refresh GitHub CLI auth', cli.command, loginArgs, {
         input: `${token}\n`,
         progress,
+        spinnerLabel: 'Refreshing GitHub CLI auth inside the devcontainer',
         verboseStdout: false,
         verboseStderr: false
       })
@@ -657,7 +658,6 @@ export async function refreshContainerGhAuth (context: WorkspaceContext, options
     }
   }
 
-  progress?.item('Verifying GitHub CLI auth inside the devcontainer')
   const verifyArgs = [
     ...cli.argsPrefix,
     'exec',
@@ -676,6 +676,7 @@ export async function refreshContainerGhAuth (context: WorkspaceContext, options
       })
     : await runProgressCommand('verify GitHub CLI auth', cli.command, verifyArgs, {
         progress,
+        spinnerLabel: 'Verifying GitHub CLI auth inside the devcontainer',
         verboseStdout: false,
         verboseStderr: false
       })

@@ -17,7 +17,6 @@ export async function ensureHostSshKey (context: WorkspaceContext, options: bool
 
   if (!existsSync(context.sshKeyPath)) {
     if (progress !== undefined) {
-      progress.item('Generating Boxdown SSH identity')
       progress.detail(context.sshKeyPath)
     } else if (!quiet) {
       process.stderr.write(`Generating Boxdown SSH identity: ${context.sshKeyPath}\n`)
@@ -40,6 +39,7 @@ export async function ensureHostSshKey (context: WorkspaceContext, options: bool
         })
       : await runProgressCommand('ssh-keygen create identity', 'ssh-keygen', args, {
           progress,
+          spinnerLabel: 'Generating Boxdown SSH identity',
           verboseStdout: 'stderr',
           verboseStderr: 'stderr'
         })
@@ -55,7 +55,6 @@ export async function ensureHostSshKey (context: WorkspaceContext, options: bool
 
   if (!existsSync(context.sshPublicKeyPath)) {
     if (progress !== undefined) {
-      progress.item('Writing Boxdown SSH public key')
       progress.detail(context.sshPublicKeyPath)
     }
 
@@ -67,6 +66,7 @@ export async function ensureHostSshKey (context: WorkspaceContext, options: bool
         })
       : await runProgressCommand('ssh-keygen derive public key', 'ssh-keygen', args, {
           progress,
+          spinnerLabel: 'Writing Boxdown SSH public key',
           verboseStdout: false,
           verboseStderr: 'stderr'
         })

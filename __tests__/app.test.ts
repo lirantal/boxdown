@@ -2132,6 +2132,18 @@ describe('progress output', () => {
     ])
   })
 
+  test('hidden command helpers use friendly spinner labels', () => {
+    const devcontainerSource = readFileSync(fileURLToPath(new URL('../src/devcontainer.ts', import.meta.url)), 'utf8')
+    const sshKeySource = readFileSync(fileURLToPath(new URL('../src/ssh-key.ts', import.meta.url)), 'utf8')
+
+    assert.match(devcontainerSource, /spinnerLabel: 'Starting devcontainer'/)
+    assert.match(devcontainerSource, /spinnerLabel: 'Preparing container SSH runtime'/)
+    assert.match(devcontainerSource, /spinnerLabel: 'Refreshing GitHub CLI auth inside the devcontainer'/)
+    assert.match(devcontainerSource, /spinnerLabel: 'Verifying GitHub CLI auth inside the devcontainer'/)
+    assert.match(sshKeySource, /spinnerLabel: 'Generating Boxdown SSH identity'/)
+    assert.match(sshKeySource, /spinnerLabel: 'Writing Boxdown SSH public key'/)
+  })
+
   test('verbose progress commands do not emit marker summaries', async () => {
     const lines: string[] = []
     const progress = createProgress({
