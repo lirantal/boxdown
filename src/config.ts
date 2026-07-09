@@ -92,11 +92,23 @@ export function buildGeneratedDevcontainerConfig (context: WorkspaceContext): De
       `BOXDOWN_WORKSPACE_FOLDER=${shellQuote(context.workspaceFolder)}`,
       `BOXDOWN_HOST_GITCONFIG_PATH=${shellQuote(context.hostGitconfigPath)}`,
       `BOXDOWN_HOST_GITCONFIG_SNAPSHOT_PATH=${shellQuote(context.hostGitconfigSnapshotPath)}`,
+      `BOXDOWN_PROGRESS=${shellQuote('${localEnv:BOXDOWN_PROGRESS}')}`,
+      `BOXDOWN_VERBOSE=${shellQuote('${localEnv:BOXDOWN_VERBOSE}')}`,
       'bash',
       shellQuote(join(context.assetsDevcontainerDir, 'hooks', 'initialize.sh'))
     ].join(' '),
-    postCreateCommand: `bash ${shellQuote(`${BOXDOWN_CONTAINER_DEVCONTAINER_DIR}/hooks/post-create.sh`)}`,
-    postStartCommand: `bash ${shellQuote(`${BOXDOWN_CONTAINER_DEVCONTAINER_DIR}/hooks/post-start.sh`)}`,
+    postCreateCommand: [
+      `BOXDOWN_PROGRESS=${shellQuote('${localEnv:BOXDOWN_PROGRESS}')}`,
+      `BOXDOWN_VERBOSE=${shellQuote('${localEnv:BOXDOWN_VERBOSE}')}`,
+      'bash',
+      shellQuote(`${BOXDOWN_CONTAINER_DEVCONTAINER_DIR}/hooks/post-create.sh`)
+    ].join(' '),
+    postStartCommand: [
+      `BOXDOWN_PROGRESS=${shellQuote('${localEnv:BOXDOWN_PROGRESS}')}`,
+      `BOXDOWN_VERBOSE=${shellQuote('${localEnv:BOXDOWN_VERBOSE}')}`,
+      'bash',
+      shellQuote(`${BOXDOWN_CONTAINER_DEVCONTAINER_DIR}/hooks/post-start.sh`)
+    ].join(' '),
     containerEnv: {
       ...(baseConfig.containerEnv ?? {}),
       BOXDOWN_CONTAINER_WORKSPACE_FOLDER: '/workspaces/${localWorkspaceFolderBasename}',
