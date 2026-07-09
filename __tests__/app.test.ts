@@ -2075,6 +2075,63 @@ describe('progress output', () => {
     assert.ok(lines.includes(`stdout:${promptRail()}  ${selectedMark()} configuring runtime`))
   })
 
+  test('renders deterministic TTY spinner frames without timing', () => {
+    const lines: string[] = []
+    const raw: string[] = []
+    const progress = createProgress({
+      isTTY: true,
+      spinnerFrames: ['◒', '◐'],
+      spinnerIntervalMs: 60_000,
+      write: (target, message) => {
+        lines.push(`${target}:${message}`)
+      },
+      writeRaw: (target, message) => {
+        raw.push(`${target}:${message}`)
+      }
+    })
+
+    progress.startSpinner('Starting devcontainer')
+    progress.tickSpinner()
+    progress.item('Installing packages')
+    progress.stopSpinner('complete')
+
+    assert.deepStrictEqual(lines, [
+      `stdout:${promptRail()}  ${selectedMark()} Installing packages`,
+      `stdout:${promptRail()}  ${selectedMark()} Starting devcontainer`
+    ])
+    assert.deepStrictEqual(raw, [
+      `stdout:\r\u001B[2K${promptRail()}  ${color('◒', 'cyan')} Starting devcontainer`,
+      `stdout:\r\u001B[2K${promptRail()}  ${color('◐', 'cyan')} Starting devcontainer`,
+      'stdout:\r\u001B[2K',
+      `stdout:\r\u001B[2K${promptRail()}  ${color('◐', 'cyan')} Starting devcontainer`,
+      'stdout:\r\u001B[2K'
+    ])
+  })
+
+  test('progress commands use static spinner lines without a TTY', async () => {
+    const lines: string[] = []
+    const progress = createProgress({
+      isTTY: false,
+      write: (target, message) => {
+        lines.push(`${target}:${message}`)
+      }
+    })
+    const result = await runProgressCommand('demo command', 'bash', [
+      '-c',
+      'printf "done\\n"'
+    ], {
+      progress,
+      spinnerLabel: 'Running demo command'
+    })
+
+    assert.strictEqual(result.code, 0)
+    assert.match(result.stdout, /done/)
+    assert.deepStrictEqual(lines, [
+      `stdout:${promptRail()}  ${color('◒', 'cyan')} Running demo command`,
+      `stdout:${promptRail()}  ${selectedMark()} Running demo command`
+    ])
+  })
+
   test('verbose progress commands do not emit marker summaries', async () => {
     const lines: string[] = []
     const progress = createProgress({
@@ -2088,6 +2145,7 @@ describe('progress output', () => {
       'printf "BOXDOWN_PROGRESS: raw marker\\n"; printf "%s/%s\\n" "$BOXDOWN_PROGRESS" "$BOXDOWN_VERBOSE"'
     ], {
       progress,
+      spinnerLabel: 'Running verbose demo command',
       verboseStdout: false,
       verboseStderr: false
     })

@@ -3,25 +3,50 @@ import { color, formatPromptEnd, formatPromptTitle, promptRail, selectedMark } f
 
 export type ProgressOutputTarget = 'stdout' | 'stderr'
 export type ProgressWriter = (target: ProgressOutputTarget, message: string) => void
+export type ProgressRawWriter = (target: ProgressOutputTarget, message: string) => void
 
 export interface ProgressReporterOptions {
   verbose?: boolean
   target?: ProgressOutputTarget
   write?: ProgressWriter
+  writeRaw?: ProgressRawWriter
+  isTTY?: boolean
+  spinnerFrames?: readonly string[]
+  spinnerIntervalMs?: number
 }
 
 export interface ProgressCommandOptions extends Pick<BufferedCommandOptions, 'cwd' | 'env' | 'input'> {
   progress?: ProgressReporter
   verboseStdout?: ProgressOutputTarget | false
   verboseStderr?: ProgressOutputTarget | false
+  spinnerLabel?: string
 }
 
 const PROGRESS_MARKER_PREFIX = 'BOXDOWN_PROGRESS:'
 const DEFAULT_FAILURE_TAIL_LINES = 20
+const DEFAULT_SPINNER_FRAMES = ['◒', '◐', '◓', '◑'] as const
+const DEFAULT_SPINNER_INTERVAL_MS = 120
+
+interface ActiveSpinner {
+  message: string
+  frameIndex: number
+  timer?: ReturnType<typeof setInterval>
+  tty: boolean
+}
 
 function writeLine (target: ProgressOutputTarget, message: string): void {
   const stream = target === 'stderr' ? process.stderr : process.stdout
   stream.write(`${message}\n`)
+}
+
+function writeRaw (target: ProgressOutputTarget, message: string): void {
+  const stream = target === 'stderr' ? process.stderr : process.stdout
+  stream.write(message)
+}
+
+function targetIsTTY (target: ProgressOutputTarget): boolean {
+  const stream = target === 'stderr' ? process.stderr : process.stdout
+  return stream.isTTY === true
 }
 
 function normalizeMessage (message: string): string {
@@ -32,13 +57,22 @@ export class ProgressReporter {
   readonly verbose: boolean
   readonly target: ProgressOutputTarget
   readonly #write: ProgressWriter
+  readonly #writeRaw: ProgressRawWriter
+  readonly #isTTY: boolean
+  readonly #spinnerFrames: readonly string[]
+  readonly #spinnerIntervalMs: number
   #sectionPrinted = false
   #sectionOpen = false
+  #spinner: ActiveSpinner | undefined
 
   constructor (options: ProgressReporterOptions = {}) {
     this.verbose = options.verbose ?? false
     this.target = options.target ?? 'stdout'
     this.#write = options.write ?? writeLine
+    this.#writeRaw = options.writeRaw ?? writeRaw
+    this.#isTTY = options.isTTY ?? targetIsTTY(this.target)
+    this.#spinnerFrames = options.spinnerFrames ?? DEFAULT_SPINNER_FRAMES
+    this.#spinnerIntervalMs = options.spinnerIntervalMs ?? DEFAULT_SPINNER_INTERVAL_MS
   }
 
   section (title: string): void {
@@ -54,6 +88,8 @@ export class ProgressReporter {
   }
 
   end (): void {
+    this.stopSpinner()
+
     if (!this.#sectionOpen) {
       return
     }
@@ -63,15 +99,15 @@ export class ProgressReporter {
   }
 
   item (message: string): void {
-    this.#write(this.target, `${promptRail()}  ${selectedMark()} ${message}`)
+    this.#writeLine(`${promptRail()}  ${selectedMark()} ${message}`)
   }
 
   detail (message: string): void {
-    this.#write(this.target, `${promptRail()}  ${color(message, 'dim')}`)
+    this.#writeLine(`${promptRail()}  ${color(message, 'dim')}`)
   }
 
   warn (message: string): void {
-    this.#write(this.target, `${promptRail()}  ${color('!', 'dim')} ${message}`)
+    this.#writeLine(`${promptRail()}  ${color('!', 'dim')} ${message}`)
   }
 
   marker (message: string): void {
@@ -82,12 +118,99 @@ export class ProgressReporter {
     }
   }
 
+  startSpinner (message: string): void {
+    if (this.verbose) {
+      return
+    }
+
+    const normalized = normalizeMessage(message)
+    if (normalized.length === 0) {
+      return
+    }
+
+    this.stopSpinner()
+    this.#spinner = {
+      message: normalized,
+      frameIndex: 0,
+      tty: this.#isTTY
+    }
+
+    if (this.#spinner.tty) {
+      this.#renderSpinner()
+      this.#spinner.timer = setInterval(() => {
+        this.tickSpinner()
+      }, this.#spinnerIntervalMs)
+      this.#spinner.timer.unref?.()
+      return
+    }
+
+    this.#writeLine(`${promptRail()}  ${color(this.#spinnerFrames[0] ?? '◒', 'cyan')} ${normalized}`)
+  }
+
+  tickSpinner (): void {
+    const spinner = this.#spinner
+    if (spinner === undefined || !spinner.tty) {
+      return
+    }
+
+    spinner.frameIndex += 1
+    this.#renderSpinner()
+  }
+
+  stopSpinner (status: 'complete' | 'clear' = 'clear'): void {
+    const spinner = this.#spinner
+    if (spinner === undefined) {
+      return
+    }
+
+    if (spinner.timer !== undefined) {
+      clearInterval(spinner.timer)
+    }
+
+    if (spinner.tty) {
+      this.#clearSpinnerLine()
+    }
+
+    this.#spinner = undefined
+
+    if (status === 'complete') {
+      this.item(spinner.message)
+    }
+  }
+
   commandEnv (env?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
     return {
       ...(env ?? {}),
       BOXDOWN_VERBOSE: this.verbose ? '1' : '0',
       BOXDOWN_PROGRESS: this.verbose ? '0' : '1'
     }
+  }
+
+  #writeLine (message: string): void {
+    const spinner = this.#spinner
+
+    if (spinner !== undefined && spinner.tty) {
+      this.#clearSpinnerLine()
+      this.#write(this.target, message)
+      this.#renderSpinner()
+      return
+    }
+
+    this.#write(this.target, message)
+  }
+
+  #renderSpinner (): void {
+    const spinner = this.#spinner
+    if (spinner === undefined) {
+      return
+    }
+
+    const frame = this.#spinnerFrames[spinner.frameIndex % this.#spinnerFrames.length] ?? '◒'
+    this.#writeRaw(this.target, `\r\u001B[2K${promptRail()}  ${color(frame, 'cyan')} ${spinner.message}`)
+  }
+
+  #clearSpinnerLine (): void {
+    this.#writeRaw(this.target, '\r\u001B[2K')
   }
 }
 
@@ -191,18 +314,30 @@ export async function runProgressCommand (
   const progress = options.progress
   const verbose = progress?.verbose ?? true
   const markerSink = progress !== undefined && !verbose ? createMarkerSink(progress) : undefined
-  const result = await runBuffered(command, args, {
-    cwd: options.cwd,
-    env: progress?.commandEnv(options.env) ?? options.env,
-    input: options.input,
-    mirrorStdout: verbose ? (options.verboseStdout ?? 'stdout') : false,
-    mirrorStderr: verbose ? (options.verboseStderr ?? 'stderr') : false,
-    onStdout: markerSink?.write,
-    onStderr: markerSink?.write
-  })
 
-  markerSink?.flush()
-  return result
+  if (progress !== undefined && !verbose && options.spinnerLabel !== undefined) {
+    progress.startSpinner(options.spinnerLabel)
+  }
+
+  try {
+    const result = await runBuffered(command, args, {
+      cwd: options.cwd,
+      env: progress?.commandEnv(options.env) ?? options.env,
+      input: options.input,
+      mirrorStdout: verbose ? (options.verboseStdout ?? 'stdout') : false,
+      mirrorStderr: verbose ? (options.verboseStderr ?? 'stderr') : false,
+      onStdout: markerSink?.write,
+      onStderr: markerSink?.write
+    })
+
+    markerSink?.flush()
+    progress?.stopSpinner(result.code === 0 ? 'complete' : 'clear')
+    return result
+  } catch (error) {
+    markerSink?.flush()
+    progress?.stopSpinner()
+    throw error
+  }
 }
 
 export function assertProgressCommandSucceeded (label: string, result: CommandResult, message: string): void {
