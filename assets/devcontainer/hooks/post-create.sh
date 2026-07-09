@@ -47,7 +47,22 @@ configure_local_git() {
 
 install_apm() {
   # Agent Package Manager: https://github.com/microsoft/apm
-  curl -sSL https://aka.ms/apm-unix | sh
+  local installer
+
+  installer="$(mktemp)"
+  if ! curl -fsSL https://aka.ms/apm-unix -o "${installer}"; then
+    rm -f "${installer}"
+    echo "post-create: warning: could not download APM installer; skipping APM." >&2
+    return 0
+  fi
+
+  if ! sh "${installer}"; then
+    rm -f "${installer}"
+    echo "post-create: warning: APM installer failed; skipping APM." >&2
+    return 0
+  fi
+
+  rm -f "${installer}"
 }
 
 install_or_update_coding_agent_clis() {

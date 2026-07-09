@@ -4368,6 +4368,15 @@ describe('packaged assets', () => {
     assert.match(startScript, /stdout is reserved for SSH traffic/)
   })
 
+  test('downloads the APM installer before executing it', () => {
+    const postCreate = readFileSync(join(assetsDevcontainerDir, 'hooks', 'post-create.sh'), 'utf8')
+
+    assert.match(postCreate, /install_apm\(\)/)
+    assert.match(postCreate, /curl -fsSL https:\/\/aka\.ms\/apm-unix -o "\$\{installer\}"/)
+    assert.match(postCreate, /could not download APM installer; skipping APM/)
+    assert.doesNotMatch(postCreate, /curl -sSL https:\/\/aka\.ms\/apm-unix \| sh/)
+  })
+
   test('installs baseline Python from apt instead of the Python feature', () => {
     const pythonFeatureRef = 'ghcr.io/devcontainers/features/python@sha256:fbcad6955caeecc5ad3f7886baf652e25cba5225a6c4c2287c536de2e5607511'
     const devcontainerJson = readFileSync(join(assetsDevcontainerDir, 'devcontainer.json'), 'utf8')
