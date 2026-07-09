@@ -654,7 +654,8 @@ export async function setupWorkspace (
   })
 
   if (options.progress !== undefined) {
-    options.progress.item(`Installing SSH alias: ${alias}`)
+    options.progress.item('Installing SSH alias')
+    options.progress.detail(alias)
     await (options.installSsh ?? installSshConfig)(context, alias, { quiet: true })
   } else {
     await (options.installSsh ?? installSshConfig)(context, alias)
@@ -674,6 +675,24 @@ function createCliProgress (parsed: ParsedCli, target: ProgressOutputTarget = 's
     verbose: parsed.verbose,
     target
   })
+}
+
+async function withProgressSection<T> (
+  progress: ProgressReporter,
+  title: string,
+  details: readonly string[],
+  run: () => Promise<T>
+): Promise<T> {
+  progress.section(title)
+  for (const detail of details) {
+    progress.detail(detail)
+  }
+
+  try {
+    return await run()
+  } finally {
+    progress.end()
+  }
 }
 
 export async function runCli (argv: string[] = process.argv.slice(2), options: RunCliOptions = {}): Promise<number> {
@@ -821,13 +840,15 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
 
       writeWorkspaceMetadata(context, alias)
       const progress = createCliProgress(parsed)
-      progress.section('Boxdown setup')
-      progress.detail(`Workspace: ${context.workspaceFolder}`)
-      progress.detail(`SSH alias: ${alias}`)
-      await setupWorkspace(context, alias, {
-        recreate: parsed.recreate,
-        targets: resolvedTargets.targets,
-        progress
+      await withProgressSection(progress, 'Boxdown setup', [
+        `Workspace: ${context.workspaceFolder}`,
+        `SSH alias: ${alias}`
+      ], async () => {
+        await setupWorkspace(context, alias, {
+          recreate: parsed.recreate,
+          targets: resolvedTargets.targets,
+          progress
+        })
       })
 
       if (resolvedTargets.skippedNonInteractive) {
@@ -839,17 +860,23 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
 
     if (parsed.command === 'ssh-proxy') {
       const progress = createCliProgress(parsed, 'stderr')
-      progress.section('Boxdown SSH proxy')
-      progress.item(`Updating SSH alias: ${alias}`)
-      await installSshConfig(context, alias, { quiet: true })
-      const containerId = await startDevcontainer(context, {
-        recreate: parsed.recreate,
-        proxyMode: true,
-        progress,
-        reuseRunning: true
+      const containerId = await withProgressSection(progress, 'Boxdown SSH proxy', [
+        `Workspace: ${context.workspaceFolder}`,
+        `SSH alias: ${alias}`
+      ], async () => {
+        progress.item('Updating SSH alias')
+        progress.detail(alias)
+        await installSshConfig(context, alias, { quiet: true })
+        const startedContainerId = await startDevcontainer(context, {
+          recreate: parsed.recreate,
+          proxyMode: true,
+          progress,
+          reuseRunning: true
+        })
+        await refreshContainerCodingAgentClis(context, true, [], { progress })
+        await ensureContainerSshRuntime(context, { progress })
+        return startedContainerId
       })
-      await refreshContainerCodingAgentClis(context, true, [], { progress })
-      await ensureContainerSshRuntime(context, { progress })
       return runSshdProxy(containerId)
     }
 
@@ -868,14 +895,18 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
 
       writeWorkspaceMetadata(context, alias)
       const progress = createCliProgress(parsed)
-      progress.section('Boxdown tunnel')
-      progress.detail(`Workspace: ${context.workspaceFolder}`)
-      progress.item(`Updating SSH alias: ${alias}`)
-      await installSshConfig(context, alias, { quiet: true })
-      await startDevcontainer(context, {
-        recreate: parsed.recreate,
-        progress,
-        reuseRunning: true
+      await withProgressSection(progress, 'Boxdown tunnel', [
+        `Workspace: ${context.workspaceFolder}`,
+        `SSH alias: ${alias}`
+      ], async () => {
+        progress.item('Updating SSH alias')
+        progress.detail(alias)
+        await installSshConfig(context, alias, { quiet: true })
+        await startDevcontainer(context, {
+          recreate: parsed.recreate,
+          progress,
+          reuseRunning: true
+        })
       })
 
       const forwards = tunnelPorts
@@ -894,19 +925,24 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
         throw new Error(`No running devcontainer found for: ${context.workspaceFolder}`)
       }
       const progress = createCliProgress(parsed)
-      progress.section('Boxdown GitHub auth refresh')
-      progress.detail(`Workspace: ${context.workspaceFolder}`)
-      progress.item(`Using running devcontainer: ${containerId}`)
-      await refreshContainerGhAuth(context, { progress })
+      await withProgressSection(progress, 'Boxdown GitHub auth refresh', [
+        `Workspace: ${context.workspaceFolder}`
+      ], async () => {
+        progress.item('Using running devcontainer')
+        progress.detail(containerId)
+        await refreshContainerGhAuth(context, { progress })
+      })
       return 0
     }
 
     if (parsed.command === 'refresh-gh-token') {
       const progress = createCliProgress(parsed)
-      progress.section('Boxdown GitHub auth refresh')
-      progress.detail(`Workspace: ${context.workspaceFolder}`)
-      await startDevcontainer(context, { progress })
-      await refreshContainerGhAuth(context, { progress })
+      await withProgressSection(progress, 'Boxdown GitHub auth refresh', [
+        `Workspace: ${context.workspaceFolder}`
+      ], async () => {
+        await startDevcontainer(context, { progress })
+        await refreshContainerGhAuth(context, { progress })
+      })
       return 0
     }
 
@@ -917,22 +953,26 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
       }
 
       const progress = createCliProgress(parsed)
-      progress.section(`Boxdown ${agent}`)
-      progress.detail(`Workspace: ${context.workspaceFolder}`)
-      await startDevcontainer(context, {
-        recreate: parsed.recreate,
-        progress
+      await withProgressSection(progress, `Boxdown ${agent}`, [
+        `Workspace: ${context.workspaceFolder}`
+      ], async () => {
+        await startDevcontainer(context, {
+          recreate: parsed.recreate,
+          progress
+        })
+        await ensureContainerCodingAgentCli(context, agent, { progress })
       })
-      await ensureContainerCodingAgentCli(context, agent, { progress })
       return openCodingAgentCli(context, agent, parsed.agentArgs ?? [])
     }
 
     const progress = createCliProgress(parsed)
-    progress.section('Boxdown start')
-    progress.detail(`Workspace: ${context.workspaceFolder}`)
-    const containerId = await startDevcontainer(context, {
-      recreate: parsed.recreate,
-      progress
+    const containerId = await withProgressSection(progress, 'Boxdown start', [
+      `Workspace: ${context.workspaceFolder}`
+    ], async () => {
+      return await startDevcontainer(context, {
+        recreate: parsed.recreate,
+        progress
+      })
     })
     await printPortHint(context, containerId)
     return openShell(context)

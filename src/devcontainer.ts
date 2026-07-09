@@ -285,7 +285,10 @@ export async function startDevcontainer (context: WorkspaceContext, options: Sta
     progress
   })
 
-  progress?.item(`Writing generated devcontainer config: ${context.generatedConfigPath}`)
+  if (progress !== undefined) {
+    progress.item('Writing generated devcontainer config')
+    progress.detail(context.generatedConfigPath)
+  }
   writeGeneratedDevcontainerConfig(context)
 
   if (options.reuseRunning === true && options.recreate !== true) {
@@ -295,7 +298,8 @@ export async function startDevcontainer (context: WorkspaceContext, options: Sta
       if (progress === undefined) {
         log(`Using running devcontainer for: ${context.workspaceFolder}`, proxyMode)
       } else {
-        progress.item(`Using running devcontainer: ${runningContainerId}`)
+        progress.item('Using running devcontainer')
+        progress.detail(runningContainerId)
       }
       await recordContainerImageIfPresent(context, runningContainerId)
       return runningContainerId
@@ -306,7 +310,7 @@ export async function startDevcontainer (context: WorkspaceContext, options: Sta
   if (progress === undefined) {
     log(`Starting devcontainer for: ${context.workspaceFolder}`, proxyMode)
   } else {
-    progress.item(`Starting devcontainer for: ${context.workspaceFolder}`)
+    progress.item('Starting devcontainer')
   }
 
   const args = [

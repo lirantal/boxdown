@@ -10,7 +10,7 @@ import { describe, test } from 'node:test'
 import { claudeSshConfigEntryForWorkspace, defaultClaudeSshConfigsPath, installClaudeSshConfigHost, mergeClaudeSshConfigHost, parseClaudeSshConfigs, removeClaudeSshConfigHost, uninstallClaudeSshConfigHost } from '../src/claude-app-config.ts'
 import { codexDiscoveredRemoteHostId, codexProjectEntryForWorkspace, defaultCodexAppConfigPath, defaultCodexGlobalStatePath, installCodexAppConfigProject, mergeCodexAppProject, parseCodexAppConfig, removeCodexAppProject, removeCodexGlobalStateProject, uninstallCodexAppConfigProject, uninstallCodexGlobalStateProject } from '../src/codex-app-config.ts'
 import { codingAgentBinary, codingAgentFromCommand } from '../src/coding-agents.ts'
-import { formatPromptTitle, promptRail, selectedMark } from '../src/cli-style.ts'
+import { color, formatPromptEnd, formatPromptTitle, promptRail, selectedMark } from '../src/cli-style.ts'
 import { buildGeneratedDevcontainerConfig, publishContainerPortFromConfig } from '../src/config.ts'
 import { BOXDOWN_CONTAINER_AGENTS_DIR, BOXDOWN_CONTAINER_CODEX_AUTH_PATH, BOXDOWN_CONTAINER_CODEX_DIR, BOXDOWN_CONTAINER_GITCONFIG_PATH, BOXDOWN_CONTAINER_HOST_GITCONFIG_DIR, DEVCONTAINER_CLI_VERSION } from '../src/constants.ts'
 import { codingAgentDevcontainerExecArgs, sshTunnelArgs } from '../src/devcontainer.ts'
@@ -1005,8 +1005,9 @@ describe('CLI execution', () => {
     })
 
     assert.deepStrictEqual(calls, ['start', 'ssh', 'codex'])
-    assert.ok(lines.includes('stdout:- Installing SSH alias: demo-devcontainer'))
-    assert.ok(lines.includes('stdout:- Installing codex SSH target'))
+    assert.ok(lines.includes(`stdout:${promptRail()}  ${selectedMark()} Installing SSH alias`))
+    assert.ok(lines.includes(`stdout:${promptRail()}  ${color('demo-devcontainer', 'dim')}`))
+    assert.ok(lines.includes(`stdout:${promptRail()}  ${selectedMark()} Installing codex SSH target`))
   })
 
   test('removes each requested down workspace', async () => {
@@ -2025,6 +2026,29 @@ describe('doctor output', () => {
 })
 
 describe('progress output', () => {
+  test('formats styled progress sections', () => {
+    const lines: string[] = []
+    const progress = createProgress({
+      write: (target, message) => {
+        lines.push(`${target}:${message}`)
+      }
+    })
+
+    progress.section('Boxdown setup')
+    progress.detail('Workspace: /tmp/demo')
+    progress.item('Starting devcontainer')
+    progress.warn('Could not refresh one or more coding-agent CLIs inside the devcontainer.')
+    progress.end()
+
+    assert.deepStrictEqual(lines, [
+      `stdout:${formatPromptTitle('Boxdown setup')}`,
+      `stdout:${promptRail()}  ${color('Workspace: /tmp/demo', 'dim')}`,
+      `stdout:${promptRail()}  ${selectedMark()} Starting devcontainer`,
+      `stdout:${promptRail()}  ${color('!', 'dim')} Could not refresh one or more coding-agent CLIs inside the devcontainer.`,
+      `stdout:${formatPromptEnd()}`
+    ])
+  })
+
   test('captures raw command output while surfacing progress markers', async () => {
     const lines: string[] = []
     const progress = createProgress({
@@ -2047,8 +2071,8 @@ describe('progress output', () => {
     assert.match(result.stdout, /hidden stdout/)
     assert.match(result.stderr, /hidden stderr/)
     assert.match(result.stdout, /1\/0/)
-    assert.ok(lines.includes('stdout:- installing packages'))
-    assert.ok(lines.includes('stdout:- configuring runtime'))
+    assert.ok(lines.includes(`stdout:${promptRail()}  ${selectedMark()} installing packages`))
+    assert.ok(lines.includes(`stdout:${promptRail()}  ${selectedMark()} configuring runtime`))
   })
 
   test('verbose progress commands do not emit marker summaries', async () => {

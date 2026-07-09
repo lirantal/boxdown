@@ -1,4 +1,5 @@
 import { runBuffered, type BufferedCommandOptions, type CommandResult } from './process.ts'
+import { color, formatPromptEnd, formatPromptTitle, promptRail, selectedMark } from './cli-style.ts'
 
 export type ProgressOutputTarget = 'stdout' | 'stderr'
 export type ProgressWriter = (target: ProgressOutputTarget, message: string) => void
@@ -32,6 +33,7 @@ export class ProgressReporter {
   readonly target: ProgressOutputTarget
   readonly #write: ProgressWriter
   #sectionPrinted = false
+  #sectionOpen = false
 
   constructor (options: ProgressReporterOptions = {}) {
     this.verbose = options.verbose ?? false
@@ -40,24 +42,36 @@ export class ProgressReporter {
   }
 
   section (title: string): void {
-    if (this.#sectionPrinted) {
+    if (this.#sectionOpen) {
+      this.end()
+    } else if (this.#sectionPrinted) {
       this.#write(this.target, '')
     }
 
-    this.#write(this.target, title)
+    this.#write(this.target, formatPromptTitle(title))
     this.#sectionPrinted = true
+    this.#sectionOpen = true
+  }
+
+  end (): void {
+    if (!this.#sectionOpen) {
+      return
+    }
+
+    this.#write(this.target, formatPromptEnd())
+    this.#sectionOpen = false
   }
 
   item (message: string): void {
-    this.#write(this.target, `- ${message}`)
+    this.#write(this.target, `${promptRail()}  ${selectedMark()} ${message}`)
   }
 
   detail (message: string): void {
-    this.#write(this.target, `  ${message}`)
+    this.#write(this.target, `${promptRail()}  ${color(message, 'dim')}`)
   }
 
   warn (message: string): void {
-    this.#write(this.target, `! ${message}`)
+    this.#write(this.target, `${promptRail()}  ${color('!', 'dim')} ${message}`)
   }
 
   marker (message: string): void {
