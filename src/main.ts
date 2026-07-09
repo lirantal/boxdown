@@ -443,6 +443,7 @@ interface PurgeTarget {
 interface ResolvedPurgeTargets {
   targets: PurgeTarget[]
   cancelled: boolean
+  batch: boolean
 }
 
 function createLifecycleLogger (context: WorkspaceContext, command: string, argv: string[]): WorkspaceCommandLogger {
@@ -525,7 +526,7 @@ function resolvePurgeWorkspaceContext (workspace: string | undefined): Workspace
 
 async function resolvePurgeTargets (
   parsed: ParsedCli,
-  _options: RunCliOptions,
+  options: RunCliOptions,
   argv: string[]
 ): Promise<ResolvedPurgeTargets> {
   if (parsed.workspace !== undefined) {
@@ -534,7 +535,8 @@ async function resolvePurgeTargets (
         context: resolvePurgeWorkspaceContext(parsed.workspace),
         argv
       }],
-      cancelled: false
+      cancelled: false,
+      batch: false
     }
   }
 
@@ -547,11 +549,106 @@ async function resolvePurgeTargets (
         context,
         argv
       }],
-      cancelled: false
+      cancelled: false,
+      batch: false
     }
   }
 
-  throw new Error('Current directory is not a tracked Boxdown workspace. Run boxdown purge from a tracked workspace or pass --workspace <PATH|SSH ALIAS|REPO>.')
+  const input = options.promptInput ?? process.stdin
+  const output = options.promptOutput ?? process.stdout
+  const env = options.env ?? process.env
+
+  if (!canPromptInteractively(input, output, env)) {
+    throw new Error('Current directory is not a tracked Boxdown workspace. Run boxdown purge from a tracked workspace or pass --workspace <PATH|SSH ALIAS|REPO>.')
+  }
+
+  const entries = createWorkspaceListEntries(
+    listWorkspaceMetadata(defaultDataRoot()),
+    await listWorkspaceContainers(),
+    existsSync
+  )
+
+  if (entries.length === 0) {
+    throw new Error('No Boxdown workspaces found to purge.')
+  }
+
+  const entriesById = new Map(entries.map((entry) => [entry.workspaceId, entry]))
+  const result = await promptMultiSelect<string>({
+    title: 'Purge Boxdown workspaces?',
+    choices: entries.map((entry) => ({
+      value: entry.workspaceId,
+      label: entry.workspaceBasename,
+      description: `${entry.state} - ${entry.workspaceFolder} - ${entry.sshAlias}`
+    })),
+    skipLabel: 'Cancel',
+    summaryLabel: 'Purge workspaces',
+    input,
+    output,
+    env
+  })
+
+  if (result.status === 'selected') {
+    return {
+      targets: result.values.map((workspaceId) => {
+        const entry = entriesById.get(workspaceId)
+
+        if (entry === undefined) {
+          throw new Error(`Selected Boxdown workspace disappeared: ${workspaceId}`)
+        }
+
+        return {
+          context: workspaceMetadataContext(entry),
+          argv: ['purge', '--workspace', entry.workspaceFolder]
+        }
+      }),
+      cancelled: false,
+      batch: true
+    }
+  }
+
+  if (result.status === 'non-interactive') {
+    throw new Error('Current directory is not a tracked Boxdown workspace. Run boxdown purge from a tracked workspace or pass --workspace <PATH|SSH ALIAS|REPO>.')
+  }
+
+  return {
+    targets: [],
+    cancelled: true,
+    batch: true
+  }
+}
+
+async function confirmPurgeTargets (
+  resolved: ResolvedPurgeTargets,
+  parsed: ParsedCli,
+  options: RunCliOptions
+): Promise<boolean> {
+  if (!resolved.batch) {
+    const target = resolved.targets[0]
+
+    if (target === undefined) {
+      return false
+    }
+
+    return confirmPurgeWorkspace(target.context, parsed, options)
+  }
+
+  const result = await promptConfirm({
+    title: 'Purge selected Boxdown workspaces?',
+    details: [
+      `${resolved.targets.length} workspaces selected:`,
+      ...resolved.targets.map((target) => `Workspace: ${target.context.workspaceFolder}`),
+      'Removes devcontainers, recorded images, SSH/Codex entries, cache, and data.',
+      parsed.alias === undefined ? 'Alias: default and recorded aliases' : `Alias: ${parsed.alias}, default, and recorded aliases`
+    ],
+    confirmLabel: 'Purge selected',
+    cancelLabel: 'Cancel',
+    summaryLabel: 'Purge workspaces',
+    input: options.promptInput,
+    output: options.promptOutput,
+    env: options.env
+  })
+
+  return result.status === 'confirmed' || result.status === 'non-interactive'
 }
 
 async function runPurgeCommand (parsed: ParsedCli, argv: string[], options: RunCliOptions): Promise<number> {
@@ -562,14 +659,19 @@ async function runPurgeCommand (parsed: ParsedCli, argv: string[], options: RunC
     return 1
   }
 
+  if (resolved.targets.length === 0) {
+    process.stderr.write('No Boxdown workspaces selected for purge.\n')
+    return 1
+  }
+
+  if (!await confirmPurgeTargets(resolved, parsed, options)) {
+    process.stderr.write('Canceled purge.\n')
+    return 1
+  }
+
   let failed = false
 
   for (const target of resolved.targets) {
-    if (!await confirmPurgeWorkspace(target.context, parsed, options)) {
-      process.stderr.write('Canceled purge.\n')
-      return 1
-    }
-
     try {
       const code = await runLoggedLifecycle(target.context, 'purge', target.argv, async (logger) => purgeWorkspace(target.context, {
         alias: parsed.alias,
@@ -993,7 +1095,7 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
     }
 
     if (parsed.command === 'purge') {
-      return runPurgeCommand(parsed, argv, options)
+      return await runPurgeCommand(parsed, argv, options)
     }
 
     const context = createWorkspaceContext({ workspace: parsed.workspace })
