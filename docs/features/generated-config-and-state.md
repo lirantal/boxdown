@@ -42,6 +42,11 @@ file:
 ~/.local/share/boxdown/workspaces/<workspace-hash>/boxdown.log
 ```
 
+The log is append-only across lifecycle runs. Each run starts a timestamped
+section and records Boxdown-managed command output, Docker/devcontainer child
+process output, and command exit codes. Full interactive shell, agent, and
+tunnel session bytes are not tee'd into the log.
+
 The log lives with the workspace's persistent data so `boxdown status` can show
 its path and `boxdown purge` removes it with the rest of the workspace data.
 

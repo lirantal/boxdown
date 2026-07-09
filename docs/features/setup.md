@@ -31,7 +31,16 @@ interactive shell. It accepts:
 
 `setup` prints plain progress sections by default. Docker, Dev Containers CLI,
 and lifecycle hook output is captured and only summarized if a command fails.
-Pass `--verbose` to stream the raw build and hook logs.
+Pass `--verbose` to stream the raw build and hook logs to the terminal.
+
+Boxdown also appends the managed setup output to the workspace command log at:
+
+```text
+~/.local/share/boxdown/workspaces/<workspace-hash>/boxdown.log
+```
+
+The log is written regardless of `--verbose`; the flag only changes terminal
+streaming.
 
 When `--target codex` is provided, Boxdown writes the Codex app config entry for
 the same alias and container-side project path used by:
@@ -53,4 +62,5 @@ registration unless `--target` is provided.
 
 `setup` does not open a shell, launch a coding-agent CLI, or keep a tunnel in the
 foreground. Use `boxdown start`, `boxdown codex`, or `boxdown tunnel` for those
-foreground workflows.
+foreground workflows. Those commands log Boxdown-managed startup steps, but do
+not tee full interactive shell, agent, or tunnel session bytes into the log.

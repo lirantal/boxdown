@@ -124,6 +124,8 @@ Options:
   --recreate          Remove the existing devcontainer before starting.
   --json              Print JSON output. Supported by status and list.
   --verbose           Stream raw Docker, devcontainer, and hook command output.
+                      Lifecycle commands append the same managed output to the
+                      per-workspace command log either way.
   --help, -h          Show help.
 `
 

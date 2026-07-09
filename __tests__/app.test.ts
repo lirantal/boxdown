@@ -588,7 +588,7 @@ describe('CLI parsing', () => {
     assert.match(USAGE, /purge\s+Remove the workspace devcontainer, exact Docker/)
     assert.match(USAGE, /boxdown purge \[--workspace <path>\] \[--alias <name>\]/)
     assert.match(USAGE, /--workspace <path>\s+Target project directory[\s\S]*Repeatable with down\./)
-    assert.match(USAGE, /--verbose\s+Stream raw Docker, devcontainer, and hook command output\./)
+    assert.match(USAGE, /--verbose\s+Stream raw Docker, devcontainer, and hook command output\.[\s\S]*per-workspace command log either way\./)
     assert.match(USAGE, /doctor\s+Check required host tools/)
     assert.doesNotMatch(USAGE, /Alias:/)
     assert.ok(!usageLines.includes('  boxdown cc [--workspace <path>] [--recreate] [-- <claude args...>]'))

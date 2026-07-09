@@ -58,6 +58,11 @@ already stopped or absent, it prints a short message and exits 0.
 `down` removes the workspace devcontainer with Docker. It does not remove
 Boxdown cache, generated config, data directories, or SSH keys.
 
+Lifecycle commands append managed output to the workspace command log under the
+workspace data directory. `--verbose` only controls terminal streaming; it does
+not disable or enable log persistence. Foreground interactive shell, agent, and
+tunnel session bytes are not tee'd into the log.
+
 `purge` removes the workspace devcontainer with Docker, force-removes the exact
 Docker image ID Boxdown can inspect or has recorded for the workspace, removes
 Boxdown-managed SSH/Codex/Claude entries for the computed, recorded, and

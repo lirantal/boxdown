@@ -47,8 +47,9 @@ of copying `.devcontainer/` into the project.
 Startup commands print concise progress by default and hide raw Docker,
 Dev Containers, and lifecycle hook logs unless a step fails. Add `--verbose` to
 stream the full command output while setup/start work runs. Boxdown also keeps
-one per-workspace command log under its data directory; `boxdown status` shows
-the exact path.
+one append-only per-workspace command log under its data directory; `boxdown
+status` shows the exact path. Interactive shell, agent, and tunnel session bytes
+are not tee'd into the log.
 
 Open an interactive shell inside the container when you need one:
 
