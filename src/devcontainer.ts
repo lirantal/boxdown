@@ -5,6 +5,7 @@ import { buildGeneratedDevcontainerConfig, publishContainerPortFromConfig, write
 import { codingAgentBinary, type CodingAgentCli } from './coding-agents.ts'
 import { resolveDevcontainerCli } from './devcontainer-cli.ts'
 import { configureWorkspaceGithubGitAuth } from './github-git-auth.ts'
+import type { WorkspaceCommandLogger } from './logging.ts'
 import { recordWorkspaceDockerImage } from './metadata.ts'
 import type { WorkspaceContext } from './paths.ts'
 import { runBuffered, runInteractive } from './process.ts'
@@ -17,11 +18,13 @@ export interface StartOptions {
   recreate?: boolean
   proxyMode?: boolean
   progress?: ProgressReporter
+  logger?: WorkspaceCommandLogger
   reuseRunning?: boolean
 }
 
 export interface ContainerCommandOptions {
   progress?: ProgressReporter
+  logger?: WorkspaceCommandLogger
 }
 
 export interface TunnelPortForward {
@@ -77,7 +80,7 @@ export function parseContainerIdFromUpOutput (output: string): string | undefine
   return /"containerId"\s*:\s*"([^"]+)"/.exec(output)?.[1]
 }
 
-export async function findWorkspaceContainer (context: WorkspaceContext): Promise<ContainerSummary | undefined> {
+export async function findWorkspaceContainer (context: WorkspaceContext, options: { logger?: WorkspaceCommandLogger } = {}): Promise<ContainerSummary | undefined> {
   const result = await runBuffered('docker', [
     'ps',
     '-a',
@@ -86,6 +89,7 @@ export async function findWorkspaceContainer (context: WorkspaceContext): Promis
     '--format',
     '{{json .}}'
   ], {
+    logger: options.logger,
     mirrorStdout: false,
     mirrorStderr: false
   })
@@ -117,7 +121,7 @@ export async function listWorkspaceContainers (): Promise<ContainerSummary[] | u
   return parseDockerPsJsonLines(result.stdout)
 }
 
-export async function findRunningContainerId (context: WorkspaceContext): Promise<string | undefined> {
+export async function findRunningContainerId (context: WorkspaceContext, options: { logger?: WorkspaceCommandLogger } = {}): Promise<string | undefined> {
   const result = await runBuffered('docker', [
     'ps',
     '--filter',
@@ -125,6 +129,7 @@ export async function findRunningContainerId (context: WorkspaceContext): Promis
     '--format',
     '{{.ID}}'
   ], {
+    logger: options.logger,
     mirrorStdout: false,
     mirrorStderr: false
   })
@@ -169,13 +174,14 @@ function parseDockerInspectImage (output: string, containerId: string): DockerIm
   }
 }
 
-export async function inspectContainerImage (containerId: string): Promise<DockerImageInfo | undefined> {
+export async function inspectContainerImage (containerId: string, options: { logger?: WorkspaceCommandLogger } = {}): Promise<DockerImageInfo | undefined> {
   const result = await runBuffered('docker', [
     'inspect',
     '--format',
     '{{json .}}',
     containerId
   ], {
+    logger: options.logger,
     mirrorStdout: false,
     mirrorStderr: false
   })
@@ -187,9 +193,9 @@ export async function inspectContainerImage (containerId: string): Promise<Docke
   return parseDockerInspectImage(result.stdout, containerId)
 }
 
-async function recordContainerImageIfPresent (context: WorkspaceContext, containerId: string): Promise<void> {
+async function recordContainerImageIfPresent (context: WorkspaceContext, containerId: string, logger?: WorkspaceCommandLogger): Promise<void> {
   try {
-    const image = await inspectContainerImage(containerId)
+    const image = await inspectContainerImage(containerId, { logger })
 
     if (image !== undefined) {
       recordWorkspaceDockerImage(context, image)
@@ -199,8 +205,8 @@ async function recordContainerImageIfPresent (context: WorkspaceContext, contain
   }
 }
 
-export async function stopWorkspaceContainer (context: WorkspaceContext): Promise<void> {
-  const container = await findWorkspaceContainer(context)
+export async function stopWorkspaceContainer (context: WorkspaceContext, options: { logger?: WorkspaceCommandLogger } = {}): Promise<void> {
+  const container = await findWorkspaceContainer(context, { logger: options.logger })
 
   if (container === undefined) {
     process.stdout.write(`No devcontainer found for: ${context.workspaceFolder}\n`)
@@ -213,6 +219,7 @@ export async function stopWorkspaceContainer (context: WorkspaceContext): Promis
   }
 
   const result = await runBuffered('docker', ['stop', container.id], {
+    logger: options.logger,
     mirrorStdout: false,
     mirrorStderr: false
   })
@@ -224,25 +231,26 @@ export async function stopWorkspaceContainer (context: WorkspaceContext): Promis
   process.stdout.write(`Stopped devcontainer: ${container.id}\n`)
 }
 
-export async function removeWorkspaceContainer (context: WorkspaceContext): Promise<void> {
-  const container = await findWorkspaceContainer(context)
+export async function removeWorkspaceContainer (context: WorkspaceContext, options: { logger?: WorkspaceCommandLogger } = {}): Promise<void> {
+  const container = await findWorkspaceContainer(context, { logger: options.logger })
 
   if (container === undefined) {
     process.stdout.write(`No devcontainer found for: ${context.workspaceFolder}\n`)
     return
   }
 
-  await removeContainerById(container.id)
+  await removeContainerById(container.id, { logger: options.logger })
   process.stdout.write(`Removed devcontainer: ${container.id}\n`)
 }
 
-export async function removeContainerById (containerId: string, options: { volumes?: boolean } = {}): Promise<void> {
+export async function removeContainerById (containerId: string, options: { volumes?: boolean, logger?: WorkspaceCommandLogger } = {}): Promise<void> {
   const result = await runBuffered('docker', [
     'rm',
     '-f',
     ...(options.volumes === true ? ['-v'] : []),
     containerId
   ], {
+    logger: options.logger,
     mirrorStdout: false,
     mirrorStderr: false
   })
@@ -256,8 +264,9 @@ function dockerImageMissing (stderr: string): boolean {
   return /No such image/i.test(stderr) || /not found/i.test(stderr)
 }
 
-export async function removeDockerImage (imageId: string): Promise<boolean> {
+export async function removeDockerImage (imageId: string, options: { logger?: WorkspaceCommandLogger } = {}): Promise<boolean> {
   const result = await runBuffered('docker', ['image', 'rm', '-f', imageId], {
+    logger: options.logger,
     mirrorStdout: false,
     mirrorStderr: false
   })
@@ -289,7 +298,7 @@ export async function startDevcontainer (context: WorkspaceContext, options: Sta
   writeGeneratedDevcontainerConfig(context)
 
   if (options.reuseRunning === true && options.recreate !== true) {
-    const runningContainerId = await findRunningContainerId(context)
+    const runningContainerId = await findRunningContainerId(context, { logger: options.logger })
 
     if (runningContainerId !== undefined) {
       if (progress === undefined) {
@@ -297,7 +306,7 @@ export async function startDevcontainer (context: WorkspaceContext, options: Sta
       } else {
         progress.item(`Using running devcontainer: ${runningContainerId}`)
       }
-      await recordContainerImageIfPresent(context, runningContainerId)
+      await recordContainerImageIfPresent(context, runningContainerId, options.logger)
       return runningContainerId
     }
   }
@@ -326,12 +335,14 @@ export async function startDevcontainer (context: WorkspaceContext, options: Sta
   const result = progress === undefined
     ? await runBuffered(cli.command, [...cli.argsPrefix, ...args], {
         mirrorStdout: proxyMode ? 'stderr' : 'stdout',
-        mirrorStderr: 'stderr'
+        mirrorStderr: 'stderr',
+        logger: options.logger
       })
     : await runProgressCommand('devcontainer up', cli.command, [...cli.argsPrefix, ...args], {
         progress,
         verboseStdout: proxyMode ? 'stderr' : 'stdout',
-        verboseStderr: 'stderr'
+        verboseStderr: 'stderr',
+        logger: options.logger
       })
 
   if (progress === undefined && result.code !== 0) {
@@ -342,17 +353,17 @@ export async function startDevcontainer (context: WorkspaceContext, options: Sta
     assertProgressCommandSucceeded('devcontainer up', result, `devcontainer up failed for ${context.workspaceFolder}`)
   }
 
-  const containerId = parseContainerIdFromUpOutput(`${result.stdout}\n${result.stderr}`) ?? await findRunningContainerId(context)
+  const containerId = parseContainerIdFromUpOutput(`${result.stdout}\n${result.stderr}`) ?? await findRunningContainerId(context, { logger: options.logger })
 
   if (containerId === undefined) {
     throw new Error(`Could not resolve devcontainer ID for ${context.workspaceFolder}`)
   }
 
-  await recordContainerImageIfPresent(context, containerId)
+  await recordContainerImageIfPresent(context, containerId, options.logger)
   return containerId
 }
 
-export async function printPortHint (context: WorkspaceContext, containerId: string): Promise<void> {
+export async function printPortHint (context: WorkspaceContext, containerId: string, options: { logger?: WorkspaceCommandLogger } = {}): Promise<void> {
   const config = buildGeneratedDevcontainerConfig(context)
   const containerPort = publishContainerPortFromConfig(config)
 
@@ -362,6 +373,7 @@ export async function printPortHint (context: WorkspaceContext, containerId: str
   }
 
   const result = await runBuffered('docker', ['port', containerId, `${containerPort}/tcp`], {
+    logger: options.logger,
     mirrorStdout: false,
     mirrorStderr: false
   })
@@ -375,7 +387,7 @@ export async function printPortHint (context: WorkspaceContext, containerId: str
   }
 }
 
-export async function openShell (context: WorkspaceContext): Promise<number> {
+export async function openShell (context: WorkspaceContext, options: { logger?: WorkspaceCommandLogger } = {}): Promise<number> {
   const cli = resolveDevcontainerCli(context)
   process.stdout.write('Dropping into container shell...\n')
 
@@ -389,7 +401,7 @@ export async function openShell (context: WorkspaceContext): Promise<number> {
     'bash',
     '-c',
     interactiveShellScript()
-  ])
+  ], { logger: options.logger })
 }
 
 export function codingAgentDevcontainerExecArgs (context: WorkspaceContext, agent: CodingAgentCli, agentArgs: string[] = []): string[] {
@@ -408,14 +420,14 @@ export function codingAgentDevcontainerExecArgs (context: WorkspaceContext, agen
   ]
 }
 
-export async function openCodingAgentCli (context: WorkspaceContext, agent: CodingAgentCli, agentArgs: string[] = []): Promise<number> {
+export async function openCodingAgentCli (context: WorkspaceContext, agent: CodingAgentCli, agentArgs: string[] = [], options: { logger?: WorkspaceCommandLogger } = {}): Promise<number> {
   const cli = resolveDevcontainerCli(context)
   process.stdout.write(`Dropping into ${codingAgentBinary(agent)} inside the devcontainer...\n`)
 
   return runInteractive(cli.command, [
     ...cli.argsPrefix,
     ...codingAgentDevcontainerExecArgs(context, agent, agentArgs)
-  ])
+  ], { logger: options.logger })
 }
 
 export async function ensureContainerSshRuntime (context: WorkspaceContext, options: ContainerCommandOptions = {}): Promise<void> {
@@ -434,12 +446,14 @@ export async function ensureContainerSshRuntime (context: WorkspaceContext, opti
   const result = options.progress === undefined
     ? await runBuffered(cli.command, args, {
         mirrorStdout: 'stderr',
-        mirrorStderr: 'stderr'
+        mirrorStderr: 'stderr',
+        logger: options.logger
       })
     : await runProgressCommand('prepare SSH runtime', cli.command, args, {
         progress: options.progress,
         verboseStdout: 'stderr',
-        verboseStderr: 'stderr'
+        verboseStderr: 'stderr',
+        logger: options.logger
       })
 
   if (options.progress === undefined && result.code !== 0) {
@@ -475,12 +489,14 @@ export async function refreshContainerCodingAgentClis (
   const result = options.progress === undefined
     ? await runBuffered(cli.command, args, {
         mirrorStdout: proxyMode ? 'stderr' : 'stdout',
-        mirrorStderr: 'stderr'
+        mirrorStderr: 'stderr',
+        logger: options.logger
       })
     : await runProgressCommand('refresh coding-agent CLIs', cli.command, args, {
         progress: options.progress,
         verboseStdout: proxyMode ? 'stderr' : 'stdout',
-        verboseStderr: 'stderr'
+        verboseStderr: 'stderr',
+        logger: options.logger
       })
 
   if (result.code !== 0) {
@@ -513,12 +529,14 @@ export async function ensureContainerCodingAgentCli (
   const result = options.progress === undefined
     ? await runBuffered(cli.command, args, {
         mirrorStdout: 'stdout',
-        mirrorStderr: 'stderr'
+        mirrorStderr: 'stderr',
+        logger: options.logger
       })
     : await runProgressCommand(`prepare ${codingAgentBinary(agent)}`, cli.command, args, {
         progress: options.progress,
         verboseStdout: 'stdout',
-        verboseStderr: 'stderr'
+        verboseStderr: 'stderr',
+        logger: options.logger
       })
 
   if (options.progress === undefined && result.code !== 0) {
@@ -530,7 +548,7 @@ export async function ensureContainerCodingAgentCli (
   }
 }
 
-export async function runSshdProxy (containerId: string): Promise<number> {
+export async function runSshdProxy (containerId: string, options: { logger?: WorkspaceCommandLogger } = {}): Promise<number> {
   return runInteractive('docker', [
     'exec',
     '-i',
@@ -551,7 +569,7 @@ export async function runSshdProxy (containerId: string): Promise<number> {
     'AllowStreamLocalForwarding=yes',
     '-o',
     'PermitTTY=yes'
-  ])
+  ], { logger: options.logger })
 }
 
 export function sshTunnelArgs (alias: string, ports: TunnelPortForward[], options: SshTunnelOptions = {}): string[] {
@@ -570,8 +588,9 @@ export function sshTunnelArgs (alias: string, ports: TunnelPortForward[], option
   ]
 }
 
-export async function openSshTunnel (alias: string, ports: TunnelPortForward[], options: SshTunnelOptions = {}): Promise<number> {
-  return runInteractive('ssh', sshTunnelArgs(alias, ports, options))
+export async function openSshTunnel (alias: string, ports: TunnelPortForward[], options: SshTunnelOptions & { logger?: WorkspaceCommandLogger } = {}): Promise<number> {
+  const { logger, ...tunnelOptions } = options
+  return runInteractive('ssh', sshTunnelArgs(alias, ports, tunnelOptions), { logger })
 }
 
 async function hostGhTokenOrEmpty (): Promise<string> {
@@ -604,6 +623,8 @@ export async function refreshContainerGhAuth (context: WorkspaceContext, options
     return
   }
 
+  options.logger?.addRedaction(token)
+
   const cli = resolveDevcontainerCli(context)
   progress?.item('Refreshing GitHub CLI auth inside the devcontainer')
   const loginArgs = [
@@ -624,12 +645,14 @@ export async function refreshContainerGhAuth (context: WorkspaceContext, options
   const login = progress === undefined
     ? await runBuffered(cli.command, loginArgs, {
         input: `${token}\n`,
+        logger: options.logger,
         mirrorStdout: false,
         mirrorStderr: false
       })
     : await runProgressCommand('refresh GitHub CLI auth', cli.command, loginArgs, {
         input: `${token}\n`,
         progress,
+        logger: options.logger,
         verboseStdout: false,
         verboseStderr: false
       })
@@ -668,10 +691,12 @@ export async function refreshContainerGhAuth (context: WorkspaceContext, options
   const verify = progress === undefined
     ? await runBuffered(cli.command, verifyArgs, {
         mirrorStdout: false,
-        mirrorStderr: false
+        mirrorStderr: false,
+        logger: options.logger
       })
     : await runProgressCommand('verify GitHub CLI auth', cli.command, verifyArgs, {
         progress,
+        logger: options.logger,
         verboseStdout: false,
         verboseStderr: false
       })

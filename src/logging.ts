@@ -29,12 +29,23 @@ export class WorkspaceCommandLogger {
   readonly workspaceFolder: string
   readonly #redactions: string[]
   readonly #now: () => Date
+  #disabled = false
 
   constructor (context: Pick<WorkspaceContext, 'workspaceFolder' | 'workspaceLogPath'>, options: WorkspaceCommandLoggerOptions = {}) {
     this.logPath = context.workspaceLogPath
     this.workspaceFolder = context.workspaceFolder
     this.#redactions = options.redactions?.filter((value) => value.length > 0) ?? []
     this.#now = options.now ?? (() => new Date())
+  }
+
+  addRedaction (value: string): void {
+    if (value.length > 0) {
+      this.#redactions.push(value)
+    }
+  }
+
+  disable (): void {
+    this.#disabled = true
   }
 
   section (title: string, details: Record<string, string | number | boolean | undefined> = {}): void {
@@ -97,8 +108,16 @@ export class WorkspaceCommandLogger {
   }
 
   #append (lines: string[]): void {
-    mkdirSync(dirname(this.logPath), { recursive: true })
-    appendFileSync(this.logPath, `${lines.join('\n')}\n`)
+    if (this.#disabled) {
+      return
+    }
+
+    try {
+      mkdirSync(dirname(this.logPath), { recursive: true })
+      appendFileSync(this.logPath, `${lines.join('\n')}\n`)
+    } catch {
+      this.#disabled = true
+    }
   }
 }
 
@@ -116,12 +135,12 @@ export async function withLoggedProcessOutput<T> (
   const stdoutWrite = process.stdout.write
   const stderrWrite = process.stderr.write
 
-  process.stdout.write = function patchedStdoutWrite (chunk: string | Uint8Array, ...args: unknown[]): boolean {
+  process.stdout.write = function patchedStdoutWrite (this: typeof process.stdout, chunk: string | Uint8Array, ...args: unknown[]): boolean {
     logger.boxdown(Buffer.isBuffer(chunk) ? chunk : String(chunk))
     return stdoutWrite.call(this, chunk, ...args as []) as boolean
   } as typeof process.stdout.write
 
-  process.stderr.write = function patchedStderrWrite (chunk: string | Uint8Array, ...args: unknown[]): boolean {
+  process.stderr.write = function patchedStderrWrite (this: typeof process.stderr, chunk: string | Uint8Array, ...args: unknown[]): boolean {
     logger.boxdown(Buffer.isBuffer(chunk) ? chunk : String(chunk))
     return stderrWrite.call(this, chunk, ...args as []) as boolean
   } as typeof process.stderr.write

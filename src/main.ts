@@ -8,6 +8,7 @@ import { doctorHasFailures, formatDoctorText, runDoctorChecks } from './doctor.t
 import { startDevcontainer, printPortHint, openShell, openCodingAgentCli, ensureContainerSshRuntime, runSshdProxy, refreshContainerGhAuth, refreshContainerCodingAgentClis, ensureContainerCodingAgentCli, findRunningContainerId, findWorkspaceContainer, stopWorkspaceContainer, removeWorkspaceContainer, listWorkspaceContainers, openSshTunnel, type TunnelPortForward } from './devcontainer.ts'
 import { canPromptInteractively, promptConfirm, promptMultiSelect, promptText, type PromptInput, type PromptOutput } from './interactive-prompts.ts'
 import { createWorkspaceListEntries, formatWorkspaceListText } from './list.ts'
+import { createWorkspaceCommandLogger, withLoggedProcessOutput, type WorkspaceCommandLogger } from './logging.ts'
 import { listWorkspaceMetadata, readWorkspaceMetadata, writeWorkspaceMetadata } from './metadata.ts'
 import { createWorkspaceContext, defaultDataRoot, type WorkspaceContext } from './paths.ts'
 import { createProgress, type ProgressReporter, type ProgressOutputTarget } from './progress.ts'
@@ -426,6 +427,31 @@ interface ResolvedDownWorkspaces {
   cancelled: boolean
 }
 
+function createLifecycleLogger (context: WorkspaceContext, command: string, argv: string[]): WorkspaceCommandLogger {
+  const logger = createWorkspaceCommandLogger(context)
+  logger.section(`boxdown ${command}`, {
+    argv: JSON.stringify(argv),
+    cwd: process.cwd()
+  })
+  return logger
+}
+
+async function runLoggedLifecycle<T> (
+  context: WorkspaceContext,
+  command: string,
+  argv: string[],
+  action: (logger: WorkspaceCommandLogger) => Promise<T>
+): Promise<T> {
+  const logger = createLifecycleLogger(context, command, argv)
+
+  try {
+    return await withLoggedProcessOutput(logger, async () => action(logger))
+  } catch (error) {
+    logger.boxdown(`Error: ${error instanceof Error ? error.message : String(error)}\n`)
+    throw error
+  }
+}
+
 async function resolveDownWorkspaces (
   workspaces: string[] | undefined,
   options: RunCliOptions
@@ -498,7 +524,9 @@ async function runDownCommand (workspaces: string[] | undefined, options: RunCli
   for (const workspace of targetWorkspaces) {
     try {
       const context = createWorkspaceContext({ workspace })
-      await removeWorkspaceContainer(context)
+      await runLoggedLifecycle(context, 'down', ['down', ...(workspace === undefined ? [] : ['--workspace', workspace])], async (logger) => {
+        await removeWorkspaceContainer(context, { logger })
+      })
     } catch (error) {
       failed = true
       process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`)
@@ -638,6 +666,7 @@ interface SetupWorkspaceOptions {
   recreate?: boolean
   targets?: SshConfigInstallTarget[]
   progress?: ProgressReporter
+  logger?: WorkspaceCommandLogger
   start?: typeof startDevcontainer
   installSsh?: typeof installSshConfig
   installTarget?: typeof installSshInstallTarget
@@ -650,6 +679,7 @@ export async function setupWorkspace (
 ): Promise<void> {
   await (options.start ?? startDevcontainer)(context, {
     recreate: options.recreate,
+    ...(options.logger === undefined ? {} : { logger: options.logger }),
     ...(options.progress === undefined ? {} : { progress: options.progress })
   })
 
@@ -788,8 +818,10 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
     }
 
     if (parsed.command === 'stop') {
-      await stopWorkspaceContainer(context)
-      return 0
+      return runLoggedLifecycle(context, 'stop', argv, async (logger) => {
+        await stopWorkspaceContainer(context, { logger })
+        return 0
+      })
     }
 
     if (parsed.command === 'purge') {
@@ -798,7 +830,10 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
         return 1
       }
 
-      return purgeWorkspace(context, { alias: parsed.alias })
+      return runLoggedLifecycle(context, 'purge', argv, async (logger) => purgeWorkspace(context, {
+        alias: parsed.alias,
+        logger
+      }))
     }
 
     if (parsed.command === 'doctor') {
@@ -824,10 +859,13 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
       progress.section('Boxdown setup')
       progress.detail(`Workspace: ${context.workspaceFolder}`)
       progress.detail(`SSH alias: ${alias}`)
-      await setupWorkspace(context, alias, {
-        recreate: parsed.recreate,
-        targets: resolvedTargets.targets,
-        progress
+      await runLoggedLifecycle(context, 'setup', argv, async (logger) => {
+        await setupWorkspace(context, alias, {
+          recreate: parsed.recreate,
+          targets: resolvedTargets.targets,
+          progress,
+          logger
+        })
       })
 
       if (resolvedTargets.skippedNonInteractive) {
@@ -838,19 +876,22 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
     }
 
     if (parsed.command === 'ssh-proxy') {
-      const progress = createCliProgress(parsed, 'stderr')
-      progress.section('Boxdown SSH proxy')
-      progress.item(`Updating SSH alias: ${alias}`)
-      await installSshConfig(context, alias, { quiet: true })
-      const containerId = await startDevcontainer(context, {
-        recreate: parsed.recreate,
-        proxyMode: true,
-        progress,
-        reuseRunning: true
+      return runLoggedLifecycle(context, 'ssh-proxy', argv, async (logger) => {
+        const progress = createCliProgress(parsed, 'stderr')
+        progress.section('Boxdown SSH proxy')
+        progress.item(`Updating SSH alias: ${alias}`)
+        await installSshConfig(context, alias, { quiet: true })
+        const containerId = await startDevcontainer(context, {
+          recreate: parsed.recreate,
+          proxyMode: true,
+          progress,
+          logger,
+          reuseRunning: true
+        })
+        await refreshContainerCodingAgentClis(context, true, [], { progress, logger })
+        await ensureContainerSshRuntime(context, { progress, logger })
+        return runSshdProxy(containerId, { logger })
       })
-      await refreshContainerCodingAgentClis(context, true, [], { progress })
-      await ensureContainerSshRuntime(context, { progress })
-      return runSshdProxy(containerId)
     }
 
     if (parsed.command === 'tunnel') {
@@ -867,47 +908,54 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
       }
 
       writeWorkspaceMetadata(context, alias)
-      const progress = createCliProgress(parsed)
-      progress.section('Boxdown tunnel')
-      progress.detail(`Workspace: ${context.workspaceFolder}`)
-      progress.item(`Updating SSH alias: ${alias}`)
-      await installSshConfig(context, alias, { quiet: true })
-      await startDevcontainer(context, {
-        recreate: parsed.recreate,
-        progress,
-        reuseRunning: true
+      return runLoggedLifecycle(context, 'tunnel', argv, async (logger) => {
+        const progress = createCliProgress(parsed)
+        progress.section('Boxdown tunnel')
+        progress.detail(`Workspace: ${context.workspaceFolder}`)
+        progress.item(`Updating SSH alias: ${alias}`)
+        await installSshConfig(context, alias, { quiet: true })
+        await startDevcontainer(context, {
+          recreate: parsed.recreate,
+          progress,
+          logger,
+          reuseRunning: true
+        })
+
+        const forwards = tunnelPorts
+          .map((port) => `127.0.0.1:${port.localPort} -> localhost:${port.remotePort}`)
+          .join(', ')
+
+        process.stdout.write(`Forwarding ${forwards}\n`)
+        process.stdout.write('Press Ctrl-C to stop the tunnel.\n')
+
+        return openSshTunnel(alias, tunnelPorts, { logger })
       })
-
-      const forwards = tunnelPorts
-        .map((port) => `127.0.0.1:${port.localPort} -> localhost:${port.remotePort}`)
-        .join(', ')
-
-      process.stdout.write(`Forwarding ${forwards}\n`)
-      process.stdout.write('Press Ctrl-C to stop the tunnel.\n')
-
-      return openSshTunnel(alias, tunnelPorts)
     }
 
     if (parsed.command === 'refresh-gh-token-running') {
-      const containerId = await findRunningContainerId(context)
-      if (containerId === undefined) {
-        throw new Error(`No running devcontainer found for: ${context.workspaceFolder}`)
-      }
-      const progress = createCliProgress(parsed)
-      progress.section('Boxdown GitHub auth refresh')
-      progress.detail(`Workspace: ${context.workspaceFolder}`)
-      progress.item(`Using running devcontainer: ${containerId}`)
-      await refreshContainerGhAuth(context, { progress })
-      return 0
+      return runLoggedLifecycle(context, 'refresh-gh-token-running', argv, async (logger) => {
+        const containerId = await findRunningContainerId(context, { logger })
+        if (containerId === undefined) {
+          throw new Error(`No running devcontainer found for: ${context.workspaceFolder}`)
+        }
+        const progress = createCliProgress(parsed)
+        progress.section('Boxdown GitHub auth refresh')
+        progress.detail(`Workspace: ${context.workspaceFolder}`)
+        progress.item(`Using running devcontainer: ${containerId}`)
+        await refreshContainerGhAuth(context, { progress, logger })
+        return 0
+      })
     }
 
     if (parsed.command === 'refresh-gh-token') {
-      const progress = createCliProgress(parsed)
-      progress.section('Boxdown GitHub auth refresh')
-      progress.detail(`Workspace: ${context.workspaceFolder}`)
-      await startDevcontainer(context, { progress })
-      await refreshContainerGhAuth(context, { progress })
-      return 0
+      return runLoggedLifecycle(context, 'refresh-gh-token', argv, async (logger) => {
+        const progress = createCliProgress(parsed)
+        progress.section('Boxdown GitHub auth refresh')
+        progress.detail(`Workspace: ${context.workspaceFolder}`)
+        await startDevcontainer(context, { progress, logger })
+        await refreshContainerGhAuth(context, { progress, logger })
+        return 0
+      })
     }
 
     if (parsed.command === 'coding-agent') {
@@ -916,26 +964,32 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
         throw new Error('Missing coding-agent command')
       }
 
-      const progress = createCliProgress(parsed)
-      progress.section(`Boxdown ${agent}`)
-      progress.detail(`Workspace: ${context.workspaceFolder}`)
-      await startDevcontainer(context, {
-        recreate: parsed.recreate,
-        progress
+      return runLoggedLifecycle(context, agent, argv, async (logger) => {
+        const progress = createCliProgress(parsed)
+        progress.section(`Boxdown ${agent}`)
+        progress.detail(`Workspace: ${context.workspaceFolder}`)
+        await startDevcontainer(context, {
+          recreate: parsed.recreate,
+          progress,
+          logger
+        })
+        await ensureContainerCodingAgentCli(context, agent, { progress, logger })
+        return openCodingAgentCli(context, agent, parsed.agentArgs ?? [], { logger })
       })
-      await ensureContainerCodingAgentCli(context, agent, { progress })
-      return openCodingAgentCli(context, agent, parsed.agentArgs ?? [])
     }
 
-    const progress = createCliProgress(parsed)
-    progress.section('Boxdown start')
-    progress.detail(`Workspace: ${context.workspaceFolder}`)
-    const containerId = await startDevcontainer(context, {
-      recreate: parsed.recreate,
-      progress
+    return runLoggedLifecycle(context, 'start', argv, async (logger) => {
+      const progress = createCliProgress(parsed)
+      progress.section('Boxdown start')
+      progress.detail(`Workspace: ${context.workspaceFolder}`)
+      const containerId = await startDevcontainer(context, {
+        recreate: parsed.recreate,
+        progress,
+        logger
+      })
+      await printPortHint(context, containerId, { logger })
+      return openShell(context, { logger })
     })
-    await printPortHint(context, containerId)
-    return openShell(context)
   } catch (error) {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`)
     return 1

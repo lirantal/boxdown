@@ -1084,6 +1084,32 @@ describe('CLI execution', () => {
     })
   })
 
+  test('down appends Docker and Boxdown output to the workspace log', async () => {
+    const workspace = tempDir('down-log-workspace')
+    const env = {
+      HOME: tempDir('down-log-home'),
+      BOXDOWN_CACHE_HOME: tempDir('down-log-cache'),
+      BOXDOWN_DATA_HOME: tempDir('down-log-data')
+    }
+    const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+
+    await withFakeDocker([
+      { workspace, id: 'down-log-container' }
+    ], async (_logPath, dockerEnv) => {
+      const code = await withProcessEnv({
+        ...dockerEnv,
+        ...env
+      }, async () => runCli(['down', '--workspace', workspace]))
+      const log = readFileSync(context.workspaceLogPath, 'utf8')
+
+      assert.strictEqual(code, 0)
+      assert.match(log, /=== boxdown down ===/)
+      assert.match(log, /command start: \["docker","ps"/)
+      assert.match(log, /command start: \["docker","rm","-f","down-log-container"\]/)
+      assert.match(log, /\[boxdown\] Removed devcontainer: down-log-container/)
+    })
+  })
+
   test('prompts for known workspaces when down runs from an unknown cwd', async () => {
     const alpha = tempDir('down-prompt-alpha-workspace')
     const beta = tempDir('down-prompt-beta-workspace')
@@ -1160,6 +1186,7 @@ describe('CLI execution', () => {
 
       assert.strictEqual(code, 1)
       assert.ok(!calls.some((line) => line.startsWith('rm -f')))
+      assert.strictEqual(existsSync(context.workspaceLogPath), false)
     })
   })
 
@@ -1229,6 +1256,14 @@ describe('CLI execution', () => {
 
     assert.strictEqual(code, 1)
     assert.deepStrictEqual(listWorkspaceMetadata(dataDir), [])
+    assert.strictEqual(existsSync(createWorkspaceContext({
+      workspace,
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('tunnel-prompt-cancel-cache-after'),
+        BOXDOWN_DATA_HOME: dataDir
+      },
+      assetsDevcontainerDir
+    }).workspaceLogPath), false)
     assert.strictEqual(existsSync(sshConfigPath), false)
   })
 
@@ -1455,6 +1490,7 @@ describe('CLI execution', () => {
       assert.strictEqual(existsSync(context.workspaceFolder), true)
       assert.strictEqual(existsSync(context.workspaceCacheDir), false)
       assert.strictEqual(existsSync(context.workspaceDataDir), false)
+      assert.strictEqual(existsSync(context.workspaceLogPath), false)
       assert.strictEqual(readFileSync(env.BOXDOWN_SSH_CONFIG, 'utf8'), 'Host github.com\n  User git\n')
 
       const codexConfig = parseCodexAppConfig(JSON.parse(readFileSync(env.BOXDOWN_CODEX_APP_CONFIG, 'utf8')))
@@ -1606,6 +1642,7 @@ describe('CLI execution', () => {
       assert.deepStrictEqual(calls, [])
       assert.strictEqual(existsSync(context.workspaceCacheDir), true)
       assert.strictEqual(existsSync(context.workspaceDataDir), true)
+      assert.strictEqual(existsSync(context.workspaceLogPath), false)
     })
   })
 
@@ -1652,6 +1689,7 @@ describe('CLI execution', () => {
       assert.ok(calls.includes('image rm -f sha256:purge-prompt-confirm-image'))
       assert.strictEqual(existsSync(context.workspaceCacheDir), false)
       assert.strictEqual(existsSync(context.workspaceDataDir), false)
+      assert.strictEqual(existsSync(context.workspaceLogPath), false)
     })
   })
 })
@@ -2186,6 +2224,32 @@ describe('progress output', () => {
     assert.match(log, /command start: \["bash","-c","printf/)
     assert.match(log, /command exit: 0/)
     assert.doesNotMatch(log, /interactive stdout/)
+  })
+
+  test('command logging does not record raw stdin and redacts echoed secrets', async () => {
+    const workspace = tempDir('logger-secret-workspace')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('logger-secret-cache'),
+        BOXDOWN_DATA_HOME: tempDir('logger-secret-data')
+      },
+      assetsDevcontainerDir
+    })
+    const logger = createWorkspaceCommandLogger(context)
+
+    logger.addRedaction('secret-token')
+    const result = await runBuffered('bash', ['-c', 'read token; printf "%s\\n" "$token"'], {
+      input: 'secret-token\n',
+      logger,
+      mirrorStdout: false,
+      mirrorStderr: false
+    })
+    const log = readFileSync(context.workspaceLogPath, 'utf8')
+
+    assert.strictEqual(result.code, 0)
+    assert.doesNotMatch(log, /secret-token/)
+    assert.match(log, /\[stdout\] \[redacted\]/)
   })
 
   test('formats concise failure tails without progress marker lines', () => {

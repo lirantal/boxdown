@@ -4,6 +4,7 @@ import { basename, dirname, isAbsolute, join, parse, relative, resolve } from 'n
 import { claudeSshConfigEntryForWorkspace, uninstallClaudeSshConfigHost } from './claude-app-config.ts'
 import { codexProjectEntryForWorkspace, uninstallCodexAppConfigProject, uninstallCodexGlobalStateProject } from './codex-app-config.ts'
 import { findWorkspaceContainer, inspectContainerImage, removeContainerById, removeDockerImage } from './devcontainer.ts'
+import type { WorkspaceCommandLogger } from './logging.ts'
 import { readWorkspaceMetadata, type WorkspaceMetadata } from './metadata.ts'
 import type { WorkspaceContext } from './paths.ts'
 import { defaultSshAlias, uninstallSshConfig } from './ssh-config.ts'
@@ -11,6 +12,7 @@ import type { ContainerSummary } from './status.ts'
 
 export interface PurgeOptions {
   alias?: string
+  logger?: WorkspaceCommandLogger
 }
 
 function errorMessage (error: unknown): string {
@@ -146,7 +148,7 @@ export async function purgeWorkspace (context: WorkspaceContext, options: PurgeO
   }
 
   failed = await runPurgeStep('workspace devcontainer lookup', async () => {
-    container = await findWorkspaceContainer(context)
+    container = await findWorkspaceContainer(context, { logger: options.logger })
 
     if (container === undefined) {
       process.stdout.write(`Devcontainer absent: ${context.workspaceFolder}\n`)
@@ -159,7 +161,7 @@ export async function purgeWorkspace (context: WorkspaceContext, options: PurgeO
 
   if (currentContainer !== undefined) {
     failed = await runPurgeStep(`Docker image inspect for ${currentContainer.id}`, async () => {
-      const image = await inspectContainerImage(currentContainer.id)
+      const image = await inspectContainerImage(currentContainer.id, { logger: options.logger })
 
       if (image === undefined) {
         process.stdout.write(`Docker image not recorded by container inspect: ${currentContainer.id}\n`)
@@ -173,7 +175,7 @@ export async function purgeWorkspace (context: WorkspaceContext, options: PurgeO
     }) || failed
 
     failed = await runPurgeStep(`devcontainer ${currentContainer.id}`, async () => {
-      await removeContainerById(currentContainer.id, { volumes: true })
+      await removeContainerById(currentContainer.id, { volumes: true, logger: options.logger })
       process.stdout.write(`Removed devcontainer with volumes: ${currentContainer.id}\n`)
     }) || failed
   }
@@ -183,7 +185,7 @@ export async function purgeWorkspace (context: WorkspaceContext, options: PurgeO
   } else {
     const removedImageId = dockerImageId
     failed = await runPurgeStep(`Docker image ${removedImageId}`, async () => {
-      await removeDockerImage(removedImageId)
+      await removeDockerImage(removedImageId, { logger: options.logger })
     }) || failed
   }
 
@@ -192,6 +194,8 @@ export async function purgeWorkspace (context: WorkspaceContext, options: PurgeO
   }) || failed
 
   failed = await runPurgeStep('workspace data directory', () => {
+    options.logger?.boxdown(`Removing workspace data: ${context.workspaceDataDir}\n`)
+    options.logger?.disable()
     removeWorkspaceStateDir(context, 'workspace data', context.workspaceDataDir, context.dataRoot)
   }) || failed
 
