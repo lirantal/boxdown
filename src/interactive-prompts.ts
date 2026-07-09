@@ -1,5 +1,7 @@
 import { createInterface } from 'node:readline'
 
+import { color, emptyMark, formatPromptDetailLine, formatPromptEnd, formatPromptLabel, formatPromptTitle, promptRail, selectedMark } from './cli-style.ts'
+
 export interface MultiSelectChoice<T extends string> {
   value: T
   label: string
@@ -76,46 +78,6 @@ export function canPromptInteractively (input: PromptInput, output: PromptOutput
   return !isCiEnvironment(env) && input.isTTY === true && output.isTTY === true
 }
 
-const ansi = {
-  bold: '\u001B[1m',
-  cyan: '\u001B[36m',
-  dim: '\u001B[2m',
-  green: '\u001B[32m',
-  reset: '\u001B[0m'
-}
-
-function color (value: string, colorName: keyof typeof ansi): string {
-  return `${ansi[colorName]}${value}${ansi.reset}`
-}
-
-function selectedMark (): string {
-  return color('■', 'green')
-}
-
-function emptyMark (isFocused: boolean): string {
-  return color('□', isFocused ? 'cyan' : 'dim')
-}
-
-function promptRail (): string {
-  return color('│', 'cyan')
-}
-
-function formatPromptTitle (title: string): string {
-  return `${color('◆', 'cyan')}  ${color(title, 'bold')}`
-}
-
-function formatPromptEnd (): string {
-  return color('└', 'cyan')
-}
-
-function formatLabel (label: string, isFocused: boolean): string {
-  return color(label, isFocused ? 'bold' : 'dim')
-}
-
-function formatDetailLine (detail: string): string {
-  return `${promptRail()}  ${color(detail, 'dim')}`
-}
-
 function formatChoiceLine <T extends string> (
   choice: MultiSelectChoice<T>,
   isFocused: boolean,
@@ -123,12 +85,12 @@ function formatChoiceLine <T extends string> (
 ): string {
   const mark = isSelected ? selectedMark() : emptyMark(isFocused)
   const description = color(` - ${choice.description}`, 'dim')
-  return `${promptRail()}  ${mark} ${formatLabel(choice.label, isFocused)}${description}`
+  return `${promptRail()}  ${mark} ${formatPromptLabel(choice.label, isFocused)}${description}`
 }
 
 function formatSkipLine (skipLabel: string, isFocused: boolean, selectedCount: number): string {
   const mark = selectedCount === 0 ? selectedMark() : emptyMark(isFocused)
-  return `${promptRail()}  ${mark} ${formatLabel(skipLabel, isFocused)}`
+  return `${promptRail()}  ${mark} ${formatPromptLabel(skipLabel, isFocused)}`
 }
 
 function formatConfirmLine (
@@ -136,7 +98,7 @@ function formatConfirmLine (
   isFocused: boolean
 ): string {
   const mark = isFocused ? selectedMark() : emptyMark(false)
-  return `${promptRail()}  ${mark} ${formatLabel(label, isFocused)}`
+  return `${promptRail()}  ${mark} ${formatPromptLabel(label, isFocused)}`
 }
 
 function formatMultiSelectFinalLine <T extends string> (
@@ -478,7 +440,7 @@ export async function promptText (options: TextPromptOptions): Promise<TextPromp
   output.write(`${formatPromptTitle(options.title)}\n`)
 
   for (const detail of options.details ?? []) {
-    output.write(`${formatDetailLine(detail)}\n`)
+    output.write(`${formatPromptDetailLine(detail)}\n`)
   }
 
   while (true) {
@@ -512,7 +474,7 @@ function promptLineConfirm (
   options.output.write(`${formatPromptTitle(options.title)}\n`)
 
   for (const detail of options.details) {
-    options.output.write(`${formatDetailLine(detail)}\n`)
+    options.output.write(`${formatPromptDetailLine(detail)}\n`)
   }
 
   return new Promise((resolve) => {
@@ -560,7 +522,7 @@ function promptRawConfirm (
       return [
         formatPromptTitle(options.title),
         promptRail(),
-        ...options.details.map((detail) => formatDetailLine(detail)),
+        ...options.details.map((detail) => formatPromptDetailLine(detail)),
         formatConfirmLine(options.cancelLabel, focusedIndex === 0),
         formatConfirmLine(options.confirmLabel, focusedIndex === 1),
         formatPromptEnd()

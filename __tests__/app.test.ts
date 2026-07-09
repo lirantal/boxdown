@@ -10,6 +10,7 @@ import { describe, test } from 'node:test'
 import { claudeSshConfigEntryForWorkspace, defaultClaudeSshConfigsPath, installClaudeSshConfigHost, mergeClaudeSshConfigHost, parseClaudeSshConfigs, removeClaudeSshConfigHost, uninstallClaudeSshConfigHost } from '../src/claude-app-config.ts'
 import { codexDiscoveredRemoteHostId, codexProjectEntryForWorkspace, defaultCodexAppConfigPath, defaultCodexGlobalStatePath, installCodexAppConfigProject, mergeCodexAppProject, parseCodexAppConfig, removeCodexAppProject, removeCodexGlobalStateProject, uninstallCodexAppConfigProject, uninstallCodexGlobalStateProject } from '../src/codex-app-config.ts'
 import { codingAgentBinary, codingAgentFromCommand } from '../src/coding-agents.ts'
+import { formatPromptTitle, promptRail, selectedMark } from '../src/cli-style.ts'
 import { buildGeneratedDevcontainerConfig, publishContainerPortFromConfig } from '../src/config.ts'
 import { BOXDOWN_CONTAINER_AGENTS_DIR, BOXDOWN_CONTAINER_CODEX_AUTH_PATH, BOXDOWN_CONTAINER_CODEX_DIR, BOXDOWN_CONTAINER_GITCONFIG_PATH, BOXDOWN_CONTAINER_HOST_GITCONFIG_DIR, DEVCONTAINER_CLI_VERSION } from '../src/constants.ts'
 import { codingAgentDevcontainerExecArgs, sshTunnelArgs } from '../src/devcontainer.ts'
@@ -631,6 +632,12 @@ describe('CLI parsing', () => {
 })
 
 describe('interactive install target prompt', () => {
+  test('uses the shared prompt style primitives', () => {
+    assert.strictEqual(formatPromptTitle('Install optional SSH targets?'), '\u001B[36m◆\u001B[0m  \u001B[1mInstall optional SSH targets?\u001B[0m')
+    assert.strictEqual(promptRail(), '\u001B[36m│\u001B[0m')
+    assert.strictEqual(selectedMark(), '\u001B[32m■\u001B[0m')
+  })
+
   test('selects a target with raw-mode keys', async () => {
     const { input, output, outputText } = fakePromptStreams()
     const resultPromise = promptMultiSelect({
