@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs'
 
 import { claudeSshConfigEntryForWorkspace, uninstallClaudeSshConfigHost } from './claude-app-config.ts'
 import { codexProjectEntryForWorkspace, uninstallCodexAppConfigProject, uninstallCodexGlobalStateProject } from './codex-app-config.ts'
-import { codingAgentFromCommand, type CodingAgentCli } from './coding-agents.ts'
+import { codingAgentBinary, codingAgentFromCommand, type CodingAgentCli } from './coding-agents.ts'
 import { buildGeneratedDevcontainerConfig, publishContainerPortFromConfig } from './config.ts'
 import { doctorHasFailures, formatDoctorText, runDoctorChecks } from './doctor.ts'
 import { startDevcontainer, printPortHint, openShell, openCodingAgentCli, ensureContainerSshRuntime, runSshdProxy, refreshContainerGhAuth, refreshContainerCodingAgentClis, ensureContainerCodingAgentCli, findRunningContainerId, findWorkspaceContainer, stopWorkspaceContainer, removeWorkspaceContainer, listWorkspaceContainers, openSshTunnel, type TunnelPortForward } from './devcontainer.ts'
@@ -11,7 +11,7 @@ import { createWorkspaceListEntries, formatWorkspaceListText } from './list.ts'
 import { createWorkspaceCommandLogger, withLoggedProcessOutput, type WorkspaceCommandLogger } from './logging.ts'
 import { listWorkspaceMetadata, readWorkspaceMetadata, writeWorkspaceMetadata } from './metadata.ts'
 import { createWorkspaceContext, defaultDataRoot, type WorkspaceContext } from './paths.ts'
-import { createProgress, type ProgressReporter, type ProgressOutputTarget } from './progress.ts'
+import { createProgress, resolveProgressMode, type ProgressReporter, type ProgressOutputTarget, type ProgressStepDefinition } from './progress.ts'
 import { purgeWorkspace } from './purge.ts'
 import { defaultSshAlias, installSshConfig, uninstallSshConfig } from './ssh-config.ts'
 import { dedupeSshInstallTargets, installSshInstallTarget, isSshConfigInstallTarget, SSH_INSTALL_TARGETS, sshInstallTargetFlagHintsText, supportedSshInstallTargetsText, type SshConfigInstallTarget } from './ssh-install-targets.ts'
@@ -685,27 +685,152 @@ export async function setupWorkspace (
     ...(options.progress === undefined ? {} : { progress: options.progress })
   })
 
-  if (options.progress !== undefined) {
-    options.progress.item(`Installing SSH alias: ${alias}`)
-    await (options.installSsh ?? installSshConfig)(context, alias, { quiet: true })
+  const hasSshAliasStep = options.progress?.hasStep('ssh-alias') === true
+
+  if (options.progress?.mode === 'interactive') {
+    if (hasSshAliasStep) {
+      options.progress.startStep('ssh-alias')
+    } else {
+      options.progress.item('Installing SSH alias')
+      options.progress.detail(alias)
+    }
+
+    try {
+      await (options.installSsh ?? installSshConfig)(context, alias, { quiet: true })
+      if (hasSshAliasStep) {
+        options.progress.completeStep('ssh-alias')
+      }
+    } catch (error) {
+      if (hasSshAliasStep) {
+        options.progress.failStep('ssh-alias')
+      }
+      throw error
+    }
   } else {
     await (options.installSsh ?? installSshConfig)(context, alias)
   }
 
   const installTarget = options.installTarget ?? installSshInstallTarget
   for (const target of options.targets ?? []) {
-    options.progress?.item(`Installing ${target} SSH target`)
-    await installTarget(context, alias, target, {
-      quiet: options.progress !== undefined
-    })
+    const stepId = `ssh-target:${target}`
+    const hasTargetStep = options.progress?.hasStep(stepId) === true
+
+    if (hasTargetStep) {
+      options.progress?.startStep(stepId)
+    } else if (options.progress?.mode === 'interactive') {
+      options.progress.item(`Installing ${target} SSH target`)
+    }
+
+    try {
+      await installTarget(context, alias, target, {
+        quiet: options.progress?.mode === 'interactive'
+      })
+      if (hasTargetStep) {
+        options.progress?.completeStep(stepId)
+      }
+    } catch (error) {
+      if (hasTargetStep) {
+        options.progress?.failStep(stepId)
+      }
+      throw error
+    }
   }
 }
 
-function createCliProgress (parsed: ParsedCli, target: ProgressOutputTarget = 'stdout'): ProgressReporter {
+function createCliProgress (
+  parsed: ParsedCli,
+  target: ProgressOutputTarget = 'stdout',
+  options: { env?: NodeJS.ProcessEnv } = {}
+): ProgressReporter {
   return createProgress({
-    verbose: parsed.verbose,
+    mode: resolveProgressMode({
+      verbose: parsed.verbose,
+      json: parsed.json,
+      target,
+      env: options.env
+    }),
     target
   })
+}
+
+function startProgressSteps (): ProgressStepDefinition[] {
+  return [
+    { id: 'ssh-identity', label: 'Preparing SSH identity' },
+    { id: 'devcontainer-config', label: 'Writing generated devcontainer config' },
+    { id: 'devcontainer-start', label: 'Starting devcontainer' }
+  ]
+}
+
+function sshTargetProgressLabel (target: SshConfigInstallTarget): string {
+  const label = SSH_INSTALL_TARGETS.find((candidate) => candidate.value === target)?.label ?? target
+  return `Installing ${label} SSH target`
+}
+
+function setupProgressSteps (targets: readonly SshConfigInstallTarget[]): ProgressStepDefinition[] {
+  return [
+    ...startProgressSteps(),
+    { id: 'ssh-alias', label: 'Installing SSH alias' },
+    ...targets.map((target) => ({
+      id: `ssh-target:${target}`,
+      label: sshTargetProgressLabel(target)
+    }))
+  ]
+}
+
+function sshAliasProgressStep (label: string): ProgressStepDefinition {
+  return { id: 'ssh-alias', label }
+}
+
+function tunnelProgressSteps (): ProgressStepDefinition[] {
+  return [
+    sshAliasProgressStep('Updating SSH alias'),
+    ...startProgressSteps()
+  ]
+}
+
+function sshProxyProgressSteps (): ProgressStepDefinition[] {
+  return [
+    sshAliasProgressStep('Updating SSH alias'),
+    ...startProgressSteps(),
+    { id: 'coding-agent-refresh', label: 'Refreshing default coding-agent CLIs' },
+    { id: 'ssh-runtime', label: 'Preparing container SSH runtime' }
+  ]
+}
+
+function codingAgentProgressSteps (agent: CodingAgentCli): ProgressStepDefinition[] {
+  return [
+    ...startProgressSteps(),
+    { id: 'agent-cli', label: `Preparing ${codingAgentBinary(agent)} inside the devcontainer` }
+  ]
+}
+
+function ghAuthProgressSteps (includeStart: boolean): ProgressStepDefinition[] {
+  return [
+    ...(includeStart ? startProgressSteps() : [{ id: 'devcontainer-running', label: 'Using running devcontainer' }]),
+    { id: 'gh-auth-config', label: 'Preparing generated config for GitHub auth refresh' },
+    { id: 'gh-token-read', label: 'Reading host GitHub CLI token' },
+    { id: 'gh-auth-refresh', label: 'Refreshing GitHub CLI auth inside the devcontainer' },
+    { id: 'gh-git-auth', label: 'Configuring workspace GitHub Git auth' },
+    { id: 'gh-auth-verify', label: 'Verifying GitHub CLI auth inside the devcontainer' }
+  ]
+}
+
+async function withProgressSection<T> (
+  progress: ProgressReporter,
+  title: string,
+  details: readonly string[],
+  run: () => Promise<T>
+): Promise<T> {
+  progress.section(title)
+  for (const detail of details) {
+    progress.detail(detail)
+  }
+
+  try {
+    return await run()
+  } finally {
+    progress.end()
+  }
 }
 
 export async function runCli (argv: string[] = process.argv.slice(2), options: RunCliOptions = {}): Promise<number> {
@@ -857,16 +982,19 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
       }
 
       writeWorkspaceMetadata(context, alias)
-      const progress = createCliProgress(parsed)
-      progress.section('Boxdown setup')
-      progress.detail(`Workspace: ${context.workspaceFolder}`)
-      progress.detail(`SSH alias: ${alias}`)
+      const progress = createCliProgress(parsed, 'stdout', { env: options.env })
       await runLoggedLifecycle(context, 'setup', argv, async (logger) => {
-        await setupWorkspace(context, alias, {
-          recreate: parsed.recreate,
-          targets: resolvedTargets.targets,
-          progress,
-          logger
+        await withProgressSection(progress, 'Boxdown setup', [
+          `Workspace: ${context.workspaceFolder}`,
+          `SSH alias: ${alias}`
+        ], async () => {
+          progress.setSteps(setupProgressSteps(resolvedTargets.targets))
+          await setupWorkspace(context, alias, {
+            recreate: parsed.recreate,
+            targets: resolvedTargets.targets,
+            progress,
+            logger
+          })
         })
       })
 
@@ -879,19 +1007,31 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
 
     if (parsed.command === 'ssh-proxy') {
       return runLoggedLifecycle(context, 'ssh-proxy', argv, async (logger) => {
-        const progress = createCliProgress(parsed, 'stderr')
-        progress.section('Boxdown SSH proxy')
-        progress.item(`Updating SSH alias: ${alias}`)
-        await installSshConfig(context, alias, { quiet: true })
-        const containerId = await startDevcontainer(context, {
-          recreate: parsed.recreate,
-          proxyMode: true,
-          progress,
-          logger,
-          reuseRunning: true
+        const progress = createCliProgress(parsed, 'stderr', { env: options.env })
+        const containerId = await withProgressSection(progress, 'Boxdown SSH proxy', [
+          `Workspace: ${context.workspaceFolder}`,
+          `SSH alias: ${alias}`
+        ], async () => {
+          progress.setSteps(sshProxyProgressSteps())
+          progress.startStep('ssh-alias')
+          try {
+            await installSshConfig(context, alias, { quiet: true })
+            progress.completeStep('ssh-alias')
+          } catch (error) {
+            progress.failStep('ssh-alias')
+            throw error
+          }
+          const startedContainerId = await startDevcontainer(context, {
+            recreate: parsed.recreate,
+            proxyMode: true,
+            progress,
+            logger,
+            reuseRunning: true
+          })
+          await refreshContainerCodingAgentClis(context, true, [], { progress, logger })
+          await ensureContainerSshRuntime(context, { progress, logger })
+          return startedContainerId
         })
-        await refreshContainerCodingAgentClis(context, true, [], { progress, logger })
-        await ensureContainerSshRuntime(context, { progress, logger })
         return runSshdProxy(containerId, { logger })
       })
     }
@@ -911,16 +1051,26 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
 
       writeWorkspaceMetadata(context, alias)
       return runLoggedLifecycle(context, 'tunnel', argv, async (logger) => {
-        const progress = createCliProgress(parsed)
-        progress.section('Boxdown tunnel')
-        progress.detail(`Workspace: ${context.workspaceFolder}`)
-        progress.item(`Updating SSH alias: ${alias}`)
-        await installSshConfig(context, alias, { quiet: true })
-        await startDevcontainer(context, {
-          recreate: parsed.recreate,
-          progress,
-          logger,
-          reuseRunning: true
+        const progress = createCliProgress(parsed, 'stdout', { env: options.env })
+        await withProgressSection(progress, 'Boxdown tunnel', [
+          `Workspace: ${context.workspaceFolder}`,
+          `SSH alias: ${alias}`
+        ], async () => {
+          progress.setSteps(tunnelProgressSteps())
+          progress.startStep('ssh-alias')
+          try {
+            await installSshConfig(context, alias, { quiet: true })
+            progress.completeStep('ssh-alias')
+          } catch (error) {
+            progress.failStep('ssh-alias')
+            throw error
+          }
+          await startDevcontainer(context, {
+            recreate: parsed.recreate,
+            progress,
+            logger,
+            reuseRunning: true
+          })
         })
 
         const forwards = tunnelPorts
@@ -940,22 +1090,29 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
         if (containerId === undefined) {
           throw new Error(`No running devcontainer found for: ${context.workspaceFolder}`)
         }
-        const progress = createCliProgress(parsed)
-        progress.section('Boxdown GitHub auth refresh')
-        progress.detail(`Workspace: ${context.workspaceFolder}`)
-        progress.item(`Using running devcontainer: ${containerId}`)
-        await refreshContainerGhAuth(context, { progress, logger })
+        const progress = createCliProgress(parsed, 'stdout', { env: options.env })
+        await withProgressSection(progress, 'Boxdown GitHub auth refresh', [
+          `Workspace: ${context.workspaceFolder}`
+        ], async () => {
+          progress.setSteps(ghAuthProgressSteps(false))
+          progress.startStep('devcontainer-running')
+          progress.completeStep('devcontainer-running')
+          await refreshContainerGhAuth(context, { progress, logger })
+        })
         return 0
       })
     }
 
     if (parsed.command === 'refresh-gh-token') {
       return runLoggedLifecycle(context, 'refresh-gh-token', argv, async (logger) => {
-        const progress = createCliProgress(parsed)
-        progress.section('Boxdown GitHub auth refresh')
-        progress.detail(`Workspace: ${context.workspaceFolder}`)
-        await startDevcontainer(context, { progress, logger })
-        await refreshContainerGhAuth(context, { progress, logger })
+        const progress = createCliProgress(parsed, 'stdout', { env: options.env })
+        await withProgressSection(progress, 'Boxdown GitHub auth refresh', [
+          `Workspace: ${context.workspaceFolder}`
+        ], async () => {
+          progress.setSteps(ghAuthProgressSteps(true))
+          await startDevcontainer(context, { progress, logger })
+          await refreshContainerGhAuth(context, { progress, logger })
+        })
         return 0
       })
     }
@@ -967,27 +1124,33 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
       }
 
       return runLoggedLifecycle(context, agent, argv, async (logger) => {
-        const progress = createCliProgress(parsed)
-        progress.section(`Boxdown ${agent}`)
-        progress.detail(`Workspace: ${context.workspaceFolder}`)
-        await startDevcontainer(context, {
-          recreate: parsed.recreate,
-          progress,
-          logger
+        const progress = createCliProgress(parsed, 'stdout', { env: options.env })
+        await withProgressSection(progress, `Boxdown ${agent}`, [
+          `Workspace: ${context.workspaceFolder}`
+        ], async () => {
+          progress.setSteps(codingAgentProgressSteps(agent))
+          await startDevcontainer(context, {
+            recreate: parsed.recreate,
+            progress,
+            logger
+          })
+          await ensureContainerCodingAgentCli(context, agent, { progress, logger })
         })
-        await ensureContainerCodingAgentCli(context, agent, { progress, logger })
         return openCodingAgentCli(context, agent, parsed.agentArgs ?? [], { logger })
       })
     }
 
     return runLoggedLifecycle(context, 'start', argv, async (logger) => {
-      const progress = createCliProgress(parsed)
-      progress.section('Boxdown start')
-      progress.detail(`Workspace: ${context.workspaceFolder}`)
-      const containerId = await startDevcontainer(context, {
-        recreate: parsed.recreate,
-        progress,
-        logger
+      const progress = createCliProgress(parsed, 'stdout', { env: options.env })
+      const containerId = await withProgressSection(progress, 'Boxdown start', [
+        `Workspace: ${context.workspaceFolder}`
+      ], async () => {
+        progress.setSteps(startProgressSteps())
+        return await startDevcontainer(context, {
+          recreate: parsed.recreate,
+          progress,
+          logger
+        })
       })
       await printPortHint(context, containerId, { logger })
       return openShell(context, { logger })

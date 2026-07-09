@@ -54,6 +54,11 @@ MODE="shell"
 RECREATE=false
 VERBOSE=false
 CONTAINER_ID=""
+PROGRESS_STEP_IDS=()
+PROGRESS_STEP_LABELS=()
+PROGRESS_STEP_STATES=()
+PROGRESS_RENDERED_STEP_LINE_COUNT=0
+PROGRESS_CHECKLIST_PID=""
 
 usage() {
   cat <<EOF
@@ -103,6 +108,337 @@ log() {
   fi
 }
 
+log_raw() {
+  if [ "$MODE" = "ssh-proxy" ]; then
+    printf '%b' "$*" >&2
+  else
+    printf '%b' "$*"
+  fi
+}
+
+supports_progress_tty() {
+  if [ "$MODE" = "ssh-proxy" ]; then
+    [ -t 2 ]
+  else
+    [ -t 1 ]
+  fi
+}
+
+style() {
+  local code="$1"
+  local text="$2"
+
+  if supports_progress_tty; then
+    printf '\033[%sm%s\033[0m' "$code" "$text"
+  else
+    printf '%s' "$text"
+  fi
+}
+
+style_bold() { style 1 "$1"; }
+style_cyan() { style 36 "$1"; }
+style_dim() { style 2 "$1"; }
+style_green() { style 32 "$1"; }
+progress_rail() { style_cyan "│"; }
+
+progress_section() {
+  if [ "$VERBOSE" = true ]; then
+    return 0
+  fi
+
+  log "$(style_cyan "◆")  $(style_bold "$*")"
+}
+
+progress_end() {
+  if [ "$VERBOSE" = true ]; then
+    return 0
+  fi
+
+  stop_spinner clear
+  progress_stop_checklist_timer
+  log "$(style_cyan "└")"
+  PROGRESS_STEP_IDS=()
+  PROGRESS_STEP_LABELS=()
+  PROGRESS_STEP_STATES=()
+  PROGRESS_RENDERED_STEP_LINE_COUNT=0
+}
+
+progress_item() {
+  if [ "$VERBOSE" = true ]; then
+    return 0
+  fi
+
+  log "$(progress_rail)  $(style_green "■") $*"
+}
+
+progress_running() {
+  if [ "$VERBOSE" = true ]; then
+    return 0
+  fi
+
+  log "$(progress_rail)  $(style_cyan "◒") $*"
+}
+
+progress_detail() {
+  if [ "$VERBOSE" = true ]; then
+    return 0
+  fi
+
+  log "$(progress_rail)  $(style_dim "$*")"
+}
+
+progress_warn() {
+  if [ "$VERBOSE" = true ]; then
+    return 0
+  fi
+
+  log "$(progress_rail)  $(style_dim "!") $*"
+}
+
+progress_has_steps() {
+  [ "${#PROGRESS_STEP_IDS[@]}" -gt 0 ]
+}
+
+progress_step_index() {
+  local id="$1"
+  local index
+
+  for index in "${!PROGRESS_STEP_IDS[@]}"; do
+    if [ "${PROGRESS_STEP_IDS[$index]}" = "$id" ]; then
+      printf '%s\n' "$index"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+progress_has_step() {
+  progress_step_index "$1" >/dev/null 2>&1
+}
+
+progress_set_steps() {
+  local step
+  local id
+  local label
+
+  if [ "$VERBOSE" = true ]; then
+    return 0
+  fi
+
+  progress_stop_checklist_timer
+  PROGRESS_STEP_IDS=()
+  PROGRESS_STEP_LABELS=()
+  PROGRESS_STEP_STATES=()
+  PROGRESS_RENDERED_STEP_LINE_COUNT=0
+
+  for step in "$@"; do
+    id="${step%%:*}"
+    label="${step#*:}"
+    PROGRESS_STEP_IDS+=("$id")
+    PROGRESS_STEP_LABELS+=("$label")
+    PROGRESS_STEP_STATES+=("pending")
+  done
+
+  progress_render_checklist
+}
+
+progress_step_mark() {
+  local state="$1"
+  local frame="$2"
+
+  case "$state" in
+    running)
+      style_cyan "$frame"
+      ;;
+    complete)
+      style_green "✔"
+      ;;
+    failed)
+      style_dim "!"
+      ;;
+    *)
+      style_dim "□"
+      ;;
+  esac
+}
+
+progress_step_line() {
+  local index="$1"
+  local frame="$2"
+  local state="${PROGRESS_STEP_STATES[$index]}"
+  local label="${PROGRESS_STEP_LABELS[$index]}"
+
+  if [ "$state" = "skipped" ]; then
+    label="$(style_dim "$label")"
+  fi
+
+  printf '%s  %s %s' "$(progress_rail)" "$(progress_step_mark "$state" "$frame")" "$label"
+}
+
+progress_render_checklist_frame() {
+  local frame="$1"
+  local index
+
+  if [ "$VERBOSE" = true ] || ! progress_has_steps; then
+    return 0
+  fi
+
+  if supports_progress_tty; then
+    if [ "$PROGRESS_RENDERED_STEP_LINE_COUNT" -gt 0 ]; then
+      log_raw "\033[${PROGRESS_RENDERED_STEP_LINE_COUNT}A"
+    fi
+
+    for index in "${!PROGRESS_STEP_IDS[@]}"; do
+      log_raw "\033[2K\r$(progress_step_line "$index" "$frame")\n"
+    done
+
+    PROGRESS_RENDERED_STEP_LINE_COUNT="${#PROGRESS_STEP_IDS[@]}"
+    return 0
+  fi
+
+  if [ "$PROGRESS_RENDERED_STEP_LINE_COUNT" -eq 0 ]; then
+    for index in "${!PROGRESS_STEP_IDS[@]}"; do
+      log "$(progress_step_line "$index" "$frame")"
+    done
+    PROGRESS_RENDERED_STEP_LINE_COUNT="${#PROGRESS_STEP_IDS[@]}"
+  fi
+}
+
+progress_render_checklist() {
+  progress_render_checklist_frame "◐"
+}
+
+progress_update_step() {
+  local id="$1"
+  local state="$2"
+  local index
+
+  index="$(progress_step_index "$id")" || return 0
+  PROGRESS_STEP_STATES[$index]="$state"
+  progress_render_checklist
+}
+
+progress_start_step() {
+  progress_update_step "$1" "running"
+  progress_start_checklist_timer
+}
+
+progress_complete_step() {
+  progress_stop_checklist_timer
+  progress_update_step "$1" "complete"
+}
+
+progress_fail_step() {
+  progress_stop_checklist_timer
+  progress_update_step "$1" "failed"
+}
+
+progress_skip_step() {
+  progress_stop_checklist_timer
+  progress_update_step "$1" "skipped"
+}
+
+progress_any_running_step() {
+  local state
+
+  for state in "${PROGRESS_STEP_STATES[@]}"; do
+    if [ "$state" = "running" ]; then
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+progress_start_checklist_timer() {
+  if [ "$VERBOSE" = true ] || ! supports_progress_tty || [ -n "$PROGRESS_CHECKLIST_PID" ]; then
+    return 0
+  fi
+
+  if ! progress_any_running_step; then
+    return 0
+  fi
+
+  (
+    frames=("◒" "◐" "◓" "◑")
+    index=0
+    while true; do
+      progress_render_checklist_frame "${frames[$index]}"
+      index=$(( (index + 1) % ${#frames[@]} ))
+      sleep 0.12
+    done
+  ) &
+  PROGRESS_CHECKLIST_PID="$!"
+}
+
+progress_stop_checklist_timer() {
+  if [ -z "$PROGRESS_CHECKLIST_PID" ]; then
+    return 0
+  fi
+
+  kill "$PROGRESS_CHECKLIST_PID" >/dev/null 2>&1 || true
+  wait "$PROGRESS_CHECKLIST_PID" 2>/dev/null || true
+  PROGRESS_CHECKLIST_PID=""
+}
+
+SPINNER_PID=""
+SPINNER_LABEL=""
+SPINNER_TTY=false
+
+start_spinner() {
+  local label="$*"
+
+  if [ "$VERBOSE" = true ]; then
+    return 0
+  fi
+
+  stop_spinner clear
+  SPINNER_LABEL="$label"
+
+  if ! supports_progress_tty; then
+    SPINNER_TTY=false
+    progress_running "$label"
+    return 0
+  fi
+
+  SPINNER_TTY=true
+  (
+    frames=("◒" "◐" "◓" "◑")
+    index=0
+    while true; do
+      log_raw "\r\033[2K$(progress_rail)  $(style_cyan "${frames[$index]}") ${label}"
+      index=$(( (index + 1) % ${#frames[@]} ))
+      sleep 0.12
+    done
+  ) &
+  SPINNER_PID="$!"
+}
+
+stop_spinner() {
+  local status="${1:-clear}"
+  local label="$SPINNER_LABEL"
+
+  if [ -n "$SPINNER_PID" ]; then
+    kill "$SPINNER_PID" >/dev/null 2>&1 || true
+    wait "$SPINNER_PID" 2>/dev/null || true
+  fi
+
+  if [ "$SPINNER_TTY" = true ]; then
+    log_raw "\r\033[2K"
+  fi
+
+  SPINNER_PID=""
+  SPINNER_LABEL=""
+  SPINNER_TTY=false
+
+  if [ "$status" = "complete" ] && [ -n "$label" ]; then
+    progress_item "$label"
+  fi
+}
+
+trap 'stop_spinner clear; progress_stop_checklist_timer' EXIT
+
 export_progress_env() {
   if [ "$VERBOSE" = true ]; then
     export BOXDOWN_VERBOSE=1
@@ -117,10 +453,14 @@ print_progress_markers() {
   local output="$1"
   local line
 
+  if progress_has_steps; then
+    return 0
+  fi
+
   while IFS= read -r line; do
     case "$line" in
       BOXDOWN_PROGRESS:*)
-        log "- ${line#BOXDOWN_PROGRESS: }"
+        progress_item "${line#BOXDOWN_PROGRESS: }"
         ;;
     esac
   done <<< "$output"
@@ -132,14 +472,14 @@ print_command_failure() {
   local output="$3"
   local filtered
 
-  log "${label} failed with exit code ${code}."
-  log "Rerun with --verbose to see full command output."
+  progress_warn "${label} failed with exit code ${code}."
+  log "$(progress_rail)  $(style_dim "Rerun with --verbose to see full command output.")"
 
   filtered="$(printf '%s\n' "$output" | sed '/^[[:space:]]*BOXDOWN_PROGRESS:/d' | sed '/^[[:space:]]*$/d' | tail -n 20)"
   if [ -n "$filtered" ]; then
-    log "output tail:"
+    log "$(progress_rail)  $(style_dim "output tail:")"
     while IFS= read -r line; do
-      log "  $line"
+      progress_detail "$line"
     done <<< "$filtered"
   fi
 }
@@ -204,12 +544,32 @@ ensure_host_ssh_key() {
   chmod 0700 "$SSH_KEY_DIR"
 
   if [ ! -f "$SSH_KEY_PATH" ]; then
-    log "Generating devcontainer SSH identity: $SSH_KEY_PATH"
-    ssh-keygen -t ed25519 -f "$SSH_KEY_PATH" -N "" -C "${REPO_NAME}-devcontainer" >/dev/null
+    if [ "$VERBOSE" = true ]; then
+      log "Generating devcontainer SSH identity: $SSH_KEY_PATH"
+      ssh-keygen -t ed25519 -f "$SSH_KEY_PATH" -N "" -C "${REPO_NAME}-devcontainer" >/dev/null
+    elif progress_has_step "ssh-identity"; then
+      ssh-keygen -t ed25519 -f "$SSH_KEY_PATH" -N "" -C "${REPO_NAME}-devcontainer" >/dev/null 2>&1 || return $?
+    else
+      progress_detail "$SSH_KEY_PATH"
+      start_spinner "Generating devcontainer SSH identity"
+      if ssh-keygen -t ed25519 -f "$SSH_KEY_PATH" -N "" -C "${REPO_NAME}-devcontainer" >/dev/null 2>&1; then
+        stop_spinner complete
+      else
+        code=$?
+        stop_spinner clear
+        return "$code"
+      fi
+    fi
   fi
 
   if [ ! -f "${SSH_KEY_PATH}.pub" ]; then
-    ssh-keygen -y -f "$SSH_KEY_PATH" > "${SSH_KEY_PATH}.pub"
+    if [ "$VERBOSE" = true ]; then
+      ssh-keygen -y -f "$SSH_KEY_PATH" > "${SSH_KEY_PATH}.pub"
+    elif progress_has_step "ssh-identity"; then
+      ssh-keygen -y -f "$SSH_KEY_PATH" > "${SSH_KEY_PATH}.pub" 2>/dev/null || return $?
+    else
+      ssh-keygen -y -f "$SSH_KEY_PATH" > "${SSH_KEY_PATH}.pub"
+    fi
   fi
 
   chmod 0600 "$SSH_KEY_PATH"
@@ -233,17 +593,39 @@ start_devcontainer() {
   if [ "$MODE" = "ssh-proxy" ] && [ "$RECREATE" = false ]; then
     CONTAINER_ID="$(find_running_container_id)"
     if [ -n "$CONTAINER_ID" ]; then
-      log "Using running devcontainer for: $WORKSPACE_FOLDER"
+      if [ "$VERBOSE" = true ]; then
+        log "Using running devcontainer for: $WORKSPACE_FOLDER"
+      elif progress_has_step "devcontainer-start"; then
+        progress_start_step "devcontainer-start"
+        progress_complete_step "devcontainer-start"
+      else
+        progress_item "Using running devcontainer"
+        progress_detail "$CONTAINER_ID"
+      fi
       return 0
     fi
   fi
 
-  log "Starting devcontainer for: $WORKSPACE_FOLDER"
+  if [ "$VERBOSE" = true ]; then
+    log "Starting devcontainer for: $WORKSPACE_FOLDER"
+  elif progress_has_step "devcontainer-start"; then
+    progress_start_step "devcontainer-start"
+  else
+    start_spinner "Starting devcontainer"
+  fi
 
   up_args=(--workspace-folder "$WORKSPACE_FOLDER")
   if [ "$RECREATE" = true ]; then
     up_args+=(--remove-existing-container)
-    log "Removing existing dev container so create-time settings (e.g. runArgs) apply."
+    if [ "$VERBOSE" = true ]; then
+      log "Removing existing dev container so create-time settings (e.g. runArgs) apply."
+    elif progress_has_step "devcontainer-start"; then
+      :
+    else
+      stop_spinner clear
+      progress_item "Removing existing devcontainer before start"
+      start_spinner "Starting devcontainer"
+    fi
   fi
 
   export_progress_env
@@ -256,6 +638,11 @@ start_devcontainer() {
       if [ "$VERBOSE" = true ]; then
         [ -z "$up_output" ] || log "$up_output"
       else
+        if progress_has_step "devcontainer-start"; then
+          progress_fail_step "devcontainer-start"
+        else
+          stop_spinner clear
+        fi
         print_progress_markers "$up_output"
         print_command_failure "devcontainer up" "$up_code" "$up_output"
       fi
@@ -268,6 +655,11 @@ start_devcontainer() {
     if [ "$VERBOSE" = true ]; then
       [ -z "$up_output" ] || log "$up_output"
     else
+      if progress_has_step "devcontainer-start"; then
+        progress_fail_step "devcontainer-start"
+      else
+        stop_spinner clear
+      fi
       print_progress_markers "$up_output"
       print_command_failure "devcontainer up" "$up_code" "$up_output"
     fi
@@ -276,8 +668,13 @@ start_devcontainer() {
 
   if [ "$VERBOSE" = true ]; then
     log "$up_output"
-  else
+  elif progress_has_step "devcontainer-start"; then
     print_progress_markers "$up_output"
+    progress_complete_step "devcontainer-start"
+  else
+    stop_spinner clear
+    print_progress_markers "$up_output"
+    progress_item "Starting devcontainer"
   fi
 
   CONTAINER_ID="$(printf '%s\n' "$up_output" | parse_container_id_from_up_output)"
@@ -286,6 +683,9 @@ start_devcontainer() {
   fi
 
   if [ -z "$CONTAINER_ID" ]; then
+    if progress_has_step "devcontainer-start"; then
+      progress_fail_step "devcontainer-start"
+    fi
     die "Could not resolve devcontainer ID for: $WORKSPACE_FOLDER"
   fi
 }
@@ -311,28 +711,109 @@ host_gh_token_or_empty() {
 refresh_container_gh_auth() {
   local token
 
+  if progress_has_step "gh-token-read"; then
+    progress_start_step "gh-token-read"
+  fi
+
   token="$(host_gh_token_or_empty)"
+  if progress_has_step "gh-token-read"; then
+    progress_complete_step "gh-token-read"
+  fi
+
   if [ -z "$token" ]; then
+    progress_skip_step "gh-auth-refresh"
+    progress_skip_step "gh-git-auth"
+    progress_skip_step "gh-auth-verify"
+    if [ "$VERBOSE" = false ]; then
+      progress_warn "Host GitHub CLI token unavailable; skipping container auth refresh."
+    fi
     return 0
   fi
 
-  if ! printf '%s\n' "$token" | devcontainer_cli exec \
-    --workspace-folder "$WORKSPACE_FOLDER" \
-    -- gh auth login --hostname github.com --git-protocol https --with-token --insecure-storage >/dev/null 2>&1; then
-    log "Warning: could not refresh GitHub CLI auth inside the devcontainer."
-    return 0
+  if [ "$VERBOSE" = true ]; then
+    if ! printf '%s\n' "$token" | devcontainer_cli exec \
+      --workspace-folder "$WORKSPACE_FOLDER" \
+      -- gh auth login --hostname github.com --git-protocol https --with-token --insecure-storage >/dev/null 2>&1; then
+      log "Warning: could not refresh GitHub CLI auth inside the devcontainer."
+      return 0
+    fi
+  else
+    if progress_has_step "gh-auth-refresh"; then
+      progress_start_step "gh-auth-refresh"
+    else
+      start_spinner "Refreshing GitHub CLI auth inside the devcontainer"
+    fi
+
+    if printf '%s\n' "$token" | devcontainer_cli exec \
+      --workspace-folder "$WORKSPACE_FOLDER" \
+      -- gh auth login --hostname github.com --git-protocol https --with-token --insecure-storage >/dev/null 2>&1; then
+      if progress_has_step "gh-auth-refresh"; then
+        progress_complete_step "gh-auth-refresh"
+      else
+        stop_spinner complete
+      fi
+    else
+      if progress_has_step "gh-auth-refresh"; then
+        progress_fail_step "gh-auth-refresh"
+      else
+        stop_spinner clear
+      fi
+      progress_skip_step "gh-git-auth"
+      progress_skip_step "gh-auth-verify"
+      progress_warn "Could not refresh GitHub CLI auth inside the devcontainer."
+      return 0
+    fi
+  fi
+
+  if progress_has_step "gh-git-auth"; then
+    progress_start_step "gh-git-auth"
+  else
+    progress_item "Configuring workspace GitHub Git auth"
   fi
 
   if ! configure_container_github_git_auth; then
-    log "Warning: GitHub CLI auth refreshed, but GitHub Git auth was not configured for this workspace."
+    progress_fail_step "gh-git-auth"
+    if [ "$VERBOSE" = true ]; then
+      log "Warning: GitHub CLI auth refreshed, but GitHub Git auth was not configured for this workspace."
+    else
+      progress_warn "GitHub CLI auth refreshed, but GitHub Git auth was not configured for this workspace."
+    fi
+  elif progress_has_step "gh-git-auth"; then
+    progress_complete_step "gh-git-auth"
   fi
 
-  if devcontainer_cli exec \
-    --workspace-folder "$WORKSPACE_FOLDER" \
-    -- gh auth status --hostname github.com >/dev/null 2>&1; then
-    log "GitHub CLI auth refreshed inside the devcontainer."
+  if [ "$VERBOSE" = true ]; then
+    if devcontainer_cli exec \
+      --workspace-folder "$WORKSPACE_FOLDER" \
+      -- gh auth status --hostname github.com >/dev/null 2>&1; then
+      log "GitHub CLI auth refreshed inside the devcontainer."
+    else
+      log "Warning: GitHub CLI auth refresh completed, but verification failed."
+    fi
   else
-    log "Warning: GitHub CLI auth refresh completed, but verification failed."
+    if progress_has_step "gh-auth-verify"; then
+      progress_start_step "gh-auth-verify"
+    else
+      start_spinner "Verifying GitHub CLI auth inside the devcontainer"
+    fi
+
+    if devcontainer_cli exec \
+      --workspace-folder "$WORKSPACE_FOLDER" \
+      -- gh auth status --hostname github.com >/dev/null 2>&1; then
+      if progress_has_step "gh-auth-verify"; then
+        progress_complete_step "gh-auth-verify"
+      else
+        stop_spinner complete
+        progress_item "GitHub CLI auth refreshed inside the devcontainer"
+      fi
+    else
+      if progress_has_step "gh-auth-verify"; then
+        progress_fail_step "gh-auth-verify"
+      else
+        stop_spinner clear
+      fi
+      progress_warn "GitHub CLI auth refresh completed, but verification failed."
+    fi
   fi
 }
 
@@ -420,17 +901,51 @@ EOF
 }
 
 run_refresh_gh_token() {
-  start_devcontainer
-  refresh_container_gh_auth
+  progress_section "Boxdown GitHub auth refresh"
+  progress_detail "Workspace: $WORKSPACE_FOLDER"
+  progress_set_steps \
+    "devcontainer-start:Starting devcontainer" \
+    "gh-token-read:Reading host GitHub CLI token" \
+    "gh-auth-refresh:Refreshing GitHub CLI auth inside the devcontainer" \
+    "gh-git-auth:Configuring workspace GitHub Git auth" \
+    "gh-auth-verify:Verifying GitHub CLI auth inside the devcontainer"
+  start_devcontainer || {
+    code=$?
+    progress_end
+    return "$code"
+  }
+  refresh_container_gh_auth || {
+    code=$?
+    progress_end
+    return "$code"
+  }
+  progress_end
 }
 
 run_refresh_gh_token_running() {
+  progress_section "Boxdown GitHub auth refresh"
+  progress_detail "Workspace: $WORKSPACE_FOLDER"
+  progress_set_steps \
+    "devcontainer-running:Using running devcontainer" \
+    "gh-token-read:Reading host GitHub CLI token" \
+    "gh-auth-refresh:Refreshing GitHub CLI auth inside the devcontainer" \
+    "gh-git-auth:Configuring workspace GitHub Git auth" \
+    "gh-auth-verify:Verifying GitHub CLI auth inside the devcontainer"
   CONTAINER_ID="$(find_running_container_id)"
   if [ -z "$CONTAINER_ID" ]; then
+    progress_fail_step "devcontainer-running"
+    progress_end
     die "No running devcontainer found for: $WORKSPACE_FOLDER"
   fi
 
-  refresh_container_gh_auth
+  progress_start_step "devcontainer-running"
+  progress_complete_step "devcontainer-running"
+  refresh_container_gh_auth || {
+    code=$?
+    progress_end
+    return "$code"
+  }
+  progress_end
 }
 
 print_port_hint() {
@@ -479,22 +994,73 @@ ensure_container_sshd_runtime() {
     return $?
   fi
 
+  if progress_has_step "ssh-runtime"; then
+    progress_start_step "ssh-runtime"
+  else
+    start_spinner "Preparing container SSH runtime"
+  fi
+
   if output="$(devcontainer_cli exec --workspace-folder "$WORKSPACE_FOLDER" -- env "${env_args[@]}" bash .devcontainer/utils/ssh-bootstrap.sh runtime </dev/null 2>&1)"; then
+    if progress_has_step "ssh-runtime"; then
+      progress_complete_step "ssh-runtime"
+    else
+      stop_spinner clear
+    fi
     print_progress_markers "$output"
+    if ! progress_has_step "ssh-runtime"; then
+      progress_item "Preparing container SSH runtime"
+    fi
     return 0
   fi
 
   code=$?
+  if progress_has_step "ssh-runtime"; then
+    progress_fail_step "ssh-runtime"
+  else
+    stop_spinner clear
+  fi
   print_progress_markers "$output"
   print_command_failure "prepare SSH runtime" "$code" "$output"
   return "$code"
 }
 
 run_ssh_proxy() {
-  install_ssh_config_alias --quiet >&2
-  ensure_host_ssh_key
-  start_devcontainer
-  ensure_container_sshd_runtime
+  progress_section "Boxdown SSH proxy"
+  progress_detail "Workspace: $WORKSPACE_FOLDER"
+  progress_set_steps \
+    "ssh-alias:Updating SSH alias" \
+    "ssh-identity:Preparing SSH identity" \
+    "devcontainer-start:Starting devcontainer" \
+    "ssh-runtime:Preparing container SSH runtime"
+  progress_start_step "ssh-alias"
+  if install_ssh_config_alias --quiet >&2; then
+    progress_complete_step "ssh-alias"
+  else
+    progress_fail_step "ssh-alias"
+    progress_end
+    return 1
+  fi
+
+  progress_start_step "ssh-identity"
+  if ensure_host_ssh_key; then
+    progress_complete_step "ssh-identity"
+  else
+    progress_fail_step "ssh-identity"
+    progress_end
+    return 1
+  fi
+
+  start_devcontainer || {
+    code=$?
+    progress_end
+    return "$code"
+  }
+  ensure_container_sshd_runtime || {
+    code=$?
+    progress_end
+    return "$code"
+  }
+  progress_end
 
   exec docker exec -i "$CONTAINER_ID" /usr/sbin/sshd -i \
     -o LogLevel=QUIET \
@@ -507,7 +1073,16 @@ run_ssh_proxy() {
 }
 
 run_shell() {
-  start_devcontainer
+  progress_section "Boxdown start"
+  progress_detail "Workspace: $WORKSPACE_FOLDER"
+  progress_set_steps \
+    "devcontainer-start:Starting devcontainer"
+  start_devcontainer || {
+    code=$?
+    progress_end
+    return "$code"
+  }
+  progress_end
   print_port_hint
   open_shell
 }
@@ -559,6 +1134,14 @@ while [ $# -gt 0 ]; do
       ;;
   esac
 done
+
+if [ "$VERBOSE" = false ]; then
+  if [ -n "${CI:-}" ] && [ "${CI:-}" != "0" ] && [ "${CI:-}" != "false" ]; then
+    VERBOSE=true
+  elif ! supports_progress_tty; then
+    VERBOSE=true
+  fi
+fi
 
 case "$MODE" in
   shell)

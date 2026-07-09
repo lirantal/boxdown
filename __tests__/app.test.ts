@@ -10,6 +10,7 @@ import { describe, test } from 'node:test'
 import { claudeSshConfigEntryForWorkspace, defaultClaudeSshConfigsPath, installClaudeSshConfigHost, mergeClaudeSshConfigHost, parseClaudeSshConfigs, removeClaudeSshConfigHost, uninstallClaudeSshConfigHost } from '../src/claude-app-config.ts'
 import { codexDiscoveredRemoteHostId, codexProjectEntryForWorkspace, defaultCodexAppConfigPath, defaultCodexGlobalStatePath, installCodexAppConfigProject, mergeCodexAppProject, parseCodexAppConfig, removeCodexAppProject, removeCodexGlobalStateProject, uninstallCodexAppConfigProject, uninstallCodexGlobalStateProject } from '../src/codex-app-config.ts'
 import { codingAgentBinary, codingAgentFromCommand } from '../src/coding-agents.ts'
+import { color, formatPromptEnd, formatPromptTitle, promptRail, selectedMark } from '../src/cli-style.ts'
 import { buildGeneratedDevcontainerConfig, publishContainerPortFromConfig } from '../src/config.ts'
 import { BOXDOWN_CONTAINER_AGENTS_DIR, BOXDOWN_CONTAINER_CODEX_AUTH_PATH, BOXDOWN_CONTAINER_CODEX_DIR, BOXDOWN_CONTAINER_GITCONFIG_PATH, BOXDOWN_CONTAINER_HOST_GITCONFIG_DIR, DEVCONTAINER_CLI_VERSION } from '../src/constants.ts'
 import { codingAgentDevcontainerExecArgs, sshTunnelArgs } from '../src/devcontainer.ts'
@@ -24,7 +25,7 @@ import { listWorkspaceMetadata, readWorkspaceMetadata, recordWorkspaceDockerImag
 import { createWorkspaceContext } from '../src/paths.ts'
 import { promptConfirm, promptMultiSelect, promptText, type PromptInput, type PromptOutput } from '../src/interactive-prompts.ts'
 import { buildHostToolPath, runBuffered, runInteractive } from '../src/process.ts'
-import { createProgress, formatCommandFailure, runProgressCommand } from '../src/progress.ts'
+import { createProgress, formatCommandFailure, resolveProgressMode, runProgressCommand } from '../src/progress.ts'
 import { DEFAULT_TTY_MAX_COLUMNS, interactiveCommandScript, interactiveShellEnvArgs, interactiveShellScript } from '../src/shell.ts'
 import { buildSshConfigBlock, defaultSshAlias, installSshConfig, removeSshConfigBlock, replaceSshConfigBlock, uninstallSshConfig } from '../src/ssh-config.ts'
 import { createStatusInfo, formatStatusText, inspectSshConfigStatus, parseDockerPsJsonLines, statusIsHealthy } from '../src/status.ts'
@@ -632,6 +633,12 @@ describe('CLI parsing', () => {
 })
 
 describe('interactive install target prompt', () => {
+  test('uses the shared prompt style primitives', () => {
+    assert.strictEqual(formatPromptTitle('Install optional SSH targets?'), '\u001B[36m◆\u001B[0m  \u001B[1mInstall optional SSH targets?\u001B[0m')
+    assert.strictEqual(promptRail(), '\u001B[36m│\u001B[0m')
+    assert.strictEqual(selectedMark(), '\u001B[32m■\u001B[0m')
+  })
+
   test('selects a target with raw-mode keys', async () => {
     const { input, output, outputText } = fakePromptStreams()
     const resultPromise = promptMultiSelect({
@@ -999,8 +1006,9 @@ describe('CLI execution', () => {
     })
 
     assert.deepStrictEqual(calls, ['start', 'ssh', 'codex'])
-    assert.ok(lines.includes('stdout:- Installing SSH alias: demo-devcontainer'))
-    assert.ok(lines.includes('stdout:- Installing codex SSH target'))
+    assert.ok(lines.includes(`stdout:${promptRail()}  ${selectedMark()} Installing SSH alias`))
+    assert.ok(lines.includes(`stdout:${promptRail()}  ${color('demo-devcontainer', 'dim')}`))
+    assert.ok(lines.includes(`stdout:${promptRail()}  ${selectedMark()} Installing codex SSH target`))
   })
 
   test('removes each requested down workspace', async () => {
@@ -2120,6 +2128,143 @@ describe('progress output', () => {
     assert.match(log, /command exit: 0/)
   })
 
+  test('resolves progress modes from terminal and output context', () => {
+    assert.strictEqual(resolveProgressMode({ isTTY: true, env: { CI: 'false' } }), 'interactive')
+    assert.strictEqual(resolveProgressMode({ target: 'stderr', isTTY: true, env: { CI: 'false' } }), 'interactive')
+    assert.strictEqual(resolveProgressMode({ isTTY: true, verbose: true, env: { CI: 'false' } }), 'verbose')
+    assert.strictEqual(resolveProgressMode({ isTTY: true, env: { CI: 'true' } }), 'verbose')
+    assert.strictEqual(resolveProgressMode({ isTTY: true, env: { CI: '1' } }), 'verbose')
+    assert.strictEqual(resolveProgressMode({ isTTY: false, env: { CI: 'false' } }), 'verbose')
+    assert.strictEqual(resolveProgressMode({ json: true, isTTY: true, env: { CI: 'false' } }), 'none')
+  })
+
+  test('none progress mode keeps output fully silent for JSON callers', () => {
+    const lines: string[] = []
+    const raw: string[] = []
+    const progress = createProgress({
+      mode: 'none',
+      write: (target, message) => {
+        lines.push(`${target}:${message}`)
+      },
+      writeRaw: (target, message) => {
+        raw.push(`${target}:${message}`)
+      }
+    })
+
+    progress.section('Boxdown status')
+    progress.detail('Workspace: /tmp/demo')
+    progress.warn('This should stay hidden')
+    progress.setSteps([{ id: 'demo', label: 'Demo step' }])
+    progress.startStep('demo')
+    progress.completeStep('demo')
+    progress.end()
+
+    assert.deepStrictEqual(lines, [])
+    assert.deepStrictEqual(raw, [])
+    assert.deepStrictEqual({
+      BOXDOWN_VERBOSE: progress.commandEnv().BOXDOWN_VERBOSE,
+      BOXDOWN_PROGRESS: progress.commandEnv().BOXDOWN_PROGRESS
+    }, {
+      BOXDOWN_VERBOSE: '0',
+      BOXDOWN_PROGRESS: '0'
+    })
+  })
+
+  test('verbose progress mode suppresses styled progress but keeps warnings visible', () => {
+    const lines: string[] = []
+    const progress = createProgress({
+      mode: 'verbose',
+      write: (target, message) => {
+        lines.push(`${target}:${message}`)
+      }
+    })
+
+    progress.section('Boxdown setup')
+    progress.detail('Workspace: /tmp/demo')
+    progress.item('Starting devcontainer')
+    progress.warn('Could not refresh one or more coding-agent CLIs inside the devcontainer.')
+    progress.end()
+
+    assert.deepStrictEqual(lines, [
+      'stdout:Warning: Could not refresh one or more coding-agent CLIs inside the devcontainer.'
+    ])
+    assert.deepStrictEqual({
+      BOXDOWN_VERBOSE: progress.commandEnv().BOXDOWN_VERBOSE,
+      BOXDOWN_PROGRESS: progress.commandEnv().BOXDOWN_PROGRESS
+    }, {
+      BOXDOWN_VERBOSE: '1',
+      BOXDOWN_PROGRESS: '0'
+    })
+  })
+
+  test('formats styled progress sections', () => {
+    const lines: string[] = []
+    const progress = createProgress({
+      write: (target, message) => {
+        lines.push(`${target}:${message}`)
+      }
+    })
+
+    progress.section('Boxdown setup')
+    progress.detail('Workspace: /tmp/demo')
+    progress.item('Starting devcontainer')
+    progress.warn('Could not refresh one or more coding-agent CLIs inside the devcontainer.')
+    progress.end()
+
+    assert.deepStrictEqual(lines, [
+      `stdout:${formatPromptTitle('Boxdown setup')}`,
+      `stdout:${promptRail()}  ${color('Workspace: /tmp/demo', 'dim')}`,
+      `stdout:${promptRail()}  ${selectedMark()} Starting devcontainer`,
+      `stdout:${promptRail()}  ${color('!', 'dim')} Could not refresh one or more coding-agent CLIs inside the devcontainer.`,
+      `stdout:${formatPromptEnd()}`
+    ])
+  })
+
+  test('renders live checklist state in place on a TTY', () => {
+    const lines: string[] = []
+    const raw: string[] = []
+    const progress = createProgress({
+      isTTY: true,
+      spinnerFrames: ['◒', '◐'],
+      spinnerIntervalMs: 60_000,
+      write: (target, message) => {
+        lines.push(`${target}:${message}`)
+      },
+      writeRaw: (target, message) => {
+        raw.push(`${target}:${message}`)
+      }
+    })
+
+    progress.section('Boxdown setup')
+    progress.setSteps([
+      { id: 'config', label: 'Writing generated devcontainer config' },
+      { id: 'start', label: 'Starting devcontainer' },
+      { id: 'install', label: 'Installing SSH alias' }
+    ])
+    progress.completeStep('config')
+    progress.startStep('start')
+    progress.tickSpinner()
+    progress.completeStep('start')
+    progress.failStep('install')
+    progress.skipStep('install')
+    progress.end()
+
+    assert.deepStrictEqual(lines, [
+      `stdout:${formatPromptTitle('Boxdown setup')}`,
+      `stdout:${formatPromptEnd()}`
+    ])
+
+    const rendered = raw.join('')
+    assert.ok(rendered.includes(`${color('□', 'dim')} Writing generated devcontainer config`))
+    assert.ok(rendered.includes(`${color('✔', 'green')} Writing generated devcontainer config`))
+    assert.ok(rendered.includes(`${color('◒', 'cyan')} Starting devcontainer`))
+    assert.ok(rendered.includes(`${color('◐', 'cyan')} Starting devcontainer`))
+    assert.ok(rendered.includes(`${color('✔', 'green')} Starting devcontainer`))
+    assert.ok(rendered.includes(`${color('!', 'dim')} Installing SSH alias`))
+    assert.ok(rendered.includes(`${color('□', 'dim')} ${color('Installing SSH alias', 'dim')}`))
+    assert.match(rendered, /\u001B\[3A/)
+  })
+
   test('captures raw command output while surfacing progress markers', async () => {
     const lines: string[] = []
     const progress = createProgress({
@@ -2142,8 +2287,161 @@ describe('progress output', () => {
     assert.match(result.stdout, /hidden stdout/)
     assert.match(result.stderr, /hidden stderr/)
     assert.match(result.stdout, /1\/0/)
-    assert.ok(lines.includes('stdout:- installing packages'))
-    assert.ok(lines.includes('stdout:- configuring runtime'))
+    assert.ok(lines.includes(`stdout:${promptRail()}  ${selectedMark()} installing packages`))
+    assert.ok(lines.includes(`stdout:${promptRail()}  ${selectedMark()} configuring runtime`))
+  })
+
+  test('renders deterministic TTY spinner frames without timing', () => {
+    const lines: string[] = []
+    const raw: string[] = []
+    const progress = createProgress({
+      isTTY: true,
+      spinnerFrames: ['◒', '◐'],
+      spinnerIntervalMs: 60_000,
+      write: (target, message) => {
+        lines.push(`${target}:${message}`)
+      },
+      writeRaw: (target, message) => {
+        raw.push(`${target}:${message}`)
+      }
+    })
+
+    progress.startSpinner('Starting devcontainer')
+    progress.tickSpinner()
+    progress.item('Installing packages')
+    progress.stopSpinner('complete')
+
+    assert.deepStrictEqual(lines, [
+      `stdout:${promptRail()}  ${selectedMark()} Installing packages`,
+      `stdout:${promptRail()}  ${selectedMark()} Starting devcontainer`
+    ])
+    assert.deepStrictEqual(raw, [
+      `stdout:\r\u001B[2K${promptRail()}  ${color('◒', 'cyan')} Starting devcontainer`,
+      `stdout:\r\u001B[2K${promptRail()}  ${color('◐', 'cyan')} Starting devcontainer`,
+      'stdout:\r\u001B[2K',
+      `stdout:\r\u001B[2K${promptRail()}  ${color('◐', 'cyan')} Starting devcontainer`,
+      'stdout:\r\u001B[2K'
+    ])
+  })
+
+  test('progress commands use static spinner lines without a TTY', async () => {
+    const lines: string[] = []
+    const progress = createProgress({
+      isTTY: false,
+      write: (target, message) => {
+        lines.push(`${target}:${message}`)
+      }
+    })
+    const result = await runProgressCommand('demo command', 'bash', [
+      '-c',
+      'printf "done\\n"'
+    ], {
+      progress,
+      spinnerLabel: 'Running demo command'
+    })
+
+    assert.strictEqual(result.code, 0)
+    assert.match(result.stdout, /done/)
+    assert.deepStrictEqual(lines, [
+      `stdout:${promptRail()}  ${color('◒', 'cyan')} Running demo command`,
+      `stdout:${promptRail()}  ${selectedMark()} Running demo command`
+    ])
+  })
+
+  test('progress commands complete matching checklist steps', async () => {
+    const lines: string[] = []
+    const raw: string[] = []
+    const progress = createProgress({
+      isTTY: true,
+      spinnerFrames: ['◒', '◐'],
+      spinnerIntervalMs: 60_000,
+      writeRaw: (target, message) => {
+        raw.push(`${target}:${message}`)
+      },
+      write: (target, message) => {
+        lines.push(`${target}:${message}`)
+      }
+    })
+
+    progress.section('Boxdown setup')
+    progress.setSteps([{ id: 'demo', label: 'Running demo command' }])
+    const result = await runProgressCommand('demo command', 'bash', [
+      '-c',
+      'printf "done\\n"'
+    ], {
+      progress,
+      spinnerLabel: 'Fallback spinner',
+      stepId: 'demo'
+    })
+    progress.end()
+
+    const rendered = raw.join('')
+    assert.strictEqual(result.code, 0)
+    assert.deepStrictEqual(lines, [
+      `stdout:${formatPromptTitle('Boxdown setup')}`,
+      `stdout:${formatPromptEnd()}`
+    ])
+    assert.match(result.stdout, /done/)
+    assert.ok(rendered.includes(`${color('◒', 'cyan')} Running demo command`))
+    assert.ok(rendered.includes(`${color('✔', 'green')} Running demo command`))
+    assert.ok(!rendered.includes('Fallback spinner'))
+  })
+
+  test('progress commands fail matching checklist steps and keep failure tails concise', async () => {
+    const lines: string[] = []
+    const raw: string[] = []
+    const progress = createProgress({
+      isTTY: true,
+      spinnerFrames: ['◒', '◐'],
+      spinnerIntervalMs: 60_000,
+      write: (target, message) => {
+        lines.push(`${target}:${message}`)
+      },
+      writeRaw: (target, message) => {
+        raw.push(`${target}:${message}`)
+      }
+    })
+
+    progress.section('Boxdown setup')
+    progress.setSteps([{ id: 'demo', label: 'Running failing command' }])
+    const result = await runProgressCommand('demo command', 'bash', [
+      '-c',
+      [
+        'printf "BOXDOWN_PROGRESS: hidden marker\\n"',
+        'printf "stdout tail\\n"',
+        'printf "stderr tail\\n" >&2',
+        'exit 9'
+      ].join('; ')
+    ], {
+      progress,
+      stepId: 'demo'
+    })
+    progress.end()
+
+    const rendered = raw.join('')
+    const failure = formatCommandFailure('demo command', result, { tailLines: 5 })
+    assert.strictEqual(result.code, 9)
+    assert.deepStrictEqual(lines, [
+      `stdout:${formatPromptTitle('Boxdown setup')}`,
+      `stdout:${formatPromptEnd()}`
+    ])
+    assert.ok(rendered.includes(`${color('!', 'dim')} Running failing command`))
+    assert.match(failure, /demo command failed with exit code 9\./)
+    assert.match(failure, /stderr tail/)
+    assert.match(failure, /stdout tail/)
+    assert.doesNotMatch(failure, /hidden marker/)
+  })
+
+  test('hidden command helpers use friendly spinner labels', () => {
+    const devcontainerSource = readFileSync(fileURLToPath(new URL('../src/devcontainer.ts', import.meta.url)), 'utf8')
+    const sshKeySource = readFileSync(fileURLToPath(new URL('../src/ssh-key.ts', import.meta.url)), 'utf8')
+
+    assert.match(devcontainerSource, /spinnerLabel: 'Starting devcontainer'/)
+    assert.match(devcontainerSource, /spinnerLabel: 'Preparing container SSH runtime'/)
+    assert.match(devcontainerSource, /spinnerLabel: 'Refreshing GitHub CLI auth inside the devcontainer'/)
+    assert.match(devcontainerSource, /spinnerLabel: 'Verifying GitHub CLI auth inside the devcontainer'/)
+    assert.match(sshKeySource, /spinnerLabel: 'Generating Boxdown SSH identity'/)
+    assert.match(sshKeySource, /spinnerLabel: 'Writing Boxdown SSH public key'/)
   })
 
   test('verbose progress commands do not emit marker summaries', async () => {
@@ -2159,6 +2457,7 @@ describe('progress output', () => {
       'printf "BOXDOWN_PROGRESS: raw marker\\n"; printf "%s/%s\\n" "$BOXDOWN_PROGRESS" "$BOXDOWN_VERBOSE"'
     ], {
       progress,
+      spinnerLabel: 'Running verbose demo command',
       verboseStdout: false,
       verboseStderr: false
     })
@@ -2196,7 +2495,7 @@ describe('progress output', () => {
     const log = readFileSync(context.workspaceLogPath, 'utf8')
 
     assert.strictEqual(result.code, 0)
-    assert.ok(lines.includes('stdout:- configuring'))
+    assert.ok(lines.includes(`stdout:${promptRail()}  ${selectedMark()} configuring`))
     assert.match(log, /\[stdout\] hidden stdout/)
     assert.match(log, /\[stderr\] BOXDOWN_PROGRESS: configuring/)
   })
@@ -3758,6 +4057,18 @@ describe('packaged assets', () => {
     assert.match(startScript, /--verbose\s+Stream raw devcontainer, Docker, and hook output\./)
     assert.match(startScript, /BOXDOWN_PROGRESS=1/)
     assert.match(startScript, /print_progress_markers/)
+    assert.match(startScript, /progress_section "Boxdown start"/)
+    assert.match(startScript, /progress_set_steps/)
+    assert.match(startScript, /progress_start_step/)
+    assert.match(startScript, /progress_complete_step/)
+    assert.match(startScript, /progress_fail_step/)
+    assert.match(startScript, /progress_skip_step/)
+    assert.match(startScript, /"devcontainer-start:Starting devcontainer"/)
+    assert.match(startScript, /"ssh-runtime:Preparing container SSH runtime"/)
+    assert.match(startScript, /"gh-auth-refresh:Refreshing GitHub CLI auth inside the devcontainer"/)
+    assert.match(startScript, /elif ! supports_progress_tty/)
+    assert.match(startScript, /progress_item "\$\{line#BOXDOWN_PROGRESS: \}"/)
+    assert.match(startScript, /progress_end/)
     assert.match(startScript, /Rerun with --verbose to see full command output\./)
     assert.match(startScript, /stdout is reserved for SSH traffic/)
   })
