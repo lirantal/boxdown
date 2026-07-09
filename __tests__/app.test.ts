@@ -9,7 +9,7 @@ import { describe, test } from 'node:test'
 
 import { claudeSshConfigEntryForWorkspace, defaultClaudeSshConfigsPath, installClaudeSshConfigHost, mergeClaudeSshConfigHost, parseClaudeSshConfigs, removeClaudeSshConfigHost, uninstallClaudeSshConfigHost } from '../src/claude-app-config.ts'
 import { canonicalCodexRemotePathForWorkspace, codexDiscoveredRemoteHostId, codexProjectEntryForWorkspace, defaultCodexAppConfigPath, defaultCodexGlobalStatePath, installCodexAppConfigProject, installCodexGlobalStateProject, legacyCodexRemotePathForWorkspace, mergeCodexAppProject, normalizeCodexGlobalStateProject, parseCodexAppConfig, removeCodexAppProject, removeCodexGlobalStateProject, uninstallCodexAppConfigProject, uninstallCodexGlobalStateProject } from '../src/codex-app-config.ts'
-import { buildCodexRepairScript } from '../src/codex-repair.ts'
+import { buildCodexRepairScript, repairHostCodexPathIdentity } from '../src/codex-repair.ts'
 import { codingAgentBinary, codingAgentFromCommand } from '../src/coding-agents.ts'
 import { color, formatPromptEnd, formatPromptTitle, promptRail, selectedMark } from '../src/cli-style.ts'
 import { buildGeneratedDevcontainerConfig, publishContainerPortFromConfig } from '../src/config.ts'
@@ -3920,6 +3920,167 @@ describe('Codex path repair', () => {
 
     return JSON.parse(execFileSync('python3', ['-c', script, databasePath, legacyPath, canonicalPath]).toString('utf8')) as Record<string, number>
   }
+
+  test('dry-runs and applies host Codex path identity repair', () => {
+    const home = tempDir('codex-host-repair-home')
+    const context = createWorkspaceContext({
+      workspace: tempDir('codex-host-repair-workspace'),
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('codex-host-repair-cache'),
+        BOXDOWN_DATA_HOME: tempDir('codex-host-repair-data')
+      },
+      assetsDevcontainerDir
+    })
+    const alias = 'demo-devcontainer'
+    const otherAlias = 'other-devcontainer'
+    const hostId = codexDiscoveredRemoteHostId(alias)
+    const otherHostId = codexDiscoveredRemoteHostId(otherAlias)
+    const canonicalPath = `/workspaces/${context.workspaceBasename}`
+    const legacyPath = `/home/node/${context.workspaceBasename}`
+    const env = {
+      HOME: home
+    }
+    const appConfigPath = defaultCodexAppConfigPath(env)
+    const globalStatePath = defaultCodexGlobalStatePath(env)
+
+    mkdirSync(join(home, '.codex', 'codex-app'), { recursive: true })
+    writeFileSync(appConfigPath, `${JSON.stringify({
+      version: 1,
+      remoteConnections: [
+        {
+          sshAlias: alias,
+          projects: [
+            {
+              remotePath: legacyPath,
+              label: 'Legacy'
+            },
+            {
+              remotePath: canonicalPath,
+              label: 'Canonical'
+            }
+          ]
+        },
+        {
+          sshAlias: otherAlias,
+          projects: [
+            {
+              remotePath: legacyPath,
+              label: 'Other'
+            }
+          ]
+        }
+      ]
+    }, null, 2)}\n`)
+    writeFileSync(globalStatePath, `${JSON.stringify({
+      'project-order': ['legacy-project-id', 'canonical-project-id', 'other-project-id'],
+      'sidebar-collapsed-groups': {
+        'legacy-project-id': true,
+        'canonical-project-id': true,
+        'other-project-id': true
+      },
+      'remote-projects': [
+        {
+          id: 'legacy-project-id',
+          hostId,
+          remotePath: legacyPath,
+          label: 'Legacy'
+        },
+        {
+          id: 'canonical-project-id',
+          hostId,
+          remotePath: canonicalPath,
+          label: 'Canonical'
+        },
+        {
+          id: 'other-project-id',
+          hostId: otherHostId,
+          remotePath: legacyPath,
+          label: 'Other'
+        }
+      ],
+      'electron-persisted-atom-state': {
+        'remote-projects': [
+          {
+            id: 'legacy-project-id',
+            hostId,
+            remotePath: legacyPath,
+            label: 'Legacy'
+          }
+        ]
+      }
+    })}\n`)
+
+    const dryRun = repairHostCodexPathIdentity(context, alias, { env })
+    const dryRunConfig = parseCodexAppConfig(JSON.parse(readFileSync(appConfigPath, 'utf8')))
+
+    assert.deepStrictEqual(dryRun.appConfig, {
+      path: appConfigPath,
+      exists: true,
+      legacy: 1,
+      canonical: 1,
+      changed: false
+    })
+    assert.deepStrictEqual(dryRun.globalState, {
+      path: globalStatePath,
+      exists: true,
+      legacy: 2,
+      canonical: 1,
+      changed: false
+    })
+    assert.strictEqual(dryRunConfig.remoteConnections[0]?.projects.length, 2)
+
+    const apply = repairHostCodexPathIdentity(context, alias, {
+      apply: true,
+      env,
+      now: new Date('2026-01-01T00:00:00.000Z')
+    })
+    const nextConfig = parseCodexAppConfig(JSON.parse(readFileSync(appConfigPath, 'utf8')))
+    const nextState = JSON.parse(readFileSync(globalStatePath, 'utf8'))
+
+    assert.strictEqual(apply.appConfig.changed, true)
+    assert.strictEqual(apply.appConfig.backupPath, `${appConfigPath}.2026-01-01T00-00-00-000Z.bak`)
+    assert.strictEqual(apply.globalState.changed, true)
+    assert.strictEqual(apply.globalState.backupPath, `${globalStatePath}.2026-01-01T00-00-00-000Z.bak`)
+    assert.deepStrictEqual(nextConfig.remoteConnections, [
+      {
+        sshAlias: alias,
+        projects: [
+          {
+            remotePath: canonicalPath,
+            label: context.workspaceBasename
+          }
+        ]
+      },
+      {
+        sshAlias: otherAlias,
+        projects: [
+          {
+            remotePath: legacyPath,
+            label: 'Other'
+          }
+        ]
+      }
+    ])
+    assert.deepStrictEqual(nextState['remote-projects'], [
+      {
+        id: 'legacy-project-id',
+        hostId,
+        remotePath: canonicalPath,
+        label: 'Legacy'
+      },
+      {
+        id: 'other-project-id',
+        hostId: otherHostId,
+        remotePath: legacyPath,
+        label: 'Other'
+      }
+    ])
+    assert.deepStrictEqual(nextState['project-order'], ['legacy-project-id', 'other-project-id'])
+    assert.deepStrictEqual(nextState['sidebar-collapsed-groups'], {
+      'legacy-project-id': true,
+      'other-project-id': true
+    })
+  })
 
   test('dry-runs and applies remote Codex path repair with backups', () => {
     if (!python3Available()) {

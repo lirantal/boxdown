@@ -1,4 +1,6 @@
-import { legacyCodexRemotePathForWorkspace, codexRemotePathForWorkspace } from './codex-app-config.ts'
+import { existsSync, readFileSync } from 'node:fs'
+
+import { codexDiscoveredRemoteHostId, codexProjectEntryForWorkspace, codexRemotePathForWorkspace, defaultCodexAppConfigPath, defaultCodexGlobalStatePath, installCodexAppConfigProject, installCodexGlobalStateProject, legacyCodexRemotePathForWorkspace, normalizeRemotePath, parseCodexAppConfig } from './codex-app-config.ts'
 import type { WorkspaceContext } from './paths.ts'
 import { runBuffered } from './process.ts'
 
@@ -8,10 +10,186 @@ export interface CodexRepairOptions {
   legacyPath?: string
   canonicalPath?: string
   codexHome?: string
+  env?: NodeJS.ProcessEnv
+}
+
+interface CodexRepairPathCounts {
+  path: string
+  exists: boolean
+  legacy: number
+  canonical: number
+  changed: boolean
+  backupPath?: string
+}
+
+interface CodexRepairHostSummary {
+  appConfig: CodexRepairPathCounts
+  globalState: CodexRepairPathCounts
+}
+
+function isRecord (value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
 
 function timestampFor (now: Date): string {
   return now.toISOString().replace(/[-:.]/gu, '').replace(/000Z$/u, 'Z')
+}
+
+function countCodexAppConfigPaths (
+  configPath: string,
+  sshAlias: string,
+  legacyPath: string,
+  canonicalPath: string
+): CodexRepairPathCounts {
+  if (!existsSync(configPath)) {
+    return {
+      path: configPath,
+      exists: false,
+      legacy: 0,
+      canonical: 0,
+      changed: false
+    }
+  }
+
+  const config = parseCodexAppConfig(JSON.parse(readFileSync(configPath, 'utf8')) as unknown)
+  let legacy = 0
+  let canonical = 0
+
+  for (const connection of config.remoteConnections) {
+    if (connection.sshAlias !== sshAlias) {
+      continue
+    }
+
+    for (const project of connection.projects) {
+      const remotePath = normalizeRemotePath(project.remotePath)
+      if (remotePath === legacyPath) {
+        legacy += 1
+      } else if (remotePath === canonicalPath) {
+        canonical += 1
+      }
+    }
+  }
+
+  return {
+    path: configPath,
+    exists: true,
+    legacy,
+    canonical,
+    changed: false
+  }
+}
+
+function addCodexGlobalStateContainerCounts (
+  container: unknown,
+  hostId: string,
+  legacyPath: string,
+  canonicalPath: string,
+  counts: { legacy: number, canonical: number }
+): void {
+  if (!isRecord(container) || !Array.isArray(container['remote-projects'])) {
+    return
+  }
+
+  for (const project of container['remote-projects']) {
+    if (!isRecord(project) || project.hostId !== hostId || typeof project.remotePath !== 'string') {
+      continue
+    }
+
+    const remotePath = normalizeRemotePath(project.remotePath)
+    if (remotePath === legacyPath) {
+      counts.legacy += 1
+    } else if (remotePath === canonicalPath) {
+      counts.canonical += 1
+    }
+  }
+}
+
+function countCodexGlobalStatePaths (
+  statePath: string,
+  sshAlias: string,
+  legacyPath: string,
+  canonicalPath: string
+): CodexRepairPathCounts {
+  if (!existsSync(statePath)) {
+    return {
+      path: statePath,
+      exists: false,
+      legacy: 0,
+      canonical: 0,
+      changed: false
+    }
+  }
+
+  const state = JSON.parse(readFileSync(statePath, 'utf8')) as unknown
+  const hostId = codexDiscoveredRemoteHostId(sshAlias)
+  const counts = {
+    legacy: 0,
+    canonical: 0
+  }
+
+  addCodexGlobalStateContainerCounts(state, hostId, legacyPath, canonicalPath, counts)
+
+  if (isRecord(state)) {
+    addCodexGlobalStateContainerCounts(state['electron-persisted-atom-state'], hostId, legacyPath, canonicalPath, counts)
+  }
+
+  return {
+    path: statePath,
+    exists: true,
+    legacy: counts.legacy,
+    canonical: counts.canonical,
+    changed: false
+  }
+}
+
+export function repairHostCodexPathIdentity (
+  context: WorkspaceContext,
+  alias: string,
+  options: CodexRepairOptions = {}
+): CodexRepairHostSummary {
+  const env = options.env ?? process.env
+  const legacyPath = normalizeRemotePath(options.legacyPath ?? legacyCodexRemotePathForWorkspace(context))
+  const canonicalPath = normalizeRemotePath(options.canonicalPath ?? codexRemotePathForWorkspace(context))
+  const appConfigPath = defaultCodexAppConfigPath(env)
+  const globalStatePath = defaultCodexGlobalStatePath(env)
+  const appConfig = countCodexAppConfigPaths(appConfigPath, alias, legacyPath, canonicalPath)
+  const globalState = countCodexGlobalStatePaths(globalStatePath, alias, legacyPath, canonicalPath)
+
+  if (options.apply !== true) {
+    return {
+      appConfig,
+      globalState
+    }
+  }
+
+  const entry = {
+    ...codexProjectEntryForWorkspace(context, alias),
+    remotePath: canonicalPath
+  }
+  const now = options.now ?? new Date()
+  const appResult = installCodexAppConfigProject(entry, {
+    configPath: appConfigPath,
+    legacyRemotePaths: [legacyPath],
+    now
+  })
+  const stateResult = installCodexGlobalStateProject(entry, {
+    statePath: globalStatePath,
+    legacyRemotePaths: [legacyPath],
+    now
+  })
+
+  return {
+    appConfig: {
+      ...appConfig,
+      changed: appResult.changed,
+      ...(appResult.backupPath === undefined ? {} : { backupPath: appResult.backupPath })
+    },
+    globalState: {
+      ...globalState,
+      changed: stateResult.changed,
+      ...(stateResult.backupPath === undefined ? {} : { backupPath: stateResult.backupPath })
+    }
+  }
 }
 
 export function buildCodexRepairScript (
@@ -210,11 +388,41 @@ print(json.dumps(summary, indent=2, sort_keys=True))
 `
 }
 
+function parseJsonObjectFromOutput (output: string): { value?: unknown, preamble?: string, error?: string } {
+  const start = output.indexOf('{')
+  const end = output.lastIndexOf('}')
+
+  if (start === -1 || end === -1 || end < start) {
+    return {
+      preamble: output.trim(),
+      error: 'Remote repair did not print a JSON object'
+    }
+  }
+
+  try {
+    return {
+      value: JSON.parse(output.slice(start, end + 1)) as unknown,
+      ...(start === 0 ? {} : { preamble: output.slice(0, start).trim() })
+    }
+  } catch (error) {
+    return {
+      preamble: output.trim(),
+      error: error instanceof Error ? error.message : String(error)
+    }
+  }
+}
+
 export async function runCodexRepair (
   context: WorkspaceContext,
   alias: string,
   options: CodexRepairOptions = {}
 ): Promise<number> {
+  const now = options.now ?? new Date()
+  const repairOptions = {
+    ...options,
+    now
+  }
+  const host = repairHostCodexPathIdentity(context, alias, repairOptions)
   const result = await runBuffered('ssh', [
     '-o',
     'BatchMode=yes',
@@ -222,10 +430,25 @@ export async function runCodexRepair (
     'python3',
     '-'
   ], {
-    input: buildCodexRepairScript(context, options),
-    mirrorStdout: 'stdout',
+    input: buildCodexRepairScript(context, repairOptions),
+    mirrorStdout: false,
     mirrorStderr: 'stderr'
   })
+  const parsedRemote = parseJsonObjectFromOutput(result.stdout)
+  const remote = parsedRemote.value ?? {
+    ok: false,
+    error: parsedRemote.error,
+    stdout: result.stdout.trim()
+  }
+  const summary = {
+    ok: result.code === 0 && isRecord(remote) && remote.ok === true,
+    mode: options.apply === true ? 'apply' : 'dry-run',
+    host,
+    remote,
+    ...(parsedRemote.preamble === undefined || parsedRemote.preamble.length === 0 ? {} : { remotePreamble: parsedRemote.preamble })
+  }
 
-  return result.code
+  process.stdout.write(`${JSON.stringify(summary, null, 2)}\n`)
+
+  return summary.ok ? 0 : (result.code === 0 ? 1 : result.code)
 }

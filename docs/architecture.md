@@ -56,7 +56,7 @@ Boxdown-managed SSH alias and canonical container-side project path,
 removes matching Codex global-state sidebar cache entries for both the canonical
 and legacy paths. Other Codex global state remains Codex-owned except for the
 explicit `boxdown codex repair` command, which backs up and normalizes matching
-remote Codex thread/config state.
+host Codex app/sidebar state and remote Codex thread/config state.
 
 Boxdown writes the Claude SSH remote entry needed to point Claude at the same
 Boxdown-managed SSH alias. On uninstall, it removes that matching Claude SSH

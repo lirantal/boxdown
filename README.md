@@ -103,8 +103,8 @@ Restart the target app after installing it so it applies the updated remote
 project config.
 
 If an existing Codex remote project is connected but shows missing chats after
-older `/home/node/<repo-name>` registration, inspect and repair the remote path
-identity with:
+older `/home/node/<repo-name>` registration, inspect and repair the host/sidebar
+and remote path identity with:
 
 ```sh
 npx boxdown codex repair

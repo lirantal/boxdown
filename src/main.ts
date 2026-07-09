@@ -107,8 +107,9 @@ Commands:
                             devcontainer.
   ssh uninstall             Remove Boxdown's managed SSH host alias block and
                             matching Codex/Claude app entries.
-  codex repair              Inspect or repair remote Codex path identity from
-                            /home/node/<repo> to /workspaces/<repo>.
+  codex repair              Inspect or repair host and remote Codex path
+                            identity from /home/node/<repo> to
+                            /workspaces/<repo>.
   ssh-proxy                 Internal command used by the generated SSH
                             ProxyCommand. Starts or reuses the devcontainer and
                             bridges SSH over docker exec.
@@ -127,10 +128,10 @@ Options:
                       setup and ssh install: codex, claude.
   --port <port>       Tunnel a local port to the same remote port, or use
                       <local:remote>. Repeatable. Supported by tunnel.
-  --dry-run           Inspect remote Codex path state without mutation.
+  --dry-run           Inspect host and remote Codex path state without mutation.
                       Supported by codex repair and used by default.
-  --apply             Back up and repair remote Codex path state. Supported by
-                      codex repair.
+  --apply             Back up and repair host and remote Codex path state.
+                      Supported by codex repair.
   --recreate          Remove the existing devcontainer before starting.
   --json              Print JSON output. Supported by status and list.
   --verbose           Stream raw Docker, devcontainer, and hook command output.
