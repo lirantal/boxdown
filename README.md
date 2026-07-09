@@ -102,6 +102,15 @@ npx boxdown ssh install --target claude
 Restart the target app after installing it so it applies the updated remote
 project config.
 
+If an existing Codex remote project is connected but shows missing chats after
+older `/home/node/<repo-name>` registration, inspect and repair the remote path
+identity with:
+
+```sh
+npx boxdown codex repair
+npx boxdown codex repair --apply
+```
+
 From the target project directory, forward a dev server running inside the
 container to your host browser:
 
@@ -150,6 +159,7 @@ boxdown purge
 boxdown doctor
 boxdown ssh install
 boxdown ssh uninstall
+boxdown codex repair
 boxdown ssh-proxy
 boxdown tunnel --port 3030
 boxdown refresh-gh-token

@@ -50,9 +50,13 @@ and `--target claude` writes Claude app SSH remote configuration under
 becomes Boxdown workspace state.
 
 Boxdown writes the Codex app config entry needed to point Codex at the
-Boxdown-managed SSH alias and container-side project path. On uninstall, it also
-removes the matching Codex global-state sidebar cache entry that Codex derived
-from that app config. Other Codex global state remains Codex-owned.
+Boxdown-managed SSH alias and canonical container-side project path,
+`/workspaces/<repo-name>`. On install, it migrates matching older
+`/home/node/<repo-name>` project entries for the same alias. On uninstall, it
+removes matching Codex global-state sidebar cache entries for both the canonical
+and legacy paths. Other Codex global state remains Codex-owned except for the
+explicit `boxdown codex repair` command, which backs up and normalizes matching
+remote Codex thread/config state.
 
 Boxdown writes the Claude SSH remote entry needed to point Claude at the same
 Boxdown-managed SSH alias. On uninstall, it removes that matching Claude SSH

@@ -2,7 +2,7 @@ import { existsSync, rmSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, parse, relative, resolve } from 'node:path'
 
 import { claudeSshConfigEntryForWorkspace, uninstallClaudeSshConfigHost } from './claude-app-config.ts'
-import { codexProjectEntryForWorkspace, uninstallCodexAppConfigProject, uninstallCodexGlobalStateProject } from './codex-app-config.ts'
+import { codexProjectEntryForWorkspace, legacyCodexRemotePathForWorkspace, uninstallCodexAppConfigProject, uninstallCodexGlobalStateProject } from './codex-app-config.ts'
 import { findWorkspaceContainer, inspectContainerImage, removeContainerById, removeDockerImage } from './devcontainer.ts'
 import type { WorkspaceCommandLogger } from './logging.ts'
 import { readWorkspaceMetadata, type WorkspaceMetadata } from './metadata.ts'
@@ -96,16 +96,21 @@ async function purgeAliasIntegrations (context: WorkspaceContext, alias: string)
   }) || failed
 
   const entry = codexProjectEntryForWorkspace(context, alias)
+  const legacyRemotePath = legacyCodexRemotePathForWorkspace(context)
 
   failed = await runPurgeStep(`Codex app config for ${alias}`, () => {
-    const result = uninstallCodexAppConfigProject(entry)
+    const result = uninstallCodexAppConfigProject(entry, {
+      additionalRemotePaths: [legacyRemotePath]
+    })
     process.stdout.write(result.changed
       ? `Removed Codex remote project: ${entry.label} (${alias})\n`
       : `Codex remote project absent: ${entry.label} (${alias})\n`)
   }) || failed
 
   failed = await runPurgeStep(`Codex app state for ${alias}`, () => {
-    const result = uninstallCodexGlobalStateProject(entry)
+    const result = uninstallCodexGlobalStateProject(entry, {
+      additionalRemotePaths: [legacyRemotePath]
+    })
     process.stdout.write(result.changed
       ? `Removed Codex sidebar state: ${entry.label} (${alias})\n`
       : `Codex sidebar state absent: ${entry.label} (${alias})\n`)
