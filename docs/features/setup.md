@@ -17,6 +17,7 @@ interactive shell. It accepts:
 --alias <name>
 --recreate
 --target <name>
+--verbose
 ```
 
 ## Flow
@@ -27,6 +28,10 @@ interactive shell. It accepts:
 4. Run `devcontainer up --workspace-folder <repo> --override-config <config>`.
 5. Install or update the Boxdown-managed SSH alias.
 6. Optionally install selected SSH targets such as Codex or Claude.
+
+`setup` prints plain progress sections by default. Docker, Dev Containers CLI,
+and lifecycle hook output is captured and only summarized if a command fails.
+Pass `--verbose` to stream the raw build and hook logs.
 
 When `--target codex` is provided, Boxdown writes the Codex app config entry for
 the same alias and container-side project path used by:

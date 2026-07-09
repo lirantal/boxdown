@@ -52,7 +52,7 @@ From the **repository root** on your host:
 bash .devcontainer/start.sh
 ```
 
-Requires Docker running. The script resolves Boxdown's packaged `@devcontainers/cli` dependency and uses that binary to `up` the workspace and `exec` into `bash`; it does not install or use a host/global Dev Containers CLI package.
+Requires Docker running. The script resolves Boxdown's packaged `@devcontainers/cli` dependency and uses that binary to `up` the workspace and `exec` into `bash`; it does not install or use a host/global Dev Containers CLI package. Startup output is concise by default; pass `--verbose` to stream raw Docker, Dev Containers, and hook logs.
 
 ### GitHub CLI auth from host `gh`
 
@@ -162,6 +162,7 @@ Use the generated host alias when configuring the agent:
 - `bash .devcontainer/start.sh --ssh-proxy` refreshes the SSH alias, starts or reuses the devcontainer, and then bridges SSH over `docker exec`. Do not keep this running manually in a terminal; it is meant to be launched by OpenSSH as the `ProxyCommand` in the generated SSH config.
 - `bash .devcontainer/start.sh --refresh-gh-token` starts or reuses the devcontainer, then refreshes container `gh` auth from host `gh` when a token is available.
 - `bash .devcontainer/start.sh --refresh-gh-token-running` refreshes container `gh` auth from host `gh` only when the devcontainer is already running.
+- Add `--verbose` to any startup mode when debugging raw devcontainer, Docker, or hook output.
 
 If the devcontainer does not exist yet, the first SSH connection through `<repo-name>-devcontainer` will create it with `@devcontainers/cli up`, including `initializeCommand`, features, mounts, `postCreateCommand`, and `postStartCommand`. The first connection may take longer while the container is created.
 

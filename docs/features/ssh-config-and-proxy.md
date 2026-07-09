@@ -160,6 +160,11 @@ before a new SSH session. OpenCode and Antigravity remain lazy installs through
 their direct `boxdown` commands. The preflight output is routed to stderr so
 stdout remains reserved for SSH traffic.
 
+SSH proxy startup uses the same concise progress protocol as `setup` and
+`start`, but routes progress and failure summaries to stderr because stdout is
+reserved for the SSH stream. Use `boxdown ssh-proxy --verbose` only for manual
+debugging.
+
 ## Local Web Tunnels
 
 The SSH proxy supports TCP forwarding, so Boxdown can expose a web server that is
@@ -191,6 +196,9 @@ keeps a foreground SSH tunnel open:
 
 While the tunnel is running, host browsers and the Codex in-app browser can open
 `http://localhost:3030/`.
+
+Tunnel setup also hides raw devcontainer startup logs by default; pass
+`--verbose` before the foreground tunnel opens when debugging startup.
 
 Repeat `--port` for multiple forwards. Use `<local:remote>` when the host port
 should differ from the container port:

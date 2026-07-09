@@ -44,6 +44,10 @@ an SSH alias for remote tools. The target repository stays clean; Boxdown writes
 generated configuration and SSH keys under user cache/data directories instead
 of copying `.devcontainer/` into the project.
 
+Startup commands print concise progress by default and hide raw Docker,
+Dev Containers, and lifecycle hook logs unless a step fails. Add `--verbose` to
+stream the full command output while setup/start work runs.
+
 Open an interactive shell inside the container when you need one:
 
 ```sh
