@@ -17,6 +17,7 @@ import { purgeWorkspace } from './purge.ts'
 import { defaultSshAlias, installSshConfig, uninstallSshConfig } from './ssh-config.ts'
 import { dedupeSshInstallTargets, installSshInstallTarget, isSshConfigInstallTarget, SSH_INSTALL_TARGETS, sshInstallTargetFlagHintsText, supportedSshInstallTargetsText, type SshConfigInstallTarget } from './ssh-install-targets.ts'
 import { createStatusInfo, formatStatusText, statusIsHealthy } from './status.ts'
+import type { CliColor } from './cli-style.ts'
 
 export type BoxdownCommand =
   | 'help'
@@ -533,6 +534,18 @@ function workspaceMetadataContext (metadata: WorkspaceMetadata): WorkspaceContex
   })
 }
 
+function purgeWorkspaceStateColor (state: string): CliColor {
+  if (state === 'running') {
+    return 'green'
+  }
+
+  if (state === 'unknown') {
+    return 'dim'
+  }
+
+  return 'red'
+}
+
 function ambiguousWorkspaceSelectorError (selector: string, matches: WorkspaceMetadata[]): Error {
   const matchList = matches
     .map((entry) => `  - ${entry.workspaceBasename}: ${entry.workspaceFolder} (${entry.sshAlias})`)
@@ -628,7 +641,11 @@ async function resolvePurgeTargets (
     choices: entries.map((entry) => ({
       value: entry.workspaceId,
       label: entry.workspaceBasename,
-      description: `(${entry.state}) ${entry.workspaceFolder}`
+      description: `(${entry.state}) ${entry.workspaceFolder}`,
+      focusedDescription: [
+        { text: `(${entry.state})`, color: purgeWorkspaceStateColor(entry.state) },
+        { text: ` ${entry.workspaceFolder}`, color: 'dim' }
+      ]
     })),
     skipLabel: 'Cancel',
     summaryLabel: 'Purge workspaces',
