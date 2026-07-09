@@ -114,6 +114,12 @@ async function withFakeDocker<T> (workspaces: FakeDockerWorkspace[], run: (logPa
     '    fi',
     '    previous="$arg"',
     '  done',
+    '  if [ "$filter" = "label=devcontainer.local_folder" ]; then',
+    '    while IFS="$(printf \'\\t\')" read -r folder id remove_exit_code image_id image_name inspect_exit_code image_remove_exit_code; do',
+    '      printf \'{"ID":"%s","Names":"%s","State":"running","Status":"Up","Labels":"devcontainer.local_folder=%s"}\\n\' "$id" "$id" "$folder"',
+    '    done < "${BOXDOWN_FAKE_DOCKER_STATE}"',
+    '    exit 0',
+    '  fi',
     '  workspace="${filter#label=devcontainer.local_folder=}"',
     '  if [ "$workspace" = "$filter" ]; then',
     '    exit 0',
@@ -1882,7 +1888,7 @@ describe('CLI execution', () => {
     rmSync(missing, { recursive: true, force: true })
 
     await withFakeDocker([
-      { workspace: beta, id: 'purge-batch-beta-container' }
+      { workspace: betaContext.workspaceFolder, id: 'purge-batch-beta-container' }
     ], async (logPath, dockerEnv) => {
       const codePromise = withProcessEnv({
         ...dockerEnv,
@@ -1894,7 +1900,15 @@ describe('CLI execution', () => {
       })))
 
       await waitForPromptOutput(outputText, /Purge Boxdown workspaces\?/)
-      assert.match(outputText(), /missing.*missing-devcontainer/s)
+      assert.match(outputText(), /alpha/)
+      assert.match(outputText(), /beta/)
+      assert.match(outputText(), /missing/)
+      assert.ok(outputText().includes(`(absent) ${alphaContext.workspaceFolder}`))
+      assert.ok(outputText().includes(`(running) ${betaContext.workspaceFolder}`))
+      assert.ok(outputText().includes(`(missing) ${missingContext.workspaceFolder}`))
+      assert.doesNotMatch(outputText(), /alpha-devcontainer/)
+      assert.doesNotMatch(outputText(), /beta-devcontainer/)
+      assert.doesNotMatch(outputText(), /missing-devcontainer/)
 
       input.write('\u001B[A')
       input.write(' ')

@@ -628,7 +628,7 @@ async function resolvePurgeTargets (
     choices: entries.map((entry) => ({
       value: entry.workspaceId,
       label: entry.workspaceBasename,
-      description: `${entry.state} - ${entry.workspaceFolder} - ${entry.sshAlias}`
+      description: `(${entry.state}) ${entry.workspaceFolder}`
     })),
     skipLabel: 'Cancel',
     summaryLabel: 'Purge workspaces',
