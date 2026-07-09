@@ -15,6 +15,7 @@ boxdown antigravity
 ```sh
 --workspace <path>
 --recreate
+--verbose
 ```
 
 Use `boxdown setup` when you want to prepare the devcontainer and SSH/app
@@ -59,6 +60,11 @@ boxdown claude -- --continue
 Coding-agent aliases use the same startup flow but skip the port hint, run a
 best-effort refresh for the selected agent, and exec the agent binary instead of
 opening `bash`.
+
+Startup progress is concise by default. Raw Docker, Dev Containers CLI,
+lifecycle hook, and coding-agent install/update logs are captured; on failure,
+Boxdown prints the failed step and a short output tail. Pass `--verbose` to
+stream the full startup output before the interactive shell or agent takes over.
 
 ## Terminal Width
 

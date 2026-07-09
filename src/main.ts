@@ -10,6 +10,7 @@ import { canPromptInteractively, promptConfirm, promptMultiSelect, promptText, t
 import { createWorkspaceListEntries, formatWorkspaceListText } from './list.ts'
 import { listWorkspaceMetadata, readWorkspaceMetadata, writeWorkspaceMetadata } from './metadata.ts'
 import { createWorkspaceContext, defaultDataRoot, type WorkspaceContext } from './paths.ts'
+import { createProgress, type ProgressReporter, type ProgressOutputTarget } from './progress.ts'
 import { purgeWorkspace } from './purge.ts'
 import { defaultSshAlias, installSshConfig, uninstallSshConfig } from './ssh-config.ts'
 import { dedupeSshInstallTargets, installSshInstallTarget, isSshConfigInstallTarget, SSH_INSTALL_TARGETS, sshInstallTargetFlagHintsText, supportedSshInstallTargetsText, type SshConfigInstallTarget } from './ssh-install-targets.ts'
@@ -44,6 +45,7 @@ export interface ParsedCli {
   tunnelPorts?: TunnelPortForward[]
   recreate: boolean
   json: boolean
+  verbose: boolean
 }
 
 export interface RunCliOptions {
@@ -120,6 +122,7 @@ Options:
                       <local:remote>. Repeatable. Supported by tunnel.
   --recreate          Remove the existing devcontainer before starting.
   --json              Print JSON output. Supported by status and list.
+  --verbose           Stream raw Docker, devcontainer, and hook command output.
   --help, -h          Show help.
 `
 
@@ -144,6 +147,7 @@ export function parseCliArgs (argv: string[]): ParsedCli {
   const tunnelPorts: TunnelPortForward[] = []
   let recreate = false
   let json = false
+  let verbose = false
   let passthroughArgs: string[] | undefined
   const positional: string[] = []
 
@@ -188,7 +192,8 @@ export function parseCliArgs (argv: string[]): ParsedCli {
       ...(parsedTargets.length === 0 ? {} : { targets: parsedTargets }),
       ...(tunnelPorts.length === 0 ? {} : { tunnelPorts }),
       recreate,
-      json
+      json,
+      verbose
     }
   }
 
@@ -212,7 +217,8 @@ export function parseCliArgs (argv: string[]): ParsedCli {
       ...workspaceFields('coding-agent'),
       alias,
       recreate,
-      json
+      json,
+      verbose
     }
   }
 
@@ -280,6 +286,11 @@ export function parseCliArgs (argv: string[]): ParsedCli {
 
     if (arg === '--json') {
       json = true
+      continue
+    }
+
+    if (arg === '--verbose') {
+      verbose = true
       continue
     }
 
@@ -626,6 +637,7 @@ function printSkippedSshInstallTargets (command: 'setup' | 'ssh install'): void 
 interface SetupWorkspaceOptions {
   recreate?: boolean
   targets?: SshConfigInstallTarget[]
+  progress?: ProgressReporter
   start?: typeof startDevcontainer
   installSsh?: typeof installSshConfig
   installTarget?: typeof installSshInstallTarget
@@ -636,13 +648,32 @@ export async function setupWorkspace (
   alias: string,
   options: SetupWorkspaceOptions = {}
 ): Promise<void> {
-  await (options.start ?? startDevcontainer)(context, { recreate: options.recreate })
-  await (options.installSsh ?? installSshConfig)(context, alias)
+  await (options.start ?? startDevcontainer)(context, {
+    recreate: options.recreate,
+    ...(options.progress === undefined ? {} : { progress: options.progress })
+  })
+
+  if (options.progress !== undefined) {
+    options.progress.item(`Installing SSH alias: ${alias}`)
+    await (options.installSsh ?? installSshConfig)(context, alias, { quiet: true })
+  } else {
+    await (options.installSsh ?? installSshConfig)(context, alias)
+  }
 
   const installTarget = options.installTarget ?? installSshInstallTarget
   for (const target of options.targets ?? []) {
-    await installTarget(context, alias, target)
+    options.progress?.item(`Installing ${target} SSH target`)
+    await installTarget(context, alias, target, {
+      quiet: options.progress !== undefined
+    })
   }
+}
+
+function createCliProgress (parsed: ParsedCli, target: ProgressOutputTarget = 'stdout'): ProgressReporter {
+  return createProgress({
+    verbose: parsed.verbose,
+    target
+  })
 }
 
 export async function runCli (argv: string[] = process.argv.slice(2), options: RunCliOptions = {}): Promise<number> {
@@ -789,9 +820,14 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
       }
 
       writeWorkspaceMetadata(context, alias)
+      const progress = createCliProgress(parsed)
+      progress.section('Boxdown setup')
+      progress.detail(`Workspace: ${context.workspaceFolder}`)
+      progress.detail(`SSH alias: ${alias}`)
       await setupWorkspace(context, alias, {
         recreate: parsed.recreate,
-        targets: resolvedTargets.targets
+        targets: resolvedTargets.targets,
+        progress
       })
 
       if (resolvedTargets.skippedNonInteractive) {
@@ -802,14 +838,18 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
     }
 
     if (parsed.command === 'ssh-proxy') {
+      const progress = createCliProgress(parsed, 'stderr')
+      progress.section('Boxdown SSH proxy')
+      progress.item(`Updating SSH alias: ${alias}`)
       await installSshConfig(context, alias, { quiet: true })
       const containerId = await startDevcontainer(context, {
         recreate: parsed.recreate,
         proxyMode: true,
+        progress,
         reuseRunning: true
       })
-      await refreshContainerCodingAgentClis(context, true)
-      await ensureContainerSshRuntime(context)
+      await refreshContainerCodingAgentClis(context, true, [], { progress })
+      await ensureContainerSshRuntime(context, { progress })
       return runSshdProxy(containerId)
     }
 
@@ -827,9 +867,14 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
       }
 
       writeWorkspaceMetadata(context, alias)
+      const progress = createCliProgress(parsed)
+      progress.section('Boxdown tunnel')
+      progress.detail(`Workspace: ${context.workspaceFolder}`)
+      progress.item(`Updating SSH alias: ${alias}`)
       await installSshConfig(context, alias, { quiet: true })
       await startDevcontainer(context, {
         recreate: parsed.recreate,
+        progress,
         reuseRunning: true
       })
 
@@ -848,13 +893,20 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
       if (containerId === undefined) {
         throw new Error(`No running devcontainer found for: ${context.workspaceFolder}`)
       }
-      await refreshContainerGhAuth(context)
+      const progress = createCliProgress(parsed)
+      progress.section('Boxdown GitHub auth refresh')
+      progress.detail(`Workspace: ${context.workspaceFolder}`)
+      progress.item(`Using running devcontainer: ${containerId}`)
+      await refreshContainerGhAuth(context, { progress })
       return 0
     }
 
     if (parsed.command === 'refresh-gh-token') {
-      await startDevcontainer(context)
-      await refreshContainerGhAuth(context)
+      const progress = createCliProgress(parsed)
+      progress.section('Boxdown GitHub auth refresh')
+      progress.detail(`Workspace: ${context.workspaceFolder}`)
+      await startDevcontainer(context, { progress })
+      await refreshContainerGhAuth(context, { progress })
       return 0
     }
 
@@ -864,12 +916,24 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
         throw new Error('Missing coding-agent command')
       }
 
-      await startDevcontainer(context, { recreate: parsed.recreate })
-      await ensureContainerCodingAgentCli(context, agent)
+      const progress = createCliProgress(parsed)
+      progress.section(`Boxdown ${agent}`)
+      progress.detail(`Workspace: ${context.workspaceFolder}`)
+      await startDevcontainer(context, {
+        recreate: parsed.recreate,
+        progress
+      })
+      await ensureContainerCodingAgentCli(context, agent, { progress })
       return openCodingAgentCli(context, agent, parsed.agentArgs ?? [])
     }
 
-    const containerId = await startDevcontainer(context, { recreate: parsed.recreate })
+    const progress = createCliProgress(parsed)
+    progress.section('Boxdown start')
+    progress.detail(`Workspace: ${context.workspaceFolder}`)
+    const containerId = await startDevcontainer(context, {
+      recreate: parsed.recreate,
+      progress
+    })
     await printPortHint(context, containerId)
     return openShell(context)
   } catch (error) {

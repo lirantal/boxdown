@@ -8,6 +8,7 @@ import { configureWorkspaceGithubGitAuth } from './github-git-auth.ts'
 import { recordWorkspaceDockerImage } from './metadata.ts'
 import type { WorkspaceContext } from './paths.ts'
 import { runBuffered, runInteractive } from './process.ts'
+import { assertProgressCommandSucceeded, type ProgressReporter, runProgressCommand } from './progress.ts'
 import { interactiveCommandScript, interactiveShellEnvArgs, interactiveShellScript } from './shell.ts'
 import { ensureHostSshKey } from './ssh-key.ts'
 import { type ContainerSummary, parseDockerPsJsonLines } from './status.ts'
@@ -15,7 +16,12 @@ import { type ContainerSummary, parseDockerPsJsonLines } from './status.ts'
 export interface StartOptions {
   recreate?: boolean
   proxyMode?: boolean
+  progress?: ProgressReporter
   reuseRunning?: boolean
+}
+
+export interface ContainerCommandOptions {
+  progress?: ProgressReporter
 }
 
 export interface TunnelPortForward {
@@ -53,6 +59,18 @@ function log (message: string, proxyMode = false): void {
   } else {
     process.stdout.write(`${message}\n`)
   }
+}
+
+function containerProgressEnvArgs (progress?: ProgressReporter): string[] {
+  if (progress === undefined) {
+    return []
+  }
+
+  return [
+    'env',
+    `BOXDOWN_VERBOSE=${progress.verbose ? '1' : '0'}`,
+    `BOXDOWN_PROGRESS=${progress.verbose ? '0' : '1'}`
+  ]
 }
 
 export function parseContainerIdFromUpOutput (output: string): string | undefined {
@@ -258,21 +276,38 @@ export async function removeDockerImage (imageId: string): Promise<boolean> {
 }
 
 export async function startDevcontainer (context: WorkspaceContext, options: StartOptions = {}): Promise<string> {
-  await ensureHostSshKey(context, options.proxyMode ?? false)
+  const progress = options.progress
+  const proxyMode = options.proxyMode ?? false
+
+  progress?.item('Preparing SSH identity')
+  await ensureHostSshKey(context, {
+    quiet: proxyMode,
+    progress
+  })
+
+  progress?.item(`Writing generated devcontainer config: ${context.generatedConfigPath}`)
   writeGeneratedDevcontainerConfig(context)
 
   if (options.reuseRunning === true && options.recreate !== true) {
     const runningContainerId = await findRunningContainerId(context)
 
     if (runningContainerId !== undefined) {
-      log(`Using running devcontainer for: ${context.workspaceFolder}`, options.proxyMode)
+      if (progress === undefined) {
+        log(`Using running devcontainer for: ${context.workspaceFolder}`, proxyMode)
+      } else {
+        progress.item(`Using running devcontainer: ${runningContainerId}`)
+      }
       await recordContainerImageIfPresent(context, runningContainerId)
       return runningContainerId
     }
   }
 
   const cli = resolveDevcontainerCli(context)
-  log(`Starting devcontainer for: ${context.workspaceFolder}`, options.proxyMode)
+  if (progress === undefined) {
+    log(`Starting devcontainer for: ${context.workspaceFolder}`, proxyMode)
+  } else {
+    progress.item(`Starting devcontainer for: ${context.workspaceFolder}`)
+  }
 
   const args = [
     'up',
@@ -281,16 +316,30 @@ export async function startDevcontainer (context: WorkspaceContext, options: Sta
 
   if (options.recreate === true) {
     args.push('--remove-existing-container')
-    log('Removing existing dev container so create-time settings apply.', options.proxyMode)
+    if (progress === undefined) {
+      log('Removing existing dev container so create-time settings apply.', proxyMode)
+    } else {
+      progress.item('Removing existing devcontainer before start')
+    }
   }
 
-  const result = await runBuffered(cli.command, [...cli.argsPrefix, ...args], {
-    mirrorStdout: options.proxyMode === true ? 'stderr' : 'stdout',
-    mirrorStderr: 'stderr'
-  })
+  const result = progress === undefined
+    ? await runBuffered(cli.command, [...cli.argsPrefix, ...args], {
+        mirrorStdout: proxyMode ? 'stderr' : 'stdout',
+        mirrorStderr: 'stderr'
+      })
+    : await runProgressCommand('devcontainer up', cli.command, [...cli.argsPrefix, ...args], {
+        progress,
+        verboseStdout: proxyMode ? 'stderr' : 'stdout',
+        verboseStderr: 'stderr'
+      })
 
-  if (result.code !== 0) {
+  if (progress === undefined && result.code !== 0) {
     throw new Error(`devcontainer up failed for ${context.workspaceFolder}`)
+  }
+
+  if (progress !== undefined) {
+    assertProgressCommandSucceeded('devcontainer up', result, `devcontainer up failed for ${context.workspaceFolder}`)
   }
 
   const containerId = parseContainerIdFromUpOutput(`${result.stdout}\n${result.stderr}`) ?? await findRunningContainerId(context)
@@ -369,65 +418,115 @@ export async function openCodingAgentCli (context: WorkspaceContext, agent: Codi
   ])
 }
 
-export async function ensureContainerSshRuntime (context: WorkspaceContext): Promise<void> {
+export async function ensureContainerSshRuntime (context: WorkspaceContext, options: ContainerCommandOptions = {}): Promise<void> {
   const cli = resolveDevcontainerCli(context)
-  const result = await runBuffered(cli.command, [
+  options.progress?.item('Preparing container SSH runtime')
+  const args = [
     ...cli.argsPrefix,
     'exec',
     ...devcontainerWorkspaceArgs(context),
     '--',
+    ...containerProgressEnvArgs(options.progress),
     'bash',
     `${BOXDOWN_CONTAINER_DEVCONTAINER_DIR}/utils/ssh-bootstrap.sh`,
     'runtime'
-  ], {
-    mirrorStdout: 'stderr',
-    mirrorStderr: 'stderr'
-  })
+  ]
+  const result = options.progress === undefined
+    ? await runBuffered(cli.command, args, {
+        mirrorStdout: 'stderr',
+        mirrorStderr: 'stderr'
+      })
+    : await runProgressCommand('prepare SSH runtime', cli.command, args, {
+        progress: options.progress,
+        verboseStdout: 'stderr',
+        verboseStderr: 'stderr'
+      })
 
-  if (result.code !== 0) {
+  if (options.progress === undefined && result.code !== 0) {
     throw new Error('Failed to prepare devcontainer SSH runtime')
+  }
+
+  if (options.progress !== undefined) {
+    assertProgressCommandSucceeded('prepare SSH runtime', result, 'Failed to prepare devcontainer SSH runtime')
   }
 }
 
-export async function refreshContainerCodingAgentClis (context: WorkspaceContext, proxyMode = false, agents: CodingAgentCli[] = []): Promise<void> {
+export async function refreshContainerCodingAgentClis (
+  context: WorkspaceContext,
+  proxyMode = false,
+  agents: CodingAgentCli[] = [],
+  options: ContainerCommandOptions = {}
+): Promise<void> {
   const cli = resolveDevcontainerCli(context)
-  const result = await runBuffered(cli.command, [
+  options.progress?.item(agents.length === 0
+    ? 'Refreshing default coding-agent CLIs'
+    : `Refreshing coding-agent CLIs: ${agents.map(codingAgentBinary).join(', ')}`)
+  const args = [
     ...cli.argsPrefix,
     'exec',
     ...devcontainerWorkspaceArgs(context),
     '--',
+    ...containerProgressEnvArgs(options.progress),
     'bash',
     `${BOXDOWN_CONTAINER_DEVCONTAINER_DIR}/utils/coding-agent-cli-update.sh`,
     'maybe-update',
     ...agents
-  ], {
-    mirrorStdout: proxyMode ? 'stderr' : 'stdout',
-    mirrorStderr: 'stderr'
-  })
+  ]
+  const result = options.progress === undefined
+    ? await runBuffered(cli.command, args, {
+        mirrorStdout: proxyMode ? 'stderr' : 'stdout',
+        mirrorStderr: 'stderr'
+      })
+    : await runProgressCommand('refresh coding-agent CLIs', cli.command, args, {
+        progress: options.progress,
+        verboseStdout: proxyMode ? 'stderr' : 'stdout',
+        verboseStderr: 'stderr'
+      })
 
   if (result.code !== 0) {
-    process.stderr.write('Warning: could not refresh one or more coding-agent CLIs inside the devcontainer.\n')
+    if (options.progress === undefined) {
+      process.stderr.write('Warning: could not refresh one or more coding-agent CLIs inside the devcontainer.\n')
+    } else {
+      options.progress.warn('Could not refresh one or more coding-agent CLIs inside the devcontainer.')
+    }
   }
 }
 
-export async function ensureContainerCodingAgentCli (context: WorkspaceContext, agent: CodingAgentCli): Promise<void> {
+export async function ensureContainerCodingAgentCli (
+  context: WorkspaceContext,
+  agent: CodingAgentCli,
+  options: ContainerCommandOptions = {}
+): Promise<void> {
   const cli = resolveDevcontainerCli(context)
-  const result = await runBuffered(cli.command, [
+  options.progress?.item(`Preparing ${codingAgentBinary(agent)} inside the devcontainer`)
+  const args = [
     ...cli.argsPrefix,
     'exec',
     ...devcontainerWorkspaceArgs(context),
     '--',
+    ...containerProgressEnvArgs(options.progress),
     'bash',
     `${BOXDOWN_CONTAINER_DEVCONTAINER_DIR}/utils/coding-agent-cli-update.sh`,
     'ensure',
     agent
-  ], {
-    mirrorStdout: 'stdout',
-    mirrorStderr: 'stderr'
-  })
+  ]
+  const result = options.progress === undefined
+    ? await runBuffered(cli.command, args, {
+        mirrorStdout: 'stdout',
+        mirrorStderr: 'stderr'
+      })
+    : await runProgressCommand(`prepare ${codingAgentBinary(agent)}`, cli.command, args, {
+        progress: options.progress,
+        verboseStdout: 'stdout',
+        verboseStderr: 'stderr'
+      })
 
-  if (result.code !== 0) {
+  if (options.progress === undefined && result.code !== 0) {
     throw new Error(`Could not install or refresh ${codingAgentBinary(agent)} inside the devcontainer`)
+  }
+
+  if (options.progress !== undefined) {
+    assertProgressCommandSucceeded(`prepare ${codingAgentBinary(agent)}`, result, `Could not install or refresh ${codingAgentBinary(agent)} inside the devcontainer`)
   }
 }
 
@@ -488,18 +587,26 @@ async function hostGhTokenOrEmpty (): Promise<string> {
   return result.stdout.trim()
 }
 
-export async function refreshContainerGhAuth (context: WorkspaceContext): Promise<void> {
-  await ensureHostSshKey(context, true)
+export async function refreshContainerGhAuth (context: WorkspaceContext, options: ContainerCommandOptions = {}): Promise<void> {
+  const progress = options.progress
+  progress?.item('Preparing generated config for GitHub auth refresh')
+  await ensureHostSshKey(context, {
+    quiet: true,
+    progress
+  })
   writeGeneratedDevcontainerConfig(context)
 
+  progress?.item('Reading host GitHub CLI token')
   const token = await hostGhTokenOrEmpty()
 
   if (token.length === 0) {
+    progress?.warn('Host GitHub CLI token unavailable; skipping container auth refresh.')
     return
   }
 
   const cli = resolveDevcontainerCli(context)
-  const login = await runBuffered(cli.command, [
+  progress?.item('Refreshing GitHub CLI auth inside the devcontainer')
+  const loginArgs = [
     ...cli.argsPrefix,
     'exec',
     ...devcontainerWorkspaceArgs(context),
@@ -513,23 +620,41 @@ export async function refreshContainerGhAuth (context: WorkspaceContext): Promis
     'https',
     '--with-token',
     '--insecure-storage'
-  ], {
-    input: `${token}\n`,
-    mirrorStdout: false,
-    mirrorStderr: false
-  })
+  ]
+  const login = progress === undefined
+    ? await runBuffered(cli.command, loginArgs, {
+        input: `${token}\n`,
+        mirrorStdout: false,
+        mirrorStderr: false
+      })
+    : await runProgressCommand('refresh GitHub CLI auth', cli.command, loginArgs, {
+        input: `${token}\n`,
+        progress,
+        verboseStdout: false,
+        verboseStderr: false
+      })
 
   if (login.code !== 0) {
-    process.stderr.write('Warning: could not refresh GitHub CLI auth inside the devcontainer.\n')
+    if (progress === undefined) {
+      process.stderr.write('Warning: could not refresh GitHub CLI auth inside the devcontainer.\n')
+    } else {
+      progress.warn('Could not refresh GitHub CLI auth inside the devcontainer.')
+    }
     return
   }
 
+  progress?.item('Configuring workspace GitHub Git auth')
   const gitAuthConfigured = await configureWorkspaceGithubGitAuth(context.workspaceFolder)
   if (!gitAuthConfigured) {
-    process.stderr.write('Warning: GitHub CLI auth refreshed, but GitHub Git auth was not configured for this workspace.\n')
+    if (progress === undefined) {
+      process.stderr.write('Warning: GitHub CLI auth refreshed, but GitHub Git auth was not configured for this workspace.\n')
+    } else {
+      progress.warn('GitHub CLI auth refreshed, but GitHub Git auth was not configured for this workspace.')
+    }
   }
 
-  const verify = await runBuffered(cli.command, [
+  progress?.item('Verifying GitHub CLI auth inside the devcontainer')
+  const verifyArgs = [
     ...cli.argsPrefix,
     'exec',
     ...devcontainerWorkspaceArgs(context),
@@ -539,14 +664,29 @@ export async function refreshContainerGhAuth (context: WorkspaceContext): Promis
     'status',
     '--hostname',
     'github.com'
-  ], {
-    mirrorStdout: false,
-    mirrorStderr: false
-  })
+  ]
+  const verify = progress === undefined
+    ? await runBuffered(cli.command, verifyArgs, {
+        mirrorStdout: false,
+        mirrorStderr: false
+      })
+    : await runProgressCommand('verify GitHub CLI auth', cli.command, verifyArgs, {
+        progress,
+        verboseStdout: false,
+        verboseStderr: false
+      })
 
   if (verify.code === 0) {
-    process.stdout.write('GitHub CLI auth refreshed inside the devcontainer.\n')
+    if (progress === undefined) {
+      process.stdout.write('GitHub CLI auth refreshed inside the devcontainer.\n')
+    } else {
+      progress.item('GitHub CLI auth refreshed inside the devcontainer')
+    }
   } else {
-    process.stderr.write('Warning: GitHub CLI auth refresh completed, but verification failed.\n')
+    if (progress === undefined) {
+      process.stderr.write('Warning: GitHub CLI auth refresh completed, but verification failed.\n')
+    } else {
+      progress.warn('GitHub CLI auth refresh completed, but verification failed.')
+    }
   }
 }

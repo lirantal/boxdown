@@ -5,6 +5,7 @@
 ```sh
 boxdown refresh-gh-token
 boxdown refresh-gh-token-running
+boxdown refresh-gh-token --verbose
 ```
 
 Both commands copy host GitHub CLI auth into the container using the host token
@@ -15,6 +16,9 @@ gh auth token
 ```
 
 They do not start a browser login or device-code flow.
+
+The startup and refresh work uses concise progress output by default. Pass
+`--verbose` to stream raw devcontainer and auth command output while debugging.
 
 These commands are explicit on purpose. Normal `boxdown start`, coding-agent
 launches, and SSH proxy connections do not copy GitHub credentials into the

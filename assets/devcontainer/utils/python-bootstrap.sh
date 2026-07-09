@@ -6,6 +6,12 @@ set -euo pipefail
 
 PYTHON_PACKAGES=(python3 python3-venv python3-pip pipx)
 
+progress() {
+  if [ "${BOXDOWN_PROGRESS:-0}" = "1" ]; then
+    printf 'BOXDOWN_PROGRESS: %s\n' "$*"
+  fi
+}
+
 as_root() {
   if [ "$(id -u)" -eq 0 ]; then
     "$@"
@@ -34,6 +40,7 @@ install_python_runtime() {
     return 0
   fi
 
+  progress "Installing Python runtime packages"
   if ! apt_lists_present; then
     as_root apt-get update
   fi

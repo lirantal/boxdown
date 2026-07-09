@@ -23,6 +23,7 @@ import { listWorkspaceMetadata, readWorkspaceMetadata, recordWorkspaceDockerImag
 import { createWorkspaceContext } from '../src/paths.ts'
 import { promptConfirm, promptMultiSelect, promptText, type PromptInput, type PromptOutput } from '../src/interactive-prompts.ts'
 import { buildHostToolPath } from '../src/process.ts'
+import { createProgress, formatCommandFailure, runProgressCommand } from '../src/progress.ts'
 import { DEFAULT_TTY_MAX_COLUMNS, interactiveCommandScript, interactiveShellEnvArgs, interactiveShellScript } from '../src/shell.ts'
 import { buildSshConfigBlock, defaultSshAlias, installSshConfig, removeSshConfigBlock, replaceSshConfigBlock, uninstallSshConfig } from '../src/ssh-config.ts'
 import { createStatusInfo, formatStatusText, inspectSshConfigStatus, parseDockerPsJsonLines, statusIsHealthy } from '../src/status.ts'
@@ -255,7 +256,8 @@ describe('CLI parsing', () => {
       workspace: undefined,
       alias: undefined,
       recreate: false,
-      json: false
+      json: false,
+      verbose: false
     })
     assert.deepStrictEqual(parseCliArgs(['setup', '--workspace', '/tmp/project', '--alias', 'demo-devcontainer', '--recreate', '--target', 'codex']), {
       command: 'setup',
@@ -263,7 +265,8 @@ describe('CLI parsing', () => {
       alias: 'demo-devcontainer',
       targets: ['codex'],
       recreate: true,
-      json: false
+      json: false,
+      verbose: false
     })
     assert.deepStrictEqual(parseCliArgs(['setup', '--target', 'codex', '--target', 'codex']), {
       command: 'setup',
@@ -271,7 +274,8 @@ describe('CLI parsing', () => {
       alias: undefined,
       targets: ['codex'],
       recreate: false,
-      json: false
+      json: false,
+      verbose: false
     })
   })
 
@@ -281,12 +285,25 @@ describe('CLI parsing', () => {
       workspace: '/tmp/project',
       alias: undefined,
       recreate: true,
-      json: false
+      json: false,
+      verbose: false
     })
   })
 
   test('maps shell to start', () => {
     assert.strictEqual(parseCliArgs(['shell']).command, 'start')
+  })
+
+  test('parses global verbose option', () => {
+    assert.strictEqual(parseCliArgs(['setup', '--verbose']).verbose, true)
+    assert.deepStrictEqual(parseCliArgs(['status', '--json', '--verbose']), {
+      command: 'status',
+      workspace: undefined,
+      alias: undefined,
+      recreate: false,
+      json: true,
+      verbose: true
+    })
   })
 
   test('parses coding-agent launch aliases', () => {
@@ -297,7 +314,8 @@ describe('CLI parsing', () => {
       workspace: undefined,
       alias: undefined,
       recreate: false,
-      json: false
+      json: false,
+      verbose: false
     })
     assert.deepStrictEqual(parseCliArgs(['claude']), {
       command: 'coding-agent',
@@ -306,7 +324,8 @@ describe('CLI parsing', () => {
       workspace: undefined,
       alias: undefined,
       recreate: false,
-      json: false
+      json: false,
+      verbose: false
     })
     assert.deepStrictEqual(parseCliArgs(['cc']), {
       command: 'coding-agent',
@@ -315,7 +334,8 @@ describe('CLI parsing', () => {
       workspace: undefined,
       alias: undefined,
       recreate: false,
-      json: false
+      json: false,
+      verbose: false
     })
     assert.deepStrictEqual(parseCliArgs(['opencode']), {
       command: 'coding-agent',
@@ -324,7 +344,8 @@ describe('CLI parsing', () => {
       workspace: undefined,
       alias: undefined,
       recreate: false,
-      json: false
+      json: false,
+      verbose: false
     })
     assert.deepStrictEqual(parseCliArgs(['antigravity']), {
       command: 'coding-agent',
@@ -333,7 +354,8 @@ describe('CLI parsing', () => {
       workspace: undefined,
       alias: undefined,
       recreate: false,
-      json: false
+      json: false,
+      verbose: false
     })
   })
 
@@ -345,7 +367,8 @@ describe('CLI parsing', () => {
       workspace: '/tmp/project',
       alias: undefined,
       recreate: true,
-      json: false
+      json: false,
+      verbose: false
     })
   })
 
@@ -355,14 +378,16 @@ describe('CLI parsing', () => {
       workspace: undefined,
       alias: undefined,
       recreate: false,
-      json: false
+      json: false,
+      verbose: false
     })
     assert.deepStrictEqual(parseCliArgs(['ssh', 'install', '--alias', 'demo-devcontainer']), {
       command: 'ssh-install',
       workspace: undefined,
       alias: 'demo-devcontainer',
       recreate: false,
-      json: false
+      json: false,
+      verbose: false
     })
     assert.deepStrictEqual(parseCliArgs(['ssh', 'install', '--target', 'codex']), {
       command: 'ssh-install',
@@ -370,7 +395,8 @@ describe('CLI parsing', () => {
       alias: undefined,
       targets: ['codex'],
       recreate: false,
-      json: false
+      json: false,
+      verbose: false
     })
     assert.deepStrictEqual(parseCliArgs(['ssh', 'install', '--target', 'codex', '--target', 'claude', '--target', 'codex']), {
       command: 'ssh-install',
@@ -378,7 +404,8 @@ describe('CLI parsing', () => {
       alias: undefined,
       targets: ['codex', 'claude'],
       recreate: false,
-      json: false
+      json: false,
+      verbose: false
     })
   })
 
@@ -388,14 +415,16 @@ describe('CLI parsing', () => {
       workspace: undefined,
       alias: undefined,
       recreate: false,
-      json: false
+      json: false,
+      verbose: false
     })
     assert.deepStrictEqual(parseCliArgs(['ssh', 'uninstall', '--workspace', '/tmp/project', '--alias', 'demo-devcontainer']), {
       command: 'ssh-uninstall',
       workspace: '/tmp/project',
       alias: 'demo-devcontainer',
       recreate: false,
-      json: false
+      json: false,
+      verbose: false
     })
   })
 
@@ -433,7 +462,8 @@ describe('CLI parsing', () => {
         }
       ],
       recreate: false,
-      json: false
+      json: false,
+      verbose: false
     })
     assert.deepStrictEqual(parseCliArgs(['tunnel', '--workspace', '/tmp/project', '--port', '3030', '--port', '8080:3031']), {
       command: 'tunnel',
@@ -450,7 +480,8 @@ describe('CLI parsing', () => {
         }
       ],
       recreate: false,
-      json: false
+      json: false,
+      verbose: false
     })
   })
 
@@ -460,14 +491,16 @@ describe('CLI parsing', () => {
       workspace: undefined,
       alias: undefined,
       recreate: false,
-      json: true
+      json: true,
+      verbose: false
     })
     assert.deepStrictEqual(parseCliArgs(['status', '--workspace', '/tmp/project', '--alias', 'demo-devcontainer', '--json']), {
       command: 'status',
       workspace: '/tmp/project',
       alias: 'demo-devcontainer',
       recreate: false,
-      json: true
+      json: true,
+      verbose: false
     })
     assert.strictEqual(parseCliArgs(['stop']).command, 'stop')
     assert.strictEqual(parseCliArgs(['down']).command, 'down')
@@ -476,7 +509,8 @@ describe('CLI parsing', () => {
       workspace: '/tmp/project',
       alias: 'demo-devcontainer',
       recreate: false,
-      json: false
+      json: false,
+      verbose: false
     })
     assert.strictEqual(parseCliArgs(['doctor']).command, 'doctor')
   })
@@ -488,7 +522,8 @@ describe('CLI parsing', () => {
       workspaces: ['/tmp/a', '/tmp/b'],
       alias: undefined,
       recreate: false,
-      json: false
+      json: false,
+      verbose: false
     })
     assert.deepStrictEqual(parseCliArgs(['down', '--workspace', '/tmp/a']), {
       command: 'down',
@@ -496,7 +531,8 @@ describe('CLI parsing', () => {
       workspaces: ['/tmp/a'],
       alias: undefined,
       recreate: false,
-      json: false
+      json: false,
+      verbose: false
     })
     assert.throws(() => parseCliArgs(['start', '--workspace', '/tmp/a', '--workspace', '/tmp/b']), /--workspace can only be repeated with down/)
     assert.throws(() => parseCliArgs(['status', '--workspace', '/tmp/a', '--workspace', '/tmp/b']), /--workspace can only be repeated with down/)
@@ -551,6 +587,7 @@ describe('CLI parsing', () => {
     assert.match(USAGE, /purge\s+Remove the workspace devcontainer, exact Docker/)
     assert.match(USAGE, /boxdown purge \[--workspace <path>\] \[--alias <name>\]/)
     assert.match(USAGE, /--workspace <path>\s+Target project directory[\s\S]*Repeatable with down\./)
+    assert.match(USAGE, /--verbose\s+Stream raw Docker, devcontainer, and hook command output\./)
     assert.match(USAGE, /doctor\s+Check required host tools/)
     assert.doesNotMatch(USAGE, /Alias:/)
     assert.ok(!usageLines.includes('  boxdown cc [--workspace <path>] [--recreate] [-- <claude args...>]'))
@@ -897,6 +934,54 @@ describe('CLI execution', () => {
     })
 
     assert.deepStrictEqual(calls, ['start', 'ssh', 'codex'])
+  })
+
+  test('setup workflow uses progress-aware quiet installs', async () => {
+    const workspace = tempDir('setup-progress-workspace')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('setup-progress-cache'),
+        BOXDOWN_DATA_HOME: tempDir('setup-progress-data')
+      },
+      assetsDevcontainerDir
+    })
+    const alias = 'demo-devcontainer'
+    const lines: string[] = []
+    const progress = createProgress({
+      write: (target, message) => {
+        lines.push(`${target}:${message}`)
+      }
+    })
+    const calls: string[] = []
+
+    await setupWorkspace(context, alias, {
+      progress,
+      targets: ['codex'],
+      start: async (receivedContext, options) => {
+        assert.strictEqual(receivedContext, context)
+        assert.strictEqual(options.progress, progress)
+        calls.push('start')
+        return 'setup-container'
+      },
+      installSsh: async (receivedContext, receivedAlias, installOptions) => {
+        assert.strictEqual(receivedContext, context)
+        assert.strictEqual(receivedAlias, alias)
+        assert.deepStrictEqual(installOptions, { quiet: true })
+        calls.push('ssh')
+      },
+      installTarget: async (receivedContext, receivedAlias, target, installOptions) => {
+        assert.strictEqual(receivedContext, context)
+        assert.strictEqual(receivedAlias, alias)
+        assert.strictEqual(target, 'codex')
+        assert.deepStrictEqual(installOptions, { quiet: true })
+        calls.push('codex')
+      }
+    })
+
+    assert.deepStrictEqual(calls, ['start', 'ssh', 'codex'])
+    assert.ok(lines.includes('stdout:- Installing SSH alias: demo-devcontainer'))
+    assert.ok(lines.includes('stdout:- Installing codex SSH target'))
   })
 
   test('removes each requested down workspace', async () => {
@@ -1914,6 +1999,73 @@ describe('doctor output', () => {
   })
 })
 
+describe('progress output', () => {
+  test('captures raw command output while surfacing progress markers', async () => {
+    const lines: string[] = []
+    const progress = createProgress({
+      write: (target, message) => {
+        lines.push(`${target}:${message}`)
+      }
+    })
+    const result = await runProgressCommand('demo command', 'bash', [
+      '-c',
+      [
+        'printf "hidden stdout\\n"',
+        'printf "BOXDOWN_PROGRESS: installing packages\\n"',
+        'printf "hidden stderr\\n" >&2',
+        'printf "BOXDOWN_PROGRESS: configuring runtime\\n" >&2',
+        'printf "%s/%s\\n" "$BOXDOWN_PROGRESS" "$BOXDOWN_VERBOSE"'
+      ].join('; ')
+    ], { progress })
+
+    assert.strictEqual(result.code, 0)
+    assert.match(result.stdout, /hidden stdout/)
+    assert.match(result.stderr, /hidden stderr/)
+    assert.match(result.stdout, /1\/0/)
+    assert.ok(lines.includes('stdout:- installing packages'))
+    assert.ok(lines.includes('stdout:- configuring runtime'))
+  })
+
+  test('verbose progress commands do not emit marker summaries', async () => {
+    const lines: string[] = []
+    const progress = createProgress({
+      verbose: true,
+      write: (target, message) => {
+        lines.push(`${target}:${message}`)
+      }
+    })
+    const result = await runProgressCommand('demo command', 'bash', [
+      '-c',
+      'printf "BOXDOWN_PROGRESS: raw marker\\n"; printf "%s/%s\\n" "$BOXDOWN_PROGRESS" "$BOXDOWN_VERBOSE"'
+    ], {
+      progress,
+      verboseStdout: false,
+      verboseStderr: false
+    })
+
+    assert.strictEqual(result.code, 0)
+    assert.match(result.stdout, /BOXDOWN_PROGRESS: raw marker/)
+    assert.match(result.stdout, /0\/1/)
+    assert.deepStrictEqual(lines, [])
+  })
+
+  test('formats concise failure tails without progress marker lines', () => {
+    const message = formatCommandFailure('demo command', {
+      code: 42,
+      stdout: 'stdout one\nBOXDOWN_PROGRESS: hidden marker\nstdout two\n',
+      stderr: 'stderr one\nstderr two\n'
+    })
+
+    assert.match(message, /demo command failed with exit code 42\./)
+    assert.match(message, /Rerun with --verbose/)
+    assert.match(message, /stderr tail:/)
+    assert.match(message, /stderr two/)
+    assert.match(message, /stdout tail:/)
+    assert.match(message, /stdout two/)
+    assert.doesNotMatch(message, /hidden marker/)
+  })
+})
+
 describe('devcontainer config generation', () => {
   test('rewrites lifecycle paths to Boxdown assets and mounted runtime', () => {
     const workspace = tempDir('config-workspace')
@@ -1932,9 +2084,11 @@ describe('devcontainer config generation', () => {
     assert.match(config.initializeCommand ?? '', /BOXDOWN_WORKSPACE_FOLDER=/)
     assert.match(config.initializeCommand ?? '', /BOXDOWN_HOST_GITCONFIG_PATH=/)
     assert.match(config.initializeCommand ?? '', /BOXDOWN_HOST_GITCONFIG_SNAPSHOT_PATH=/)
+    assert.match(config.initializeCommand ?? '', /BOXDOWN_PROGRESS=/)
+    assert.match(config.initializeCommand ?? '', /BOXDOWN_VERBOSE=/)
     assert.match(config.initializeCommand ?? '', /assets\/devcontainer\/hooks\/initialize\.sh/)
-    assert.strictEqual(config.postCreateCommand, "bash '/opt/boxdown/devcontainer/hooks/post-create.sh'")
-    assert.strictEqual(config.postStartCommand, "bash '/opt/boxdown/devcontainer/hooks/post-start.sh'")
+    assert.match(config.postCreateCommand, /BOXDOWN_PROGRESS=.*BOXDOWN_VERBOSE=.*bash '\/opt\/boxdown\/devcontainer\/hooks\/post-create\.sh'/)
+    assert.match(config.postStartCommand, /BOXDOWN_PROGRESS=.*BOXDOWN_VERBOSE=.*bash '\/opt\/boxdown\/devcontainer\/hooks\/post-start\.sh'/)
     assert.ok(config.mounts?.some((mount) => mount.includes(`source=${assetsDevcontainerDir}`)))
     assert.ok(config.mounts?.some((mount) => mount.includes(`source=${context.sshPublicKeyRuntimeDir}`)))
     assert.ok(config.mounts?.includes(`type=bind,source=${context.hostGitconfigSnapshotDir},target=${BOXDOWN_CONTAINER_HOST_GITCONFIG_DIR},readonly`))
@@ -3375,10 +3529,15 @@ describe('packaged assets', () => {
     assert.match(postCreate, /git-config-bootstrap\.sh/)
     assert.match(postCreate, /install_or_update_coding_agent_clis/)
     assert.match(postCreate, /coding-agent-cli-update\.sh" install/)
+    assert.match(postCreate, /BOXDOWN_PROGRESS: %s\\n/)
+    assert.match(postCreate, /run_step "Installing coding-agent CLIs"/)
     assert.match(postStart, /coding-agent-cli-update\.sh" maybe-update/)
+    assert.match(postStart, /run_step "Refreshing coding-agent CLIs"/)
     assert.match(gitConfigBootstrap, /url\.git@github\.com:\.insteadOf/)
     assert.match(gitConfigBootstrap, /credential\.https:\/\/github\.com\.helper/)
+    assert.match(gitConfigBootstrap, /Preparing writable Git config/)
     assert.match(updater, /DEFAULT_AGENTS=\(codex claude\)/)
+    assert.match(updater, /BOXDOWN_PROGRESS: %s\\n/)
     assert.match(updater, /codex update/)
     assert.match(updater, /opencode upgrade --method curl/)
     assert.match(updater, /link_opencode_binary/)
@@ -3388,6 +3547,16 @@ describe('packaged assets', () => {
     assert.match(updater, /ensure_agent\(\)/)
     assert.doesNotMatch(updater, /--skip-path/)
     assert.match(codexWrapper, /coding-agent-cli-update\.sh" "\$\{1:-maybe-update\}" codex/)
+  })
+
+  test('legacy start script supports concise and verbose startup output', () => {
+    const startScript = readFileSync(join(assetsDevcontainerDir, 'start.sh'), 'utf8')
+
+    assert.match(startScript, /--verbose\s+Stream raw devcontainer, Docker, and hook output\./)
+    assert.match(startScript, /BOXDOWN_PROGRESS=1/)
+    assert.match(startScript, /print_progress_markers/)
+    assert.match(startScript, /Rerun with --verbose to see full command output\./)
+    assert.match(startScript, /stdout is reserved for SSH traffic/)
   })
 
   test('installs baseline Python from apt instead of the Python feature', () => {

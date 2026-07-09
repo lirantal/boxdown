@@ -5,7 +5,14 @@ main() {
   [[ -f package.json ]] || return 0
   local pm
   pm=$(detect_package_manager)
+  progress "Installing workspace dependencies with ${pm}"
   install_dependencies "$pm" || true
+}
+
+progress() {
+  if [[ "${BOXDOWN_PROGRESS:-0}" == "1" ]]; then
+    printf 'BOXDOWN_PROGRESS: %s\n' "$*"
+  fi
 }
 
 detect_package_manager() {
@@ -105,6 +112,7 @@ ensure_pnpm() {
   fi
 
   if command -v npm >/dev/null 2>&1; then
+    progress "Installing pnpm package manager"
     run_as_root npm install --global pnpm@11
   fi
 }
@@ -115,6 +123,7 @@ ensure_yarn() {
   fi
 
   if command -v corepack >/dev/null 2>&1; then
+    progress "Enabling Corepack for Yarn"
     enable_corepack
   fi
 }

@@ -27,6 +27,7 @@
 #               when the dev container is already running.
 #   --recreate  Remove the existing dev container for this workspace before `up`, so
 #               changes to runArgs (or other create-time settings) take effect.
+#   --verbose   Stream raw devcontainer, Docker, and hook output.
 #   --help, -h  Print usage and exit.
 #
 # @example
@@ -51,6 +52,7 @@ SSH_KEY_DIR="${DEVCONTAINER_SSH_KEY_DIR:-${SCRIPT_DIR}/.ssh}"
 SSH_KEY_PATH="${DEVCONTAINER_SSH_KEY_PATH:-${SSH_KEY_DIR}/id_ed25519}"
 MODE="shell"
 RECREATE=false
+VERBOSE=false
 CONTAINER_ID=""
 
 usage() {
@@ -74,6 +76,7 @@ Options:
                 when the dev container is already running.
   --recreate    Remove the existing dev container for this workspace before starting,
                 so Docker picks up new settings (e.g. runArgs / port mappings).
+  --verbose     Stream raw devcontainer, Docker, and hook output.
   --help, -h    Show this help and exit.
 
 Commands:
@@ -97,6 +100,47 @@ log() {
     printf '%s\n' "$*" >&2
   else
     printf '%s\n' "$*"
+  fi
+}
+
+export_progress_env() {
+  if [ "$VERBOSE" = true ]; then
+    export BOXDOWN_VERBOSE=1
+    export BOXDOWN_PROGRESS=0
+  else
+    export BOXDOWN_VERBOSE=0
+    export BOXDOWN_PROGRESS=1
+  fi
+}
+
+print_progress_markers() {
+  local output="$1"
+  local line
+
+  while IFS= read -r line; do
+    case "$line" in
+      BOXDOWN_PROGRESS:*)
+        log "- ${line#BOXDOWN_PROGRESS: }"
+        ;;
+    esac
+  done <<< "$output"
+}
+
+print_command_failure() {
+  local label="$1"
+  local code="$2"
+  local output="$3"
+  local filtered
+
+  log "${label} failed with exit code ${code}."
+  log "Rerun with --verbose to see full command output."
+
+  filtered="$(printf '%s\n' "$output" | sed '/^[[:space:]]*BOXDOWN_PROGRESS:/d' | sed '/^[[:space:]]*$/d' | tail -n 20)"
+  if [ -n "$filtered" ]; then
+    log "output tail:"
+    while IFS= read -r line; do
+      log "  $line"
+    done <<< "$filtered"
   fi
 }
 
@@ -184,6 +228,7 @@ install_ssh_config_alias() {
 start_devcontainer() {
   local up_output
   local up_args
+  local up_code
 
   if [ "$MODE" = "ssh-proxy" ] && [ "$RECREATE" = false ]; then
     CONTAINER_ID="$(find_running_container_id)"
@@ -201,17 +246,39 @@ start_devcontainer() {
     log "Removing existing dev container so create-time settings (e.g. runArgs) apply."
   fi
 
+  export_progress_env
+
   if [ "$MODE" = "ssh-proxy" ]; then
-    if ! up_output="$(devcontainer_cli up "${up_args[@]}" </dev/null 2>&1)"; then
-      [ -z "$up_output" ] || log "$up_output"
-      return 1
+    if up_output="$(devcontainer_cli up "${up_args[@]}" </dev/null 2>&1)"; then
+      :
+    else
+      up_code=$?
+      if [ "$VERBOSE" = true ]; then
+        [ -z "$up_output" ] || log "$up_output"
+      else
+        print_progress_markers "$up_output"
+        print_command_failure "devcontainer up" "$up_code" "$up_output"
+      fi
+      return "$up_code"
     fi
-  elif ! up_output="$(devcontainer_cli up "${up_args[@]}" 2>&1)"; then
-    [ -z "$up_output" ] || log "$up_output"
-    return 1
+  elif up_output="$(devcontainer_cli up "${up_args[@]}" 2>&1)"; then
+    :
+  else
+    up_code=$?
+    if [ "$VERBOSE" = true ]; then
+      [ -z "$up_output" ] || log "$up_output"
+    else
+      print_progress_markers "$up_output"
+      print_command_failure "devcontainer up" "$up_code" "$up_output"
+    fi
+    return "$up_code"
   fi
 
-  log "$up_output"
+  if [ "$VERBOSE" = true ]; then
+    log "$up_output"
+  else
+    print_progress_markers "$up_output"
+  fi
 
   CONTAINER_ID="$(printf '%s\n' "$up_output" | parse_container_id_from_up_output)"
   if [ -z "$CONTAINER_ID" ]; then
@@ -397,7 +464,30 @@ open_shell() {
 }
 
 ensure_container_sshd_runtime() {
-  devcontainer_cli exec --workspace-folder "$WORKSPACE_FOLDER" -- bash .devcontainer/utils/ssh-bootstrap.sh runtime </dev/null >&2
+  local output
+  local code
+  local -a env_args
+
+  if [ "$VERBOSE" = true ]; then
+    env_args=(BOXDOWN_VERBOSE=1 BOXDOWN_PROGRESS=0)
+  else
+    env_args=(BOXDOWN_VERBOSE=0 BOXDOWN_PROGRESS=1)
+  fi
+
+  if [ "$VERBOSE" = true ]; then
+    devcontainer_cli exec --workspace-folder "$WORKSPACE_FOLDER" -- env "${env_args[@]}" bash .devcontainer/utils/ssh-bootstrap.sh runtime </dev/null >&2
+    return $?
+  fi
+
+  if output="$(devcontainer_cli exec --workspace-folder "$WORKSPACE_FOLDER" -- env "${env_args[@]}" bash .devcontainer/utils/ssh-bootstrap.sh runtime </dev/null 2>&1)"; then
+    print_progress_markers "$output"
+    return 0
+  fi
+
+  code=$?
+  print_progress_markers "$output"
+  print_command_failure "prepare SSH runtime" "$code" "$output"
+  return "$code"
 }
 
 run_ssh_proxy() {
@@ -456,6 +546,10 @@ while [ $# -gt 0 ]; do
       ;;
     --recreate)
       RECREATE=true
+      shift
+      ;;
+    --verbose)
+      VERBOSE=true
       shift
       ;;
     *)

@@ -9,12 +9,20 @@ export interface SshInstallTargetDefinition {
   label: string
   description: string
   flag: string
-  install: (context: WorkspaceContext, alias: string) => Promise<void> | void
+  install: (context: WorkspaceContext, alias: string, options?: SshInstallTargetInstallOptions) => Promise<void> | void
 }
 
-function installCodexTarget (context: WorkspaceContext, alias: string): void {
+export interface SshInstallTargetInstallOptions {
+  quiet?: boolean
+}
+
+function installCodexTarget (context: WorkspaceContext, alias: string, options: SshInstallTargetInstallOptions = {}): void {
   const entry = codexProjectEntryForWorkspace(context, alias)
   const result = installCodexAppConfigProject(entry)
+
+  if (options.quiet === true) {
+    return
+  }
 
   process.stdout.write(`\nCodex app config: ${result.configPath}\n`)
   process.stdout.write(result.changed
@@ -28,9 +36,13 @@ function installCodexTarget (context: WorkspaceContext, alias: string): void {
   process.stdout.write('Restart Codex to apply the remote project entry.\n')
 }
 
-function installClaudeTarget (context: WorkspaceContext, alias: string): void {
+function installClaudeTarget (context: WorkspaceContext, alias: string, options: SshInstallTargetInstallOptions = {}): void {
   const entry = claudeSshConfigEntryForWorkspace(context, alias)
   const result = installClaudeSshConfigHost(entry)
+
+  if (options.quiet === true) {
+    return
+  }
 
   process.stdout.write(`\nClaude SSH config: ${result.configPath}\n`)
   process.stdout.write(result.changed
@@ -80,7 +92,8 @@ export function dedupeSshInstallTargets (targets: readonly SshConfigInstallTarge
 export async function installSshInstallTarget (
   context: WorkspaceContext,
   alias: string,
-  targetValue: SshConfigInstallTarget
+  targetValue: SshConfigInstallTarget,
+  options: SshInstallTargetInstallOptions = {}
 ): Promise<void> {
   const target = SSH_INSTALL_TARGETS.find((candidate) => candidate.value === targetValue)
 
@@ -88,5 +101,5 @@ export async function installSshInstallTarget (
     throw new Error(`Unsupported ssh install target: ${targetValue}`)
   }
 
-  await target.install(context, alias)
+  await target.install(context, alias, options)
 }

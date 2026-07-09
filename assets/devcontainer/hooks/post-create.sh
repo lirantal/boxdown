@@ -5,15 +5,29 @@ HOOKS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEVCONTAINER_DIR="$(cd "${HOOKS_DIR}/.." && pwd)"
 
 main() {
-  configure_global_git
-  configure_local_git
-  install_openssh_server
-  install_python_runtime
-  install_apm
-  install_or_update_coding_agent_clis
-  install_1password_cli
-  install_snyk_cli
-  run_deps_install
+  run_step "Configuring global Git" configure_global_git
+  run_step "Configuring workspace Git" configure_local_git
+  run_step "Installing OpenSSH server" install_openssh_server
+  run_step "Installing Python runtime" install_python_runtime
+  run_step "Installing Agent Package Manager" install_apm
+  run_step "Installing coding-agent CLIs" install_or_update_coding_agent_clis
+  run_step "Installing 1Password CLI" install_1password_cli
+  run_step "Installing Snyk CLI" install_snyk_cli
+  run_step "Installing workspace dependencies" run_deps_install
+}
+
+progress() {
+  if [[ "${BOXDOWN_PROGRESS:-0}" == "1" ]]; then
+    printf 'BOXDOWN_PROGRESS: %s\n' "$*"
+  fi
+}
+
+run_step() {
+  local label="$1"
+  shift
+
+  progress "$label"
+  "$@"
 }
 
 configure_global_git() {

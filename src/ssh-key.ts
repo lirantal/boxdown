@@ -2,16 +2,27 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'n
 
 import type { WorkspaceContext } from './paths.ts'
 import { runBuffered } from './process.ts'
+import { assertProgressCommandSucceeded, type ProgressReporter, runProgressCommand } from './progress.ts'
 
-export async function ensureHostSshKey (context: WorkspaceContext, quiet = false): Promise<void> {
+export interface EnsureHostSshKeyOptions {
+  quiet?: boolean
+  progress?: ProgressReporter
+}
+
+export async function ensureHostSshKey (context: WorkspaceContext, options: boolean | EnsureHostSshKeyOptions = false): Promise<void> {
+  const quiet = typeof options === 'boolean' ? options : options.quiet ?? false
+  const progress = typeof options === 'boolean' ? undefined : options.progress
+
   mkdirSync(context.sshKeyDir, { recursive: true, mode: 0o700 })
 
   if (!existsSync(context.sshKeyPath)) {
-    if (!quiet) {
+    if (progress !== undefined) {
+      progress.item(`Generating Boxdown SSH identity: ${context.sshKeyPath}`)
+    } else if (!quiet) {
       process.stderr.write(`Generating Boxdown SSH identity: ${context.sshKeyPath}\n`)
     }
 
-    const result = await runBuffered('ssh-keygen', [
+    const args = [
       '-t',
       'ed25519',
       '-f',
@@ -20,24 +31,46 @@ export async function ensureHostSshKey (context: WorkspaceContext, quiet = false
       '',
       '-C',
       `${context.workspaceBasename}-devcontainer`
-    ], {
-      mirrorStdout: quiet ? false : 'stderr',
-      mirrorStderr: 'stderr'
-    })
+    ]
+    const result = progress === undefined
+      ? await runBuffered('ssh-keygen', args, {
+          mirrorStdout: quiet ? false : 'stderr',
+          mirrorStderr: 'stderr'
+        })
+      : await runProgressCommand('ssh-keygen create identity', 'ssh-keygen', args, {
+          progress,
+          verboseStdout: 'stderr',
+          verboseStderr: 'stderr'
+        })
 
-    if (result.code !== 0) {
+    if (progress === undefined && result.code !== 0) {
       throw new Error(`ssh-keygen failed while creating ${context.sshKeyPath}`)
+    }
+
+    if (progress !== undefined) {
+      assertProgressCommandSucceeded('ssh-keygen create identity', result, `ssh-keygen failed while creating ${context.sshKeyPath}`)
     }
   }
 
   if (!existsSync(context.sshPublicKeyPath)) {
-    const result = await runBuffered('ssh-keygen', ['-y', '-f', context.sshKeyPath], {
-      mirrorStdout: false,
-      mirrorStderr: 'stderr'
-    })
+    const args = ['-y', '-f', context.sshKeyPath]
+    const result = progress === undefined
+      ? await runBuffered('ssh-keygen', args, {
+          mirrorStdout: false,
+          mirrorStderr: 'stderr'
+        })
+      : await runProgressCommand('ssh-keygen derive public key', 'ssh-keygen', args, {
+          progress,
+          verboseStdout: false,
+          verboseStderr: 'stderr'
+        })
 
-    if (result.code !== 0) {
+    if (progress === undefined && result.code !== 0) {
       throw new Error(`ssh-keygen failed while deriving ${context.sshPublicKeyPath}`)
+    }
+
+    if (progress !== undefined) {
+      assertProgressCommandSucceeded('ssh-keygen derive public key', result, `ssh-keygen failed while deriving ${context.sshPublicKeyPath}`)
     }
 
     writeFileSync(context.sshPublicKeyPath, result.stdout)
