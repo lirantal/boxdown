@@ -173,11 +173,15 @@ List Boxdown-known devcontainer environments from any directory:
 
 ```sh
 boxdown list
+boxdown list --details
 boxdown list --json
+boxdown list --format json
 ```
 
 Human `boxdown list` output shows `STATE`, `REPO`, `PATH`, and `CONTAINER`.
-Use `boxdown list --json` when you need recorded SSH aliases.
+Use `boxdown list --details` when you need full copyable paths and SSH aliases
+in human output. Use `boxdown list --json` or `boxdown list --format json` for
+the same structured inventory.
 
 Shared options:
 
@@ -188,6 +192,8 @@ Shared options:
 --port <port>       # tunnel port for `boxdown tunnel`; repeatable
 --recreate          # recreate the devcontainer before starting
 --json              # JSON output for status and list
+--format json       # JSON output for status and list; equivalent to --json
+--details           # detailed human output for list
 ```
 
 Use `boxdown purge` when you want to remove the workspace's Boxdown-managed
@@ -198,7 +204,7 @@ Interactive terminals ask for confirmation before purging.
 
 For `purge`, `--workspace` accepts the `PATH` or unambiguous `REPO` value
 shown by `boxdown list`. It also accepts exact `SSH ALIAS` values from
-`boxdown status` or `boxdown list --json`:
+`boxdown status`, `boxdown list --details`, or JSON list output:
 
 ```sh
 boxdown purge

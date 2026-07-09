@@ -4,9 +4,12 @@
 
 ```sh
 boxdown list
+boxdown list --details
 boxdown list --json
+boxdown list --format json
 boxdown status
 boxdown status --json
+boxdown status --format json
 boxdown stop
 boxdown down
 boxdown purge
@@ -26,10 +29,13 @@ host alias.
 regardless of the directory where the command is run. Human output includes
 `STATE`, `REPO`, `PATH`, and `CONTAINER` columns.
 
-`list --json` prints the same inventory as structured JSON. Docker state is
-best-effort and includes recorded SSH aliases: if Docker is unavailable, entries
-still print and their container state is `unknown`. If a recorded repository
-path no longer exists, the entry is shown as `missing`.
+`list --details` prints one workspace per block with full copyable `path`,
+`ssh alias`, and `container` values.
+
+`list --json` and `list --format json` print the same inventory as structured
+JSON. Docker state is best-effort and includes recorded SSH aliases: if Docker
+is unavailable, entries still print and their container state is `unknown`. If a
+recorded repository path no longer exists, the entry is shown as `missing`.
 
 ## Status
 
@@ -75,9 +81,9 @@ repository directory or files inside it.
 `purge --workspace <value>` first treats `<value>` as a filesystem path. If that
 path does not exist, it looks for an exact `PATH`, then `SSH ALIAS`, then `REPO`
 match in Boxdown metadata. `PATH` and `REPO` are shown by `boxdown list`; use
-`boxdown status` or `boxdown list --json` for SSH aliases. `REPO` must match
-exactly one workspace; if multiple known workspaces share the same repo
-basename, use `PATH` or `SSH ALIAS`.
+`boxdown status`, `boxdown list --details`, or JSON list output for SSH aliases.
+`REPO` must match exactly one workspace; if multiple known workspaces share the
+same repo basename, use `PATH` or `SSH ALIAS`.
 
 ```sh
 boxdown purge

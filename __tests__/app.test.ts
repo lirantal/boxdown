@@ -631,6 +631,8 @@ describe('CLI parsing', () => {
 
     assert.match(USAGE, /Commands:/)
     assert.match(USAGE, /boxdown setup \[--workspace <path>\] \[--alias <name>\] \[--recreate\] \[--target <name>\]\.\.\./)
+    assert.match(USAGE, /boxdown list \[--details\] \[--json\|--format json\]/)
+    assert.match(USAGE, /boxdown status \[--workspace <path>\] \[--alias <name>\] \[--json\|--format json\]/)
     assert.match(USAGE, /setup\s+Prepare the workspace devcontainer/)
     assert.match(USAGE, /start, shell\s+Start or reuse the workspace devcontainer/)
     assert.match(USAGE, /codex\s+Start or reuse the devcontainer, then launch Codex/)
@@ -645,6 +647,9 @@ describe('CLI parsing', () => {
     assert.match(USAGE, /purge\s+Remove the workspace devcontainer, exact Docker/)
     assert.match(USAGE, /boxdown purge \[--workspace <path\|ssh-alias\|repo>\] \[--alias <name>\]/)
     assert.match(USAGE, /--workspace <path>\s+Target project directory[\s\S]*Repeatable with down\.[\s\S]*unambiguous REPO from boxdown list, plus SSH ALIAS[\s\S]*Without --workspace[\s\S]*interactive terminals prompt for tracked workspaces\./)
+    assert.match(USAGE, /--json\s+Print JSON output\. Supported by status and list\./)
+    assert.match(USAGE, /--format json\s+Print JSON output\. Equivalent to --json\./)
+    assert.match(USAGE, /--details\s+Print detailed human list output\. Supported by list\./)
     assert.match(USAGE, /--verbose\s+Stream raw Docker, devcontainer, and hook command output\.[\s\S]*per-workspace command log either way\./)
     assert.match(USAGE, /doctor\s+Check required host tools/)
     assert.doesNotMatch(USAGE, /Alias:/)

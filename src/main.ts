@@ -63,8 +63,8 @@ export const USAGE = `Usage:
   boxdown claude [--workspace <path>] [--recreate] [-- <claude args...>]
   boxdown opencode [--workspace <path>] [--recreate] [-- <opencode args...>]
   boxdown antigravity [--workspace <path>] [--recreate] [-- <agy args...>]
-  boxdown list [--json]
-  boxdown status [--workspace <path>] [--alias <name>] [--json]
+  boxdown list [--details] [--json|--format json]
+  boxdown status [--workspace <path>] [--alias <name>] [--json|--format json]
   boxdown stop [--workspace <path>]
   boxdown down [--workspace <path>]...
   boxdown purge [--workspace <path|ssh-alias|repo>] [--alias <name>]
@@ -129,6 +129,8 @@ Options:
                       <local:remote>. Repeatable. Supported by tunnel.
   --recreate          Remove the existing devcontainer before starting.
   --json              Print JSON output. Supported by status and list.
+  --format json       Print JSON output. Equivalent to --json.
+  --details           Print detailed human list output. Supported by list.
   --verbose           Stream raw Docker, devcontainer, and hook command output.
                       Lifecycle commands append the same managed output to the
                       per-workspace command log either way.
