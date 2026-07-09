@@ -86,10 +86,9 @@ export function formatWorkspaceListText (entries: WorkspaceListEntry[]): string 
     entry.state,
     entry.workspaceBasename,
     entry.workspaceFolder,
-    entry.sshAlias,
     containerLabel(entry)
   ])
-  const headers = ['STATE', 'REPO', 'PATH', 'SSH ALIAS', 'CONTAINER']
+  const headers = ['STATE', 'REPO', 'PATH', 'CONTAINER']
   const widths = headers.map((header, index) => Math.max(header.length, ...rows.map((row) => row[index]?.length ?? 0)))
   const lines = [
     'Boxdown list',

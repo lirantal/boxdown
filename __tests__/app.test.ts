@@ -2152,9 +2152,12 @@ describe('workspace list output', () => {
     assert.strictEqual(entries[1]?.workspaceBasename, 'beta')
     assert.strictEqual(entries[1]?.repoExists, false)
     assert.strictEqual(entries[1]?.state, 'missing')
-    assert.match(formatWorkspaceListText(entries), /STATE\s+REPO\s+PATH\s+SSH ALIAS\s+CONTAINER/)
-    assert.match(formatWorkspaceListText(entries), /running\s+alpha/)
-    assert.match(formatWorkspaceListText(entries), /missing\s+beta/)
+    const output = formatWorkspaceListText(entries)
+    assert.match(output, /STATE\s+REPO\s+PATH\s+CONTAINER/)
+    assert.doesNotMatch(output, /SSH ALIAS/)
+    assert.doesNotMatch(output, /alpha-devcontainer/)
+    assert.match(output, /running\s+alpha/)
+    assert.match(output, /missing\s+beta/)
   })
 
   test('marks container state unknown when Docker is unavailable', () => {
