@@ -345,8 +345,13 @@ export class ProgressReporter {
       return
     }
 
+    const step = this.#steps[index]
+    if (step === undefined) {
+      return
+    }
+
     this.#steps[index] = {
-      ...this.#steps[index],
+      ...step,
       state
     }
 

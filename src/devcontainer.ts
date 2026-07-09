@@ -666,7 +666,7 @@ export async function refreshContainerGhAuth (context: WorkspaceContext, options
     progress?.item('Reading host GitHub CLI token')
   }
 
-  let token = ''
+  let token: string
   try {
     token = await hostGhTokenOrEmpty()
     if (hasTokenStep) {
@@ -680,14 +680,14 @@ export async function refreshContainerGhAuth (context: WorkspaceContext, options
   }
 
   if (token.length === 0) {
+    progress?.skipStep('gh-auth-refresh')
+    progress?.skipStep('gh-git-auth')
+    progress?.skipStep('gh-auth-verify')
     if (progress === undefined) {
       process.stderr.write('Warning: Host GitHub CLI token unavailable; skipping container auth refresh.\n')
     } else {
       progress.warn('Host GitHub CLI token unavailable; skipping container auth refresh.')
     }
-    progress?.skipStep('gh-auth-refresh')
-    progress?.skipStep('gh-git-auth')
-    progress?.skipStep('gh-auth-verify')
     return
   }
 
@@ -723,13 +723,13 @@ export async function refreshContainerGhAuth (context: WorkspaceContext, options
       })
 
   if (login.code !== 0) {
+    progress?.skipStep('gh-git-auth')
+    progress?.skipStep('gh-auth-verify')
     if (progress === undefined) {
       process.stderr.write('Warning: could not refresh GitHub CLI auth inside the devcontainer.\n')
     } else {
       progress.warn('Could not refresh GitHub CLI auth inside the devcontainer.')
     }
-    progress?.skipStep('gh-git-auth')
-    progress?.skipStep('gh-auth-verify')
     return
   }
 
@@ -739,7 +739,7 @@ export async function refreshContainerGhAuth (context: WorkspaceContext, options
     progress?.item('Configuring workspace GitHub Git auth')
   }
 
-  let gitAuthConfigured = false
+  let gitAuthConfigured: boolean
   try {
     gitAuthConfigured = await configureWorkspaceGithubGitAuth(context.workspaceFolder)
     if (hasGitAuthStep) {

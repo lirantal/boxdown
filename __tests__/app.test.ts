@@ -2028,10 +2028,44 @@ describe('doctor output', () => {
 describe('progress output', () => {
   test('resolves progress modes from terminal and output context', () => {
     assert.strictEqual(resolveProgressMode({ isTTY: true, env: { CI: 'false' } }), 'interactive')
+    assert.strictEqual(resolveProgressMode({ target: 'stderr', isTTY: true, env: { CI: 'false' } }), 'interactive')
     assert.strictEqual(resolveProgressMode({ isTTY: true, verbose: true, env: { CI: 'false' } }), 'verbose')
     assert.strictEqual(resolveProgressMode({ isTTY: true, env: { CI: 'true' } }), 'verbose')
+    assert.strictEqual(resolveProgressMode({ isTTY: true, env: { CI: '1' } }), 'verbose')
     assert.strictEqual(resolveProgressMode({ isTTY: false, env: { CI: 'false' } }), 'verbose')
     assert.strictEqual(resolveProgressMode({ json: true, isTTY: true, env: { CI: 'false' } }), 'none')
+  })
+
+  test('none progress mode keeps output fully silent for JSON callers', () => {
+    const lines: string[] = []
+    const raw: string[] = []
+    const progress = createProgress({
+      mode: 'none',
+      write: (target, message) => {
+        lines.push(`${target}:${message}`)
+      },
+      writeRaw: (target, message) => {
+        raw.push(`${target}:${message}`)
+      }
+    })
+
+    progress.section('Boxdown status')
+    progress.detail('Workspace: /tmp/demo')
+    progress.warn('This should stay hidden')
+    progress.setSteps([{ id: 'demo', label: 'Demo step' }])
+    progress.startStep('demo')
+    progress.completeStep('demo')
+    progress.end()
+
+    assert.deepStrictEqual(lines, [])
+    assert.deepStrictEqual(raw, [])
+    assert.deepStrictEqual({
+      BOXDOWN_VERBOSE: progress.commandEnv().BOXDOWN_VERBOSE,
+      BOXDOWN_PROGRESS: progress.commandEnv().BOXDOWN_PROGRESS
+    }, {
+      BOXDOWN_VERBOSE: '0',
+      BOXDOWN_PROGRESS: '0'
+    })
   })
 
   test('verbose progress mode suppresses styled progress but keeps warnings visible', () => {
@@ -2249,6 +2283,51 @@ describe('progress output', () => {
     assert.ok(rendered.includes(`${color('◒', 'cyan')} Running demo command`))
     assert.ok(rendered.includes(`${color('✔', 'green')} Running demo command`))
     assert.ok(!rendered.includes('Fallback spinner'))
+  })
+
+  test('progress commands fail matching checklist steps and keep failure tails concise', async () => {
+    const lines: string[] = []
+    const raw: string[] = []
+    const progress = createProgress({
+      isTTY: true,
+      spinnerFrames: ['◒', '◐'],
+      spinnerIntervalMs: 60_000,
+      write: (target, message) => {
+        lines.push(`${target}:${message}`)
+      },
+      writeRaw: (target, message) => {
+        raw.push(`${target}:${message}`)
+      }
+    })
+
+    progress.section('Boxdown setup')
+    progress.setSteps([{ id: 'demo', label: 'Running failing command' }])
+    const result = await runProgressCommand('demo command', 'bash', [
+      '-c',
+      [
+        'printf "BOXDOWN_PROGRESS: hidden marker\\n"',
+        'printf "stdout tail\\n"',
+        'printf "stderr tail\\n" >&2',
+        'exit 9'
+      ].join('; ')
+    ], {
+      progress,
+      stepId: 'demo'
+    })
+    progress.end()
+
+    const rendered = raw.join('')
+    const failure = formatCommandFailure('demo command', result, { tailLines: 5 })
+    assert.strictEqual(result.code, 9)
+    assert.deepStrictEqual(lines, [
+      `stdout:${formatPromptTitle('Boxdown setup')}`,
+      `stdout:${formatPromptEnd()}`
+    ])
+    assert.ok(rendered.includes(`${color('!', 'dim')} Running failing command`))
+    assert.match(failure, /demo command failed with exit code 9\./)
+    assert.match(failure, /stderr tail/)
+    assert.match(failure, /stdout tail/)
+    assert.doesNotMatch(failure, /hidden marker/)
   })
 
   test('hidden command helpers use friendly spinner labels', () => {

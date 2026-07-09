@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs'
 
 import { claudeSshConfigEntryForWorkspace, uninstallClaudeSshConfigHost } from './claude-app-config.ts'
 import { codexProjectEntryForWorkspace, uninstallCodexAppConfigProject, uninstallCodexGlobalStateProject } from './codex-app-config.ts'
-import { codingAgentFromCommand, type CodingAgentCli } from './coding-agents.ts'
+import { codingAgentBinary, codingAgentFromCommand, type CodingAgentCli } from './coding-agents.ts'
 import { buildGeneratedDevcontainerConfig, publishContainerPortFromConfig } from './config.ts'
 import { doctorHasFailures, formatDoctorText, runDoctorChecks } from './doctor.ts'
 import { startDevcontainer, printPortHint, openShell, openCodingAgentCli, ensureContainerSshRuntime, runSshdProxy, refreshContainerGhAuth, refreshContainerCodingAgentClis, ensureContainerCodingAgentCli, findRunningContainerId, findWorkspaceContainer, stopWorkspaceContainer, removeWorkspaceContainer, listWorkspaceContainers, openSshTunnel, type TunnelPortForward } from './devcontainer.ts'
