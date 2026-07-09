@@ -36,6 +36,9 @@ regardless of the directory where the command is run. Human output includes
 JSON. Docker state is best-effort and includes recorded SSH aliases: if Docker
 is unavailable, entries still print and their container state is `unknown`. If a
 recorded repository path no longer exists, the entry is shown as `missing`.
+Container states come from Docker, so active containers usually show `running`,
+stopped containers can show `exited`, and workspaces with no matching container
+show `absent`.
 
 ## Status
 
@@ -114,6 +117,11 @@ all tracked workspaces from `boxdown list`, including `running`, `exited`,
 destructive confirmation for the selected batch, then purges each selected
 workspace in order. Batch purge continues after individual workspace failures,
 but exits nonzero if any selected workspace fails.
+
+In the interactive purge selector, the focused row color-codes only the state
+token: `running` is green, known non-running states such as `absent`, `exited`,
+and `missing` are red, and `unknown` remains dim. These colors are terminal UI
+affordances only; scripts should rely on text or JSON state values.
 
 Interactive `purge` runs ask for confirmation before removing devcontainer,
 image, SSH/Codex integration, cache, and data state. Non-interactive purge runs

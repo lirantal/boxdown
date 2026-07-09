@@ -215,9 +215,11 @@ boxdown purge --workspace /path/to/my-repo
 
 When `boxdown purge` runs without `--workspace` from a directory that is not a
 tracked Boxdown workspace, interactive terminals show a multi-select list of all
-tracked workspaces, including missing/stale entries. Non-interactive runs fail
-safely from untracked directories; scripts should call `boxdown purge
---workspace <value>` for each workspace.
+tracked workspaces, including missing/stale entries. The focused row highlights
+the state token: `running` is green, known non-running states are red, and
+`unknown` stays dim. Non-interactive runs fail safely from untracked
+directories; scripts should call `boxdown purge --workspace <value>` for each
+workspace.
 
 ## Contributing
 
