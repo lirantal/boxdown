@@ -99,3 +99,18 @@ export function formatWorkspaceListText (entries: WorkspaceListEntry[]): string 
 
   return `${lines.join('\n')}\n`
 }
+
+export function formatWorkspaceListDetailsText (entries: WorkspaceListEntry[]): string {
+  if (entries.length === 0) {
+    return 'Boxdown list\n\nNo Boxdown workspaces found.\n'
+  }
+
+  const details = entries.map((entry) => [
+    `${entry.state}  ${entry.workspaceBasename}`,
+    `  ${pad('path', 9)}: ${entry.workspaceFolder}`,
+    `  ${pad('ssh alias', 9)}: ${entry.sshAlias}`,
+    `  ${pad('container', 9)}: ${containerLabel(entry)}`
+  ].join('\n')).join('\n\n')
+
+  return `Boxdown list\n\n${details}\n`
+}

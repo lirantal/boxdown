@@ -7,7 +7,7 @@ import { buildGeneratedDevcontainerConfig, publishContainerPortFromConfig } from
 import { doctorHasFailures, formatDoctorText, runDoctorChecks } from './doctor.ts'
 import { startDevcontainer, printPortHint, openShell, openCodingAgentCli, ensureContainerSshRuntime, runSshdProxy, refreshContainerGhAuth, refreshContainerCodingAgentClis, ensureContainerCodingAgentCli, findRunningContainerId, findWorkspaceContainer, stopWorkspaceContainer, removeWorkspaceContainer, listWorkspaceContainers, openSshTunnel, type TunnelPortForward } from './devcontainer.ts'
 import { canPromptInteractively, promptConfirm, promptMultiSelect, promptText, type PromptInput, type PromptOutput } from './interactive-prompts.ts'
-import { createWorkspaceListEntries, formatWorkspaceListText } from './list.ts'
+import { createWorkspaceListEntries, formatWorkspaceListDetailsText, formatWorkspaceListText } from './list.ts'
 import { createWorkspaceCommandLogger, withLoggedProcessOutput, type WorkspaceCommandLogger } from './logging.ts'
 import { listWorkspaceMetadata, readWorkspaceMetadata, writeWorkspaceMetadata, type WorkspaceMetadata } from './metadata.ts'
 import { createWorkspaceContext, createWorkspaceContextFromIdentity, defaultDataRoot, type WorkspaceContext } from './paths.ts'
@@ -46,6 +46,7 @@ export interface ParsedCli {
   tunnelPorts?: TunnelPortForward[]
   recreate: boolean
   json: boolean
+  details?: boolean
   verbose: boolean
 }
 
@@ -155,6 +156,7 @@ export function parseCliArgs (argv: string[]): ParsedCli {
   const tunnelPorts: TunnelPortForward[] = []
   let recreate = false
   let json = false
+  let details = false
   let verbose = false
   let passthroughArgs: string[] | undefined
   const positional: string[] = []
@@ -173,6 +175,10 @@ export function parseCliArgs (argv: string[]): ParsedCli {
   function parsed (command: BoxdownCommand): ParsedCli {
     if (json && command !== 'status' && command !== 'list') {
       throw new Error('--json is only supported with status and list')
+    }
+
+    if (details && command !== 'list') {
+      throw new Error('--details is only supported with list')
     }
 
     if (passthroughArgs !== undefined) {
@@ -201,6 +207,7 @@ export function parseCliArgs (argv: string[]): ParsedCli {
       ...(tunnelPorts.length === 0 ? {} : { tunnelPorts }),
       recreate,
       json,
+      ...(details ? { details } : {}),
       verbose
     }
   }
@@ -208,6 +215,10 @@ export function parseCliArgs (argv: string[]): ParsedCli {
   function parsedCodingAgent (agent: CodingAgentCli): ParsedCli {
     if (json) {
       throw new Error('--json is only supported with status and list')
+    }
+
+    if (details) {
+      throw new Error('--details is only supported with list')
     }
 
     if (targets.length > 0) {
@@ -294,6 +305,11 @@ export function parseCliArgs (argv: string[]): ParsedCli {
 
     if (arg === '--json') {
       json = true
+      continue
+    }
+
+    if (arg === '--details') {
+      details = true
       continue
     }
 
@@ -1086,6 +1102,8 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
 
       if (parsed.json) {
         process.stdout.write(`${JSON.stringify(entries, null, 2)}\n`)
+      } else if (parsed.details) {
+        process.stdout.write(formatWorkspaceListDetailsText(entries))
       } else {
         process.stdout.write(formatWorkspaceListText(entries))
       }

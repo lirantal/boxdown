@@ -18,7 +18,7 @@ import { resolveDevcontainerCli } from '../src/devcontainer-cli.ts'
 import { doctorHasFailures, formatDoctorText } from '../src/doctor.ts'
 import { canonicalGithubRemoteUrl, configureWorkspaceGithubGitAuth } from '../src/github-git-auth.ts'
 import { parseJsonc } from '../src/jsonc.ts'
-import { createWorkspaceListEntries, formatWorkspaceListText } from '../src/list.ts'
+import { createWorkspaceListEntries, formatWorkspaceListDetailsText, formatWorkspaceListText } from '../src/list.ts'
 import { createWorkspaceCommandLogger, withLoggedProcessOutput } from '../src/logging.ts'
 import { commandWritesWorkspaceMetadata, parseCliArgs, parseTunnelPort, parseTunnelPortList, runCli, setupWorkspace, USAGE } from '../src/main.ts'
 import { listWorkspaceMetadata, readWorkspaceMetadata, recordWorkspaceDockerImage, writeWorkspaceMetadata } from '../src/metadata.ts'
@@ -510,6 +510,15 @@ describe('CLI parsing', () => {
       json: true,
       verbose: false
     })
+    assert.deepStrictEqual(parseCliArgs(['list', '--details']), {
+      command: 'list',
+      workspace: undefined,
+      alias: undefined,
+      recreate: false,
+      json: false,
+      details: true,
+      verbose: false
+    })
     assert.deepStrictEqual(parseCliArgs(['status', '--workspace', '/tmp/project', '--alias', 'demo-devcontainer', '--json']), {
       command: 'status',
       workspace: '/tmp/project',
@@ -571,6 +580,7 @@ describe('CLI parsing', () => {
     assert.throws(() => parseCliArgs(['codex', '--target', 'codex']), /--target is only supported with setup and ssh install/)
     assert.throws(() => parseCliArgs(['codex', '--port', '3030']), /--port is only supported with tunnel/)
     assert.throws(() => parseCliArgs(['start', '--dry-run']), /Unknown option: --dry-run/)
+    assert.throws(() => parseCliArgs(['start', '--details']), /--details is only supported with list/)
     assert.throws(() => parseCliArgs(['start', '--apply']), /Unknown option: --apply/)
     assert.throws(() => parseCliArgs(['start', '--', '--ignored']), /passthrough is only supported/)
     assert.throws(() => parseCliArgs(['setup', '--json']), /--json is only supported with status and list/)
@@ -2426,6 +2436,7 @@ describe('status output', () => {
 describe('workspace list output', () => {
   test('formats empty list output', () => {
     assert.strictEqual(formatWorkspaceListText([]), 'Boxdown list\n\nNo Boxdown workspaces found.\n')
+    assert.strictEqual(formatWorkspaceListDetailsText([]), 'Boxdown list\n\nNo Boxdown workspaces found.\n')
   })
 
   test('sorts workspaces and joins container state', () => {
@@ -2473,6 +2484,39 @@ describe('workspace list output', () => {
     assert.doesNotMatch(output, /alpha-devcontainer/)
     assert.match(output, /running\s+alpha/)
     assert.match(output, /missing\s+beta/)
+  })
+
+  test('formats detailed list output with copyable values', () => {
+    const alphaWorkspace = tempDir('alpha-details-workspace')
+    const entries = createWorkspaceListEntries([
+      {
+        version: 1,
+        workspaceId: 'alpha-details-id',
+        workspaceFolder: alphaWorkspace,
+        workspaceBasename: 'alpha-details',
+        sshAlias: 'alpha-details-devcontainer',
+        firstSeenAt: '2026-01-01T00:00:00.000Z',
+        lastSeenAt: '2026-01-02T00:00:00.000Z'
+      }
+    ], [
+      {
+        id: 'abc123',
+        name: 'alpha-details-container',
+        state: 'running',
+        status: 'Up 2 minutes',
+        localFolder: alphaWorkspace
+      }
+    ], (path) => path === alphaWorkspace)
+
+    assert.strictEqual(formatWorkspaceListDetailsText(entries), [
+      'Boxdown list',
+      '',
+      'running  alpha-details',
+      `  path     : ${alphaWorkspace}`,
+      '  ssh alias: alpha-details-devcontainer',
+      '  container: alpha-details-container',
+      ''
+    ].join('\n'))
   })
 
   test('marks container state unknown when Docker is unavailable', () => {
