@@ -745,6 +745,44 @@ function setupProgressSteps (targets: readonly SshConfigInstallTarget[]): Progre
   ]
 }
 
+function sshAliasProgressStep (label: string): ProgressStepDefinition {
+  return { id: 'ssh-alias', label }
+}
+
+function tunnelProgressSteps (): ProgressStepDefinition[] {
+  return [
+    sshAliasProgressStep('Updating SSH alias'),
+    ...startProgressSteps()
+  ]
+}
+
+function sshProxyProgressSteps (): ProgressStepDefinition[] {
+  return [
+    sshAliasProgressStep('Updating SSH alias'),
+    ...startProgressSteps(),
+    { id: 'coding-agent-refresh', label: 'Refreshing default coding-agent CLIs' },
+    { id: 'ssh-runtime', label: 'Preparing container SSH runtime' }
+  ]
+}
+
+function codingAgentProgressSteps (agent: CodingAgentCli): ProgressStepDefinition[] {
+  return [
+    ...startProgressSteps(),
+    { id: 'agent-cli', label: `Preparing ${codingAgentBinary(agent)} inside the devcontainer` }
+  ]
+}
+
+function ghAuthProgressSteps (includeStart: boolean): ProgressStepDefinition[] {
+  return [
+    ...(includeStart ? startProgressSteps() : [{ id: 'devcontainer-running', label: 'Using running devcontainer' }]),
+    { id: 'gh-auth-config', label: 'Preparing generated config for GitHub auth refresh' },
+    { id: 'gh-token-read', label: 'Reading host GitHub CLI token' },
+    { id: 'gh-auth-refresh', label: 'Refreshing GitHub CLI auth inside the devcontainer' },
+    { id: 'gh-git-auth', label: 'Configuring workspace GitHub Git auth' },
+    { id: 'gh-auth-verify', label: 'Verifying GitHub CLI auth inside the devcontainer' }
+  ]
+}
+
 async function withProgressSection<T> (
   progress: ProgressReporter,
   title: string,
@@ -933,9 +971,15 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
         `Workspace: ${context.workspaceFolder}`,
         `SSH alias: ${alias}`
       ], async () => {
-        progress.item('Updating SSH alias')
-        progress.detail(alias)
-        await installSshConfig(context, alias, { quiet: true })
+        progress.setSteps(sshProxyProgressSteps())
+        progress.startStep('ssh-alias')
+        try {
+          await installSshConfig(context, alias, { quiet: true })
+          progress.completeStep('ssh-alias')
+        } catch (error) {
+          progress.failStep('ssh-alias')
+          throw error
+        }
         const startedContainerId = await startDevcontainer(context, {
           recreate: parsed.recreate,
           proxyMode: true,
@@ -968,9 +1012,15 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
         `Workspace: ${context.workspaceFolder}`,
         `SSH alias: ${alias}`
       ], async () => {
-        progress.item('Updating SSH alias')
-        progress.detail(alias)
-        await installSshConfig(context, alias, { quiet: true })
+        progress.setSteps(tunnelProgressSteps())
+        progress.startStep('ssh-alias')
+        try {
+          await installSshConfig(context, alias, { quiet: true })
+          progress.completeStep('ssh-alias')
+        } catch (error) {
+          progress.failStep('ssh-alias')
+          throw error
+        }
         await startDevcontainer(context, {
           recreate: parsed.recreate,
           progress,
@@ -997,8 +1047,9 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
       await withProgressSection(progress, 'Boxdown GitHub auth refresh', [
         `Workspace: ${context.workspaceFolder}`
       ], async () => {
-        progress.item('Using running devcontainer')
-        progress.detail(containerId)
+        progress.setSteps(ghAuthProgressSteps(false))
+        progress.startStep('devcontainer-running')
+        progress.completeStep('devcontainer-running')
         await refreshContainerGhAuth(context, { progress })
       })
       return 0
@@ -1009,6 +1060,7 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
       await withProgressSection(progress, 'Boxdown GitHub auth refresh', [
         `Workspace: ${context.workspaceFolder}`
       ], async () => {
+        progress.setSteps(ghAuthProgressSteps(true))
         await startDevcontainer(context, { progress })
         await refreshContainerGhAuth(context, { progress })
       })
@@ -1025,6 +1077,7 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
       await withProgressSection(progress, `Boxdown ${agent}`, [
         `Workspace: ${context.workspaceFolder}`
       ], async () => {
+        progress.setSteps(codingAgentProgressSteps(agent))
         await startDevcontainer(context, {
           recreate: parsed.recreate,
           progress
