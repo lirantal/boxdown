@@ -7,6 +7,8 @@ export interface BufferedCommandOptions {
   input?: string
   mirrorStdout?: 'stdout' | 'stderr' | false
   mirrorStderr?: 'stdout' | 'stderr' | false
+  onStdout?: (chunk: Buffer) => void
+  onStderr?: (chunk: Buffer) => void
 }
 
 export interface CommandResult {
@@ -91,11 +93,13 @@ export function runBuffered (command: string, args: string[], options: BufferedC
 
     child.stdout.on('data', (chunk: Buffer) => {
       stdoutChunks.push(chunk)
+      options.onStdout?.(chunk)
       writeChunk(options.mirrorStdout ?? 'stdout', chunk)
     })
 
     child.stderr.on('data', (chunk: Buffer) => {
       stderrChunks.push(chunk)
+      options.onStderr?.(chunk)
       writeChunk(options.mirrorStderr ?? 'stderr', chunk)
     })
 
