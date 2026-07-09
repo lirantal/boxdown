@@ -15,20 +15,21 @@ boxdown doctor
 
 Workspace-targeting commands accept `--workspace <path>`. `down` also accepts
 repeated `--workspace` flags to remove multiple workspace containers in order.
-`purge --workspace` also accepts the `PATH`, `SSH ALIAS`, or unambiguous `REPO`
-value shown by `boxdown list`. `status` accepts `--alias <name>` so its output
-can match a custom SSH host alias.
+`purge --workspace` also accepts the `PATH` or unambiguous `REPO` value shown by
+`boxdown list`, plus exact `SSH ALIAS` values from metadata/status output.
+`status` accepts `--alias <name>` so its output can match a custom SSH host
+alias.
 
 ## List
 
 `list` shows every workspace with Boxdown metadata under the data root,
 regardless of the directory where the command is run. Human output includes
-`STATE`, `REPO`, `PATH`, `SSH ALIAS`, and `CONTAINER` columns.
+`STATE`, `REPO`, `PATH`, and `CONTAINER` columns.
 
 `list --json` prints the same inventory as structured JSON. Docker state is
-best-effort: if Docker is unavailable, entries still print and their container
-state is `unknown`. If a recorded repository path no longer exists, the entry is
-shown as `missing`.
+best-effort and includes recorded SSH aliases: if Docker is unavailable, entries
+still print and their container state is `unknown`. If a recorded repository
+path no longer exists, the entry is shown as `missing`.
 
 ## Status
 
@@ -73,13 +74,15 @@ repository directory or files inside it.
 
 `purge --workspace <value>` first treats `<value>` as a filesystem path. If that
 path does not exist, it looks for an exact `PATH`, then `SSH ALIAS`, then `REPO`
-match in Boxdown metadata. `REPO` must match exactly one workspace; if multiple
-known workspaces share the same repo basename, use `PATH` or `SSH ALIAS`.
+match in Boxdown metadata. `PATH` and `REPO` are shown by `boxdown list`; use
+`boxdown status` or `boxdown list --json` for SSH aliases. `REPO` must match
+exactly one workspace; if multiple known workspaces share the same repo
+basename, use `PATH` or `SSH ALIAS`.
 
 ```sh
-boxdown purge --workspace my-repo-devcontainer
-boxdown purge --workspace my-repo
 boxdown purge --workspace /path/to/my-repo
+boxdown purge --workspace my-repo
+boxdown purge --workspace my-repo-devcontainer
 ```
 
 To remove multiple workspace containers, repeat `--workspace`:

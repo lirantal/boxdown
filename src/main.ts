@@ -115,8 +115,9 @@ Commands:
 
 Options:
   --workspace <path>  Target project directory. Defaults to the current directory.
-                      Repeatable with down. With purge, also accepts PATH,
-                      SSH ALIAS, or an unambiguous REPO from boxdown list.
+                      Repeatable with down. With purge, also accepts PATH or
+                      an unambiguous REPO from boxdown list, plus SSH ALIAS
+                      from metadata/status output.
   --alias <name>      SSH host alias. Defaults to <repo-name>-devcontainer.
   --target <name>     Optional SSH install target. Repeatable. Supported by
                       setup and ssh install: codex, claude.

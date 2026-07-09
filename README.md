@@ -176,6 +176,9 @@ boxdown list
 boxdown list --json
 ```
 
+Human `boxdown list` output shows `STATE`, `REPO`, `PATH`, and `CONTAINER`.
+Use `boxdown list --json` when you need recorded SSH aliases.
+
 Shared options:
 
 ```sh
@@ -194,13 +197,14 @@ workspace. It does not delete the local repository directory or files inside it.
 Interactive terminals ask for confirmation before purging; non-interactive runs
 keep the direct behavior.
 
-For `purge`, `--workspace` accepts the `PATH`, `SSH ALIAS`, or unambiguous
-`REPO` value shown by `boxdown list`:
+For `purge`, `--workspace` accepts the `PATH` or unambiguous `REPO` value
+shown by `boxdown list`. It also accepts exact `SSH ALIAS` values from
+`boxdown status` or `boxdown list --json`:
 
 ```sh
-boxdown purge --workspace my-repo-devcontainer
-boxdown purge --workspace my-repo
 boxdown purge --workspace /path/to/my-repo
+boxdown purge --workspace my-repo
+boxdown purge --workspace my-repo-devcontainer
 ```
 
 ## Contributing
