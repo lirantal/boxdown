@@ -22,6 +22,7 @@ import { createWorkspaceListEntries, formatWorkspaceListDetailsText, formatWorks
 import { createWorkspaceCommandLogger, withLoggedProcessOutput } from '../src/logging.ts'
 import { commandWritesWorkspaceMetadata, parseCliArgs, parseTunnelPort, parseTunnelPortList, runCli, setupWorkspace, USAGE } from '../src/main.ts'
 import { listWorkspaceMetadata, readWorkspaceMetadata, recordWorkspaceDockerImage, writeWorkspaceMetadata } from '../src/metadata.ts'
+import { readPackageVersion } from '../src/package-info.ts'
 import { createWorkspaceContext } from '../src/paths.ts'
 import { promptConfirm, promptMultiSelect, promptText, type PromptInput, type PromptOutput } from '../src/interactive-prompts.ts'
 import { buildHostToolPath, runBuffered, runInteractive } from '../src/process.ts'
@@ -320,6 +321,23 @@ describe('CLI parsing', () => {
       json: true,
       verbose: true
     })
+  })
+
+  test('parses global version option', () => {
+    assert.strictEqual(parseCliArgs(['--version']).command, 'version')
+    assert.strictEqual(parseCliArgs(['-v']).command, 'version')
+  })
+
+  test('prints package version', () => {
+    const expectedVersion = `${readPackageVersion()}\n`
+
+    for (const flag of ['--version', '-v']) {
+      const result = runCliProcess([flag], process.env)
+
+      assert.strictEqual(result.code, 0)
+      assert.strictEqual(result.stdout, expectedVersion)
+      assert.strictEqual(result.stderr, '')
+    }
   })
 
   test('parses coding-agent launch aliases', () => {
@@ -651,6 +669,7 @@ describe('CLI parsing', () => {
     assert.match(USAGE, /--format json\s+Print JSON output\. Equivalent to --json\./)
     assert.match(USAGE, /--details\s+Print detailed human list output\. Supported by list\./)
     assert.match(USAGE, /--verbose\s+Stream raw Docker, devcontainer, and hook command output\.[\s\S]*per-workspace command log either way\./)
+    assert.match(USAGE, /--version, -v\s+Show version\./)
     assert.match(USAGE, /doctor\s+Check required host tools/)
     assert.doesNotMatch(USAGE, /Alias:/)
     assert.ok(!usageLines.includes('  boxdown cc [--workspace <path>] [--recreate] [-- <claude args...>]'))

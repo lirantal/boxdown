@@ -10,6 +10,7 @@ import { canPromptInteractively, promptConfirm, promptMultiSelect, promptText, t
 import { createWorkspaceListEntries, formatWorkspaceListDetailsText, formatWorkspaceListText } from './list.ts'
 import { createWorkspaceCommandLogger, withLoggedProcessOutput, type WorkspaceCommandLogger } from './logging.ts'
 import { listWorkspaceMetadata, readWorkspaceMetadata, writeWorkspaceMetadata, type WorkspaceMetadata } from './metadata.ts'
+import { readPackageVersion } from './package-info.ts'
 import { createWorkspaceContext, createWorkspaceContextFromIdentity, defaultDataRoot, type WorkspaceContext } from './paths.ts'
 import { createProgress, resolveProgressMode, type ProgressReporter, type ProgressOutputTarget, type ProgressStepDefinition } from './progress.ts'
 import { purgeWorkspace } from './purge.ts'
@@ -19,6 +20,7 @@ import { createStatusInfo, formatStatusText, statusIsHealthy } from './status.ts
 
 export type BoxdownCommand =
   | 'help'
+  | 'version'
   | 'setup'
   | 'start'
   | 'list'
@@ -135,6 +137,7 @@ Options:
                       Lifecycle commands append the same managed output to the
                       per-workspace command log either way.
   --help, -h          Show help.
+  --version, -v       Show version.
 `
 
 export function commandWritesWorkspaceMetadata (command: BoxdownCommand): boolean {
@@ -265,6 +268,10 @@ export function parseCliArgs (argv: string[]): ParsedCli {
 
     if (arg === '--help' || arg === '-h') {
       return parsed('help')
+    }
+
+    if (arg === '--version' || arg === '-v') {
+      return parsed('version')
     }
 
     if (arg === '--workspace') {
@@ -1116,6 +1123,11 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
 
     if (parsed.command === 'help') {
       process.stdout.write(USAGE)
+      return 0
+    }
+
+    if (parsed.command === 'version') {
+      process.stdout.write(`${readPackageVersion()}\n`)
       return 0
     }
 
