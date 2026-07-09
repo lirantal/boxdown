@@ -3,6 +3,7 @@ export const ansi = {
   cyan: '\u001B[36m',
   dim: '\u001B[2m',
   green: '\u001B[32m',
+  red: '\u001B[31m',
   reset: '\u001B[0m'
 } as const
 

@@ -1,11 +1,17 @@
 import { createInterface } from 'node:readline'
 
-import { color, emptyMark, formatPromptDetailLine, formatPromptEnd, formatPromptLabel, formatPromptTitle, promptRail, selectedMark } from './cli-style.ts'
+import { color, emptyMark, formatPromptDetailLine, formatPromptEnd, formatPromptLabel, formatPromptTitle, promptRail, selectedMark, type CliColor } from './cli-style.ts'
+
+export interface MultiSelectDescriptionSegment {
+  text: string
+  color: CliColor
+}
 
 export interface MultiSelectChoice<T extends string> {
   value: T
   label: string
   description: string
+  focusedDescription?: readonly MultiSelectDescriptionSegment[]
 }
 
 export type MultiSelectPromptResult<T extends string> =
@@ -117,7 +123,9 @@ function formatChoiceLine <T extends string> (
   isSelected: boolean
 ): string {
   const mark = isSelected ? selectedMark() : emptyMark(isFocused)
-  const description = color(` - ${choice.description}`, 'dim')
+  const description = isFocused && choice.focusedDescription !== undefined
+    ? `${color(' - ', 'dim')}${choice.focusedDescription.map((segment) => color(segment.text, segment.color)).join('')}`
+    : color(` - ${choice.description}`, 'dim')
   return `${promptRail()}  ${mark} ${formatPromptLabel(choice.label, isFocused)}${description}`
 }
 

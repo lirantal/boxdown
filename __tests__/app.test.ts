@@ -778,6 +778,49 @@ describe('interactive install target prompt', () => {
     assert.ok(redrawRows.every((rowCount) => rowCount > 5))
   })
 
+  test('colors focused description segments without changing unfocused rows', async () => {
+    const { input, output, outputText } = fakePromptStreams()
+    const resultPromise = promptMultiSelect({
+      title: 'Purge Boxdown workspaces?',
+      choices: [
+        {
+          value: 'absent',
+          label: 'absent-repo',
+          description: '(absent) /tmp/absent',
+          focusedDescription: [
+            { text: '(absent)', color: 'red' },
+            { text: ' /tmp/absent', color: 'dim' }
+          ]
+        },
+        {
+          value: 'running',
+          label: 'running-repo',
+          description: '(running) /tmp/running',
+          focusedDescription: [
+            { text: '(running)', color: 'green' },
+            { text: ' /tmp/running', color: 'dim' }
+          ]
+        }
+      ],
+      skipLabel: 'Cancel',
+      input,
+      output,
+      env: { CI: 'false' }
+    })
+
+    input.write('\u001B[A')
+    input.write(' ')
+    input.write('\r')
+
+    assert.deepStrictEqual(await resultPromise, {
+      status: 'selected',
+      values: ['running']
+    })
+
+    assert.ok(outputText().includes(color(' - (absent) /tmp/absent', 'dim')))
+    assert.ok(outputText().includes(`${color(' - ', 'dim')}${color('(running)', 'green')}${color(' /tmp/running', 'dim')}`))
+  })
+
   test('starts raw-mode focus on the selected skip row', async () => {
     const { input, output, outputText } = fakePromptStreams()
     const resultPromise = promptMultiSelect({
