@@ -539,8 +539,8 @@ function purgeWorkspaceStateColor (state: string): CliColor {
     return 'green'
   }
 
-  if (state === 'unknown') {
-    return 'dim'
+  if (state === 'exited') {
+    return 'yellow'
   }
 
   return 'red'

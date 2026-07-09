@@ -56,6 +56,7 @@ function readGitConfigAll (configPath: string, key: string): string[] {
 interface FakeDockerWorkspace {
   workspace: string
   id: string
+  containerState?: string
   removeExitCode?: number
   imageId?: string
   imageName?: string
@@ -115,8 +116,8 @@ async function withFakeDocker<T> (workspaces: FakeDockerWorkspace[], run: (logPa
     '    previous="$arg"',
     '  done',
     '  if [ "$filter" = "label=devcontainer.local_folder" ]; then',
-    '    while IFS="$(printf \'\\t\')" read -r folder id remove_exit_code image_id image_name inspect_exit_code image_remove_exit_code; do',
-    '      printf \'{"ID":"%s","Names":"%s","State":"running","Status":"Up","Labels":"devcontainer.local_folder=%s"}\\n\' "$id" "$id" "$folder"',
+    '    while IFS="$(printf \'\\t\')" read -r folder id container_state remove_exit_code image_id image_name inspect_exit_code image_remove_exit_code; do',
+    '      printf \'{"ID":"%s","Names":"%s","State":"%s","Status":"%s","Labels":"devcontainer.local_folder=%s"}\\n\' "$id" "$id" "$container_state" "$container_state" "$folder"',
     '    done < "${BOXDOWN_FAKE_DOCKER_STATE}"',
     '    exit 0',
     '  fi',
@@ -124,9 +125,9 @@ async function withFakeDocker<T> (workspaces: FakeDockerWorkspace[], run: (logPa
     '  if [ "$workspace" = "$filter" ]; then',
     '    exit 0',
     '  fi',
-    '  while IFS="$(printf \'\\t\')" read -r folder id remove_exit_code image_id image_name inspect_exit_code image_remove_exit_code; do',
+    '  while IFS="$(printf \'\\t\')" read -r folder id container_state remove_exit_code image_id image_name inspect_exit_code image_remove_exit_code; do',
     '    if [ "$folder" = "$workspace" ]; then',
-    '      printf \'{"ID":"%s","Names":"%s","State":"running","Status":"Up","Labels":"devcontainer.local_folder=%s"}\\n\' "$id" "$id" "$folder"',
+    '      printf \'{"ID":"%s","Names":"%s","State":"%s","Status":"%s","Labels":"devcontainer.local_folder=%s"}\\n\' "$id" "$id" "$container_state" "$container_state" "$folder"',
     '      exit 0',
     '    fi',
     '  done < "${BOXDOWN_FAKE_DOCKER_STATE}"',
@@ -134,7 +135,7 @@ async function withFakeDocker<T> (workspaces: FakeDockerWorkspace[], run: (logPa
     'fi',
     'if [ "${1:-}" = "inspect" ]; then',
     '  id="${@: -1}"',
-    '  while IFS="$(printf \'\\t\')" read -r folder container_id remove_exit_code image_id image_name inspect_exit_code image_remove_exit_code; do',
+    '  while IFS="$(printf \'\\t\')" read -r folder container_id container_state remove_exit_code image_id image_name inspect_exit_code image_remove_exit_code; do',
     '    if [ "$container_id" = "$id" ]; then',
     '      if [ "${inspect_exit_code:-0}" != "0" ]; then',
     '        exit "$inspect_exit_code"',
@@ -147,7 +148,7 @@ async function withFakeDocker<T> (workspaces: FakeDockerWorkspace[], run: (logPa
     'fi',
     'if [ "${1:-}" = "rm" ]; then',
     '  id="${@: -1}"',
-    '  while IFS="$(printf \'\\t\')" read -r folder container_id remove_exit_code image_id image_name inspect_exit_code image_remove_exit_code; do',
+    '  while IFS="$(printf \'\\t\')" read -r folder container_id container_state remove_exit_code image_id image_name inspect_exit_code image_remove_exit_code; do',
     '    if [ "$container_id" = "$id" ]; then',
     '      exit "${remove_exit_code:-0}"',
     '    fi',
@@ -156,7 +157,7 @@ async function withFakeDocker<T> (workspaces: FakeDockerWorkspace[], run: (logPa
     'fi',
     'if [ "${1:-}" = "image" ] && [ "${2:-}" = "rm" ]; then',
     '  image_id="${@: -1}"',
-    '  while IFS="$(printf \'\\t\')" read -r folder container_id remove_exit_code recorded_image_id image_name inspect_exit_code image_remove_exit_code; do',
+    '  while IFS="$(printf \'\\t\')" read -r folder container_id container_state remove_exit_code recorded_image_id image_name inspect_exit_code image_remove_exit_code; do',
     '    if [ "$recorded_image_id" = "$image_id" ]; then',
     '      exit "${image_remove_exit_code:-0}"',
     '    fi',
@@ -169,6 +170,7 @@ async function withFakeDocker<T> (workspaces: FakeDockerWorkspace[], run: (logPa
   writeFileSync(statePath, `${workspaces.map((workspace) => [
     realpathSync(workspace.workspace),
     workspace.id,
+    workspace.containerState ?? 'running',
     String(workspace.removeExitCode ?? 0),
     workspace.imageId ?? `sha256:${workspace.id}-image`,
     workspace.imageName ?? `boxdown-test:${workspace.id}`,
@@ -800,6 +802,15 @@ describe('interactive install target prompt', () => {
             { text: '(running)', color: 'green' },
             { text: ' /tmp/running', color: 'dim' }
           ]
+        },
+        {
+          value: 'exited',
+          label: 'exited-repo',
+          description: '(exited) /tmp/exited',
+          focusedDescription: [
+            { text: '(exited)', color: 'yellow' },
+            { text: ' /tmp/exited', color: 'dim' }
+          ]
         }
       ],
       skipLabel: 'Cancel',
@@ -814,11 +825,12 @@ describe('interactive install target prompt', () => {
 
     assert.deepStrictEqual(await resultPromise, {
       status: 'selected',
-      values: ['running']
+      values: ['exited']
     })
 
     assert.ok(outputText().includes(color(' - (absent) /tmp/absent', 'dim')))
-    assert.ok(outputText().includes(`${color(' - ', 'dim')}${color('(running)', 'green')}${color(' /tmp/running', 'dim')}`))
+    assert.ok(outputText().includes(color(' - (running) /tmp/running', 'dim')))
+    assert.ok(outputText().includes(`${color(' - ', 'dim')}${color('(exited)', 'yellow')}${color(' /tmp/exited', 'dim')}`))
   })
 
   test('starts raw-mode focus on the selected skip row', async () => {
@@ -1902,6 +1914,7 @@ describe('CLI execution', () => {
     const root = tempDir('purge-batch-root')
     const alpha = join(root, 'alpha')
     const beta = join(root, 'beta')
+    const delta = join(root, 'delta')
     const missing = join(root, 'missing')
     const unknown = tempDir('purge-batch-unknown-cwd')
     const env = {
@@ -1915,23 +1928,28 @@ describe('CLI execution', () => {
 
     mkdirSync(alpha)
     mkdirSync(beta)
+    mkdirSync(delta)
     mkdirSync(missing)
 
     const alphaContext = createWorkspaceContext({ workspace: alpha, env, assetsDevcontainerDir })
     const betaContext = createWorkspaceContext({ workspace: beta, env, assetsDevcontainerDir })
+    const deltaContext = createWorkspaceContext({ workspace: delta, env, assetsDevcontainerDir })
     const missingContext = createWorkspaceContext({ workspace: missing, env, assetsDevcontainerDir })
     const { input, output, outputText } = fakePromptStreams()
 
     mkdirSync(alphaContext.workspaceCacheDir, { recursive: true })
     mkdirSync(betaContext.workspaceCacheDir, { recursive: true })
+    mkdirSync(deltaContext.workspaceCacheDir, { recursive: true })
     mkdirSync(missingContext.workspaceCacheDir, { recursive: true })
     writeWorkspaceMetadata(alphaContext, defaultSshAlias(alphaContext.workspaceBasename))
     writeWorkspaceMetadata(betaContext, defaultSshAlias(betaContext.workspaceBasename))
+    writeWorkspaceMetadata(deltaContext, defaultSshAlias(deltaContext.workspaceBasename))
     writeWorkspaceMetadata(missingContext, defaultSshAlias(missingContext.workspaceBasename))
     rmSync(missing, { recursive: true, force: true })
 
     await withFakeDocker([
-      { workspace: betaContext.workspaceFolder, id: 'purge-batch-beta-container' }
+      { workspace: betaContext.workspaceFolder, id: 'purge-batch-beta-container' },
+      { workspace: deltaContext.workspaceFolder, id: 'purge-batch-delta-container', containerState: 'exited' }
     ], async (logPath, dockerEnv) => {
       const codePromise = withProcessEnv({
         ...dockerEnv,
@@ -1945,18 +1963,24 @@ describe('CLI execution', () => {
       await waitForPromptOutput(outputText, /Purge Boxdown workspaces\?/)
       assert.match(outputText(), /alpha/)
       assert.match(outputText(), /beta/)
+      assert.match(outputText(), /delta/)
       assert.match(outputText(), /missing/)
       assert.ok(outputText().includes(`(absent) ${alphaContext.workspaceFolder}`))
       assert.ok(outputText().includes(`(running) ${betaContext.workspaceFolder}`))
+      assert.ok(outputText().includes(`(exited) ${deltaContext.workspaceFolder}`))
       assert.ok(outputText().includes(`(missing) ${missingContext.workspaceFolder}`))
       assert.doesNotMatch(outputText(), /alpha-devcontainer/)
       assert.doesNotMatch(outputText(), /beta-devcontainer/)
+      assert.doesNotMatch(outputText(), /delta-devcontainer/)
       assert.doesNotMatch(outputText(), /missing-devcontainer/)
 
       input.write('\u001B[A')
       await waitForPromptOutput(outputText, /\u001B\[31m\(missing\)\u001B\[0m/)
       assert.ok(outputText().includes(`${color(' - ', 'dim')}${color('(missing)', 'red')}${color(` ${missingContext.workspaceFolder}`, 'dim')}`))
       input.write(' ')
+      input.write('\u001B[A')
+      await waitForPromptOutput(outputText, /\u001B\[33m\(exited\)\u001B\[0m/)
+      assert.ok(outputText().includes(`${color(' - ', 'dim')}${color('(exited)', 'yellow')}${color(` ${deltaContext.workspaceFolder}`, 'dim')}`))
       input.write('\u001B[A')
       await waitForPromptOutput(outputText, /\u001B\[32m\(running\)\u001B\[0m/)
       assert.ok(outputText().includes(`${color(' - ', 'dim')}${color('(running)', 'green')}${color(` ${betaContext.workspaceFolder}`, 'dim')}`))
@@ -1978,9 +2002,51 @@ describe('CLI execution', () => {
       assert.strictEqual(existsSync(alphaContext.workspaceDataDir), true)
       assert.strictEqual(existsSync(betaContext.workspaceCacheDir), false)
       assert.strictEqual(existsSync(betaContext.workspaceDataDir), false)
+      assert.strictEqual(existsSync(deltaContext.workspaceCacheDir), true)
+      assert.strictEqual(existsSync(deltaContext.workspaceDataDir), true)
       assert.strictEqual(existsSync(missingContext.workspaceCacheDir), false)
       assert.strictEqual(existsSync(missingContext.workspaceDataDir), false)
     })
+  })
+
+  test('colors unknown purge state red when Docker state is unavailable', async () => {
+    const workspace = tempDir('purge-batch-unknown-state-workspace')
+    const unknown = tempDir('purge-batch-unknown-state-cwd')
+    const binDir = tempDir('purge-batch-unknown-state-bin')
+    const dockerPath = join(binDir, 'docker')
+    const env = {
+      HOME: tempDir('purge-batch-unknown-state-home'),
+      BOXDOWN_CACHE_HOME: tempDir('purge-batch-unknown-state-cache'),
+      BOXDOWN_DATA_HOME: tempDir('purge-batch-unknown-state-data'),
+      BOXDOWN_SSH_CONFIG: join(tempDir('purge-batch-unknown-state-ssh'), 'config'),
+      BOXDOWN_CODEX_APP_CONFIG: join(tempDir('purge-batch-unknown-state-codex-app'), 'config.json'),
+      BOXDOWN_CODEX_GLOBAL_STATE: join(tempDir('purge-batch-unknown-state-codex-state'), '.codex-global-state.json'),
+      PATH: `${binDir}${delimiter}${process.env.PATH ?? ''}`
+    }
+    const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+    const { input, output, outputText } = fakePromptStreams()
+
+    writeFileSync(dockerPath, '#!/usr/bin/env bash\nexit 1\n')
+    chmodSync(dockerPath, 0o755)
+    mkdirSync(context.workspaceCacheDir, { recursive: true })
+    writeWorkspaceMetadata(context, defaultSshAlias(context.workspaceBasename))
+
+    const codePromise = withProcessEnv(env, async () => withCwd(unknown, async () => runCli(['purge'], {
+      promptInput: input,
+      promptOutput: output,
+      env: { ...process.env, CI: 'false' }
+    })))
+
+    await waitForPromptOutput(outputText, /Purge Boxdown workspaces\?/)
+    assert.ok(outputText().includes(`(unknown) ${context.workspaceFolder}`))
+    input.write('\u001B[A')
+    await waitForPromptOutput(outputText, /\u001B\[31m\(unknown\)\u001B\[0m/)
+    assert.ok(outputText().includes(`${color(' - ', 'dim')}${color('(unknown)', 'red')}${color(` ${context.workspaceFolder}`, 'dim')}`))
+    input.write('\u0003')
+
+    assert.strictEqual(await codePromise, 1)
+    assert.strictEqual(existsSync(context.workspaceCacheDir), true)
+    assert.strictEqual(existsSync(context.workspaceDataDir), true)
   })
 
   test('cancels prompted batch purge before selecting workspaces', async () => {

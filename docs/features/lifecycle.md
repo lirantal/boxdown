@@ -119,9 +119,9 @@ workspace in order. Batch purge continues after individual workspace failures,
 but exits nonzero if any selected workspace fails.
 
 In the interactive purge selector, the focused row color-codes only the state
-token: `running` is green, known non-running states such as `absent`, `exited`,
-and `missing` are red, and `unknown` remains dim. These colors are terminal UI
-affordances only; scripts should rely on text or JSON state values.
+token: `running` is green, `exited` is yellow, and `absent`, `missing`, or
+`unknown` are red. These colors are terminal UI affordances only; scripts should
+rely on text or JSON state values.
 
 Interactive `purge` runs ask for confirmation before removing devcontainer,
 image, SSH/Codex integration, cache, and data state. Non-interactive purge runs
