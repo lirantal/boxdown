@@ -92,6 +92,7 @@ write_ssh_config_block() {
   if ! awk -v begin="$BEGIN_MARKER" -v end="$END_MARKER" '
     $0 == begin { skip = 1; next }
     $0 == end && skip { skip = 0; next }
+    skip && $0 ~ /^# (BEGIN|END) [A-Za-z0-9_.-]+ (boxdown )?devcontainer ssh$/ { exit 43 }
     !skip { print }
     END {
       if (skip) {
@@ -100,7 +101,7 @@ write_ssh_config_block() {
     }
   ' "$SSH_CONFIG" > "$tmp_file"; then
     rm -f "$tmp_file"
-    die "Refusing to update SSH config for ${HOST_ALIAS}: found \"${BEGIN_MARKER}\" without matching \"${END_MARKER}\". Repair the config manually before running Boxdown again."
+    die "Refusing to update SSH config for ${HOST_ALIAS}: found \"${BEGIN_MARKER}\" without matching \"${END_MARKER}\" or with an overlapping managed marker. Repair the config manually before running Boxdown again."
   fi
 
   start_script_quoted="$(ssh_config_quote "$START_SCRIPT")"

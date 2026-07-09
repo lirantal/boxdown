@@ -67,6 +67,14 @@ function malformedSshConfigBlockError (alias: string, markers: SshConfigMarkerSe
   return new Error(`Refusing to update SSH config for ${alias}: found "${markers.begin}" without matching "${markers.end}". Repair the config manually before running Boxdown again.`)
 }
 
+function overlappingSshConfigBlockError (alias: string, markers: SshConfigMarkerSet, marker: string): Error {
+  return new Error(`Refusing to update SSH config for ${alias}: found overlapping managed SSH config marker "${marker}" before matching "${markers.end}". Repair the config manually before running Boxdown again.`)
+}
+
+function isManagedSshConfigMarker (line: string): boolean {
+  return /^# (?:BEGIN|END) [A-Za-z0-9_.-]+ (?:boxdown )?devcontainer ssh$/u.test(line)
+}
+
 function stripManagedSshConfigBlocks (existingConfig: string, alias: string): { lines: string[], removed: boolean } {
   const markerSets = managedSshConfigMarkerSets(alias)
   const lines = existingConfig.split(/\r?\n/)
@@ -82,7 +90,19 @@ function stripManagedSshConfigBlocks (existingConfig: string, alias: string): { 
       continue
     }
 
-    const endIndex = lines.findIndex((candidate, candidateIndex) => candidateIndex > index && candidate === markers.end)
+    let endIndex = -1
+    for (let candidateIndex = index + 1; candidateIndex < lines.length; candidateIndex++) {
+      const candidate = lines[candidateIndex] ?? ''
+
+      if (candidate === markers.end) {
+        endIndex = candidateIndex
+        break
+      }
+
+      if (isManagedSshConfigMarker(candidate)) {
+        throw overlappingSshConfigBlockError(alias, markers, candidate)
+      }
+    }
 
     if (endIndex === -1) {
       throw malformedSshConfigBlockError(alias, markers)

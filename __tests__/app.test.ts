@@ -2368,6 +2368,118 @@ describe('SSH config generation', () => {
     assert.strictEqual(removeSshConfigBlock(existing, alias), 'Host github.com\n  User git\n')
   })
 
+  test('removes only the selected managed SSH config alias', () => {
+    const workspace = tempDir('ssh-remove-selected-workspace')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('ssh-remove-selected-cache'),
+        BOXDOWN_DATA_HOME: tempDir('ssh-remove-selected-data')
+      },
+      assetsDevcontainerDir
+    })
+    const alias = defaultSshAlias(context.workspaceBasename)
+    const otherAlias = 'lirantaldotcom-devcontainer'
+    const prefixAlias = `${alias}-old`
+    const existing = [
+      'Host github.com',
+      '  User git',
+      buildSshConfigBlock(context, otherAlias).trimEnd(),
+      buildSshConfigBlock(context, alias).trimEnd(),
+      buildSshConfigBlock(context, prefixAlias).trimEnd(),
+      'Host anti-trojan-source-devcontainer',
+      '  HostName anti-trojan-source-devcontainer',
+      ''
+    ].join('\n')
+    const removed = removeSshConfigBlock(existing, alias)
+
+    assert.strictEqual(removed.includes(`# BEGIN ${alias} boxdown devcontainer ssh`), false)
+    assert.strictEqual(removed.includes(`# BEGIN ${otherAlias} boxdown devcontainer ssh`), true)
+    assert.strictEqual(removed.includes(`# BEGIN ${prefixAlias} boxdown devcontainer ssh`), true)
+    assert.match(removed, /Host github\.com/)
+    assert.match(removed, /Host anti-trojan-source-devcontainer/)
+  })
+
+  test('preserves unmanaged Host entries for the same alias on uninstall', () => {
+    const workspace = tempDir('ssh-unmanaged-same-alias-workspace')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('ssh-unmanaged-same-alias-cache'),
+        BOXDOWN_DATA_HOME: tempDir('ssh-unmanaged-same-alias-data')
+      },
+      assetsDevcontainerDir
+    })
+    const alias = defaultSshAlias(context.workspaceBasename)
+    const unmanaged = [
+      `Host ${alias}`,
+      '  HostName manually-managed.example.test',
+      '  User deploy',
+      ''
+    ].join('\n')
+
+    assert.strictEqual(removeSshConfigBlock(unmanaged, alias), unmanaged)
+  })
+
+  test('refuses to rewrite overlapping managed SSH config blocks', async () => {
+    const workspace = tempDir('ssh-overlap-workspace')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('ssh-overlap-cache'),
+        BOXDOWN_DATA_HOME: tempDir('ssh-overlap-data')
+      },
+      assetsDevcontainerDir
+    })
+    const alias = defaultSshAlias(context.workspaceBasename)
+    const otherAlias = 'lirantaldotcom-devcontainer'
+    const block = buildSshConfigBlock(context, alias)
+    const sshConfigPath = join(tempDir('ssh-overlap-config'), 'config')
+    const overlapping = [
+      'Host github.com',
+      '  User git',
+      `# BEGIN ${alias} boxdown devcontainer ssh`,
+      `Host ${alias}`,
+      `# BEGIN ${otherAlias} boxdown devcontainer ssh`,
+      `Host ${otherAlias}`,
+      `# END ${alias} boxdown devcontainer ssh`,
+      `# END ${otherAlias} boxdown devcontainer ssh`,
+      ''
+    ].join('\n')
+
+    assert.throws(() => replaceSshConfigBlock(overlapping, alias, block), /overlapping/)
+    assert.throws(() => removeSshConfigBlock(overlapping, alias), /overlapping/)
+
+    writeFileSync(sshConfigPath, overlapping)
+    await assert.rejects(async () => installSshConfig(context, alias, { quiet: true, configPath: sshConfigPath }), /overlapping/)
+    assert.throws(() => uninstallSshConfig(alias, { quiet: true, configPath: sshConfigPath }), /overlapping/)
+    assert.strictEqual(readFileSync(sshConfigPath, 'utf8'), overlapping)
+  })
+
+  test('refuses mismatched managed SSH config marker variants', () => {
+    const workspace = tempDir('ssh-mismatched-marker-workspace')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('ssh-mismatched-marker-cache'),
+        BOXDOWN_DATA_HOME: tempDir('ssh-mismatched-marker-data')
+      },
+      assetsDevcontainerDir
+    })
+    const alias = defaultSshAlias(context.workspaceBasename)
+    const block = buildSshConfigBlock(context, alias)
+    const mismatched = [
+      `# BEGIN ${alias} boxdown devcontainer ssh`,
+      `Host ${alias}`,
+      `# END ${alias} devcontainer ssh`,
+      `# END ${alias} boxdown devcontainer ssh`,
+      ''
+    ].join('\n')
+
+    assert.throws(() => replaceSshConfigBlock(mismatched, alias, block), /overlapping/)
+    assert.throws(() => removeSshConfigBlock(mismatched, alias), /overlapping/)
+  })
+
   test('refuses to rewrite malformed managed SSH config blocks', async () => {
     const workspace = tempDir('ssh-malformed-workspace')
     const context = createWorkspaceContext({
@@ -3208,6 +3320,47 @@ describe('packaged assets', () => {
     assert.notStrictEqual(result.status, 0)
     assert.match(result.stderr, /without matching/)
     assert.strictEqual(readFileSync(configPath, 'utf8'), malformed)
+  })
+
+  test('legacy shell SSH installer refuses overlapping managed blocks', () => {
+    const stateDir = tempDir('legacy-ssh-installer-overlap-state')
+    const configPath = join(stateDir, 'config')
+    const keyPath = join(stateDir, 'id_ed25519')
+    const alias = 'legacy-demo-devcontainer'
+    const otherAlias = 'lirantaldotcom-devcontainer'
+    const overlapping = [
+      'Host github.com',
+      '  User git',
+      `# BEGIN ${alias} devcontainer ssh`,
+      `Host ${alias}`,
+      `# BEGIN ${otherAlias} boxdown devcontainer ssh`,
+      `Host ${otherAlias}`,
+      `# END ${alias} devcontainer ssh`,
+      `# END ${otherAlias} boxdown devcontainer ssh`,
+      ''
+    ].join('\n')
+
+    writeFileSync(configPath, overlapping)
+
+    const result = spawnSync('bash', [
+      join(assetsDevcontainerDir, 'ssh-config-install.sh'),
+      '--alias',
+      alias,
+      '--config',
+      configPath,
+      '--quiet'
+    ], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        DEVCONTAINER_SSH_KEY_DIR: stateDir,
+        DEVCONTAINER_SSH_KEY_PATH: keyPath
+      }
+    })
+
+    assert.notStrictEqual(result.status, 0)
+    assert.match(result.stderr, /overlapping/)
+    assert.strictEqual(readFileSync(configPath, 'utf8'), overlapping)
   })
 
   test('refreshes coding-agent CLIs from lifecycle hooks through updater utility', () => {
