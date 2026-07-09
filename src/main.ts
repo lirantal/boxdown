@@ -173,6 +173,10 @@ export function parseCliArgs (argv: string[]): ParsedCli {
   }
 
   function parsed (command: BoxdownCommand): ParsedCli {
+    if (details && json) {
+      throw new Error('--details cannot be combined with JSON output')
+    }
+
     if (json && command !== 'status' && command !== 'list') {
       throw new Error('--json is only supported with status and list')
     }
@@ -213,6 +217,10 @@ export function parseCliArgs (argv: string[]): ParsedCli {
   }
 
   function parsedCodingAgent (agent: CodingAgentCli): ParsedCli {
+    if (details && json) {
+      throw new Error('--details cannot be combined with JSON output')
+    }
+
     if (json) {
       throw new Error('--json is only supported with status and list')
     }
@@ -304,6 +312,20 @@ export function parseCliArgs (argv: string[]): ParsedCli {
     }
 
     if (arg === '--json') {
+      json = true
+      continue
+    }
+
+    if (arg === '--format') {
+      const value = args.shift()
+      if (value === undefined) {
+        throw new Error('--format requires a value')
+      }
+
+      if (value !== 'json') {
+        throw new Error(`Unsupported format: ${value}`)
+      }
+
       json = true
       continue
     }

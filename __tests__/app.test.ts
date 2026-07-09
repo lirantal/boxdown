@@ -510,6 +510,22 @@ describe('CLI parsing', () => {
       json: true,
       verbose: false
     })
+    assert.deepStrictEqual(parseCliArgs(['list', '--format', 'json']), {
+      command: 'list',
+      workspace: undefined,
+      alias: undefined,
+      recreate: false,
+      json: true,
+      verbose: false
+    })
+    assert.deepStrictEqual(parseCliArgs(['list', '--json', '--format', 'json']), {
+      command: 'list',
+      workspace: undefined,
+      alias: undefined,
+      recreate: false,
+      json: true,
+      verbose: false
+    })
     assert.deepStrictEqual(parseCliArgs(['list', '--details']), {
       command: 'list',
       workspace: undefined,
@@ -523,6 +539,14 @@ describe('CLI parsing', () => {
       command: 'status',
       workspace: '/tmp/project',
       alias: 'demo-devcontainer',
+      recreate: false,
+      json: true,
+      verbose: false
+    })
+    assert.deepStrictEqual(parseCliArgs(['status', '--workspace', '/tmp/project', '--format', 'json']), {
+      command: 'status',
+      workspace: '/tmp/project',
+      alias: undefined,
       recreate: false,
       json: true,
       verbose: false
@@ -583,7 +607,12 @@ describe('CLI parsing', () => {
     assert.throws(() => parseCliArgs(['start', '--details']), /--details is only supported with list/)
     assert.throws(() => parseCliArgs(['start', '--apply']), /Unknown option: --apply/)
     assert.throws(() => parseCliArgs(['start', '--', '--ignored']), /passthrough is only supported/)
+    assert.throws(() => parseCliArgs(['list', '--details', '--json']), /--details cannot be combined with JSON output/)
+    assert.throws(() => parseCliArgs(['list', '--details', '--format', 'json']), /--details cannot be combined with JSON output/)
+    assert.throws(() => parseCliArgs(['list', '--format']), /--format requires a value/)
+    assert.throws(() => parseCliArgs(['list', '--format', 'yaml']), /Unsupported format: yaml/)
     assert.throws(() => parseCliArgs(['setup', '--json']), /--json is only supported with status and list/)
+    assert.throws(() => parseCliArgs(['purge', '--format', 'json']), /--json is only supported with status and list/)
     assert.throws(() => parseCliArgs(['setup', '--port', '3030']), /--port is only supported with tunnel/)
     assert.throws(() => parseCliArgs(['setup', '--workspace', '/tmp/a', '--workspace', '/tmp/b']), /--workspace can only be repeated with down/)
     assert.throws(() => parseCliArgs(['setup', '--', '--ignored']), /passthrough is only supported/)
