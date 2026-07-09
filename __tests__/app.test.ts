@@ -219,6 +219,20 @@ function fakePromptStreams (options: { rawMode?: boolean } = {}): {
   }
 }
 
+async function waitForPromptOutput (outputText: () => string, pattern: RegExp): Promise<void> {
+  const deadline = Date.now() + 1000
+
+  while (Date.now() < deadline) {
+    if (pattern.test(outputText())) {
+      return
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 5))
+  }
+
+  assert.match(outputText(), pattern)
+}
+
 async function withProcessEnv<T> (overrides: Record<string, string>, run: () => Promise<T>): Promise<T> {
   const previous = new Map<string, string | undefined>()
 
@@ -1697,6 +1711,307 @@ describe('CLI execution', () => {
     assert.match(result.stderr, /Workspace selector is ambiguous: same-repo/)
     assert.match(result.stderr, /first-same-repo-devcontainer/)
     assert.match(result.stderr, /second-same-repo-devcontainer/)
+  })
+
+  test('purge from a tracked cwd keeps single-workspace confirmation', async () => {
+    const workspace = tempDir('purge-tracked-cwd-workspace')
+    const env = {
+      HOME: tempDir('purge-tracked-cwd-home'),
+      BOXDOWN_CACHE_HOME: tempDir('purge-tracked-cwd-cache'),
+      BOXDOWN_DATA_HOME: tempDir('purge-tracked-cwd-data'),
+      BOXDOWN_SSH_CONFIG: join(tempDir('purge-tracked-cwd-ssh'), 'config'),
+      BOXDOWN_CODEX_APP_CONFIG: join(tempDir('purge-tracked-cwd-codex-app'), 'config.json'),
+      BOXDOWN_CODEX_GLOBAL_STATE: join(tempDir('purge-tracked-cwd-codex-state'), '.codex-global-state.json')
+    }
+    const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+    const { input, output, outputText } = fakePromptStreams()
+
+    mkdirSync(context.workspaceCacheDir, { recursive: true })
+    writeWorkspaceMetadata(context, defaultSshAlias(context.workspaceBasename))
+
+    await withFakeDocker([
+      { workspace, id: 'purge-tracked-cwd-container' }
+    ], async (logPath, dockerEnv) => {
+      const codePromise = withProcessEnv({
+        ...dockerEnv,
+        ...env
+      }, async () => withCwd(workspace, async () => runCli(['purge'], {
+        promptInput: input,
+        promptOutput: output,
+        env: { ...process.env, CI: 'false' }
+      })))
+
+      await waitForPromptOutput(outputText, /Purge Boxdown workspace\?/)
+      input.write('\u001B[C')
+      input.write('\r')
+
+      const code = await codePromise
+      const calls = fakeDockerCalls(logPath)
+
+      assert.strictEqual(code, 0)
+      assert.doesNotMatch(outputText(), /Purge Boxdown workspaces\?/)
+      assert.ok(calls.includes('rm -f -v purge-tracked-cwd-container'))
+      assert.strictEqual(existsSync(context.workspaceCacheDir), false)
+      assert.strictEqual(existsSync(context.workspaceDataDir), false)
+    })
+  })
+
+  test('prompts for purge workspaces from an untracked cwd including missing entries', async () => {
+    const root = tempDir('purge-batch-root')
+    const alpha = join(root, 'alpha')
+    const beta = join(root, 'beta')
+    const missing = join(root, 'missing')
+    const unknown = tempDir('purge-batch-unknown-cwd')
+    const env = {
+      HOME: tempDir('purge-batch-home'),
+      BOXDOWN_CACHE_HOME: tempDir('purge-batch-cache'),
+      BOXDOWN_DATA_HOME: tempDir('purge-batch-data'),
+      BOXDOWN_SSH_CONFIG: join(tempDir('purge-batch-ssh'), 'config'),
+      BOXDOWN_CODEX_APP_CONFIG: join(tempDir('purge-batch-codex-app'), 'config.json'),
+      BOXDOWN_CODEX_GLOBAL_STATE: join(tempDir('purge-batch-codex-state'), '.codex-global-state.json')
+    }
+
+    mkdirSync(alpha)
+    mkdirSync(beta)
+    mkdirSync(missing)
+
+    const alphaContext = createWorkspaceContext({ workspace: alpha, env, assetsDevcontainerDir })
+    const betaContext = createWorkspaceContext({ workspace: beta, env, assetsDevcontainerDir })
+    const missingContext = createWorkspaceContext({ workspace: missing, env, assetsDevcontainerDir })
+    const { input, output, outputText } = fakePromptStreams()
+
+    mkdirSync(alphaContext.workspaceCacheDir, { recursive: true })
+    mkdirSync(betaContext.workspaceCacheDir, { recursive: true })
+    mkdirSync(missingContext.workspaceCacheDir, { recursive: true })
+    writeWorkspaceMetadata(alphaContext, defaultSshAlias(alphaContext.workspaceBasename))
+    writeWorkspaceMetadata(betaContext, defaultSshAlias(betaContext.workspaceBasename))
+    writeWorkspaceMetadata(missingContext, defaultSshAlias(missingContext.workspaceBasename))
+    rmSync(missing, { recursive: true, force: true })
+
+    await withFakeDocker([
+      { workspace: beta, id: 'purge-batch-beta-container' }
+    ], async (logPath, dockerEnv) => {
+      const codePromise = withProcessEnv({
+        ...dockerEnv,
+        ...env
+      }, async () => withCwd(unknown, async () => runCli(['purge'], {
+        promptInput: input,
+        promptOutput: output,
+        env: { ...process.env, CI: 'false' }
+      })))
+
+      await waitForPromptOutput(outputText, /Purge Boxdown workspaces\?/)
+      assert.match(outputText(), /missing.*missing-devcontainer/s)
+
+      input.write('\u001B[A')
+      input.write(' ')
+      input.write('\u001B[A')
+      input.write(' ')
+      input.write('\r')
+      await waitForPromptOutput(outputText, /Purge selected Boxdown workspaces\?/)
+      input.write('\u001B[C')
+      input.write('\r')
+
+      const code = await codePromise
+      const calls = fakeDockerCalls(logPath)
+
+      assert.strictEqual(code, 0)
+      assert.ok(calls.includes('rm -f -v purge-batch-beta-container'))
+      assert.strictEqual(existsSync(alphaContext.workspaceCacheDir), true)
+      assert.strictEqual(existsSync(alphaContext.workspaceDataDir), true)
+      assert.strictEqual(existsSync(betaContext.workspaceCacheDir), false)
+      assert.strictEqual(existsSync(betaContext.workspaceDataDir), false)
+      assert.strictEqual(existsSync(missingContext.workspaceCacheDir), false)
+      assert.strictEqual(existsSync(missingContext.workspaceDataDir), false)
+    })
+  })
+
+  test('cancels prompted batch purge before selecting workspaces', async () => {
+    const workspace = tempDir('purge-batch-select-cancel-workspace')
+    const unknown = tempDir('purge-batch-select-cancel-cwd')
+    const env = {
+      HOME: tempDir('purge-batch-select-cancel-home'),
+      BOXDOWN_CACHE_HOME: tempDir('purge-batch-select-cancel-cache'),
+      BOXDOWN_DATA_HOME: tempDir('purge-batch-select-cancel-data'),
+      BOXDOWN_SSH_CONFIG: join(tempDir('purge-batch-select-cancel-ssh'), 'config'),
+      BOXDOWN_CODEX_APP_CONFIG: join(tempDir('purge-batch-select-cancel-codex-app'), 'config.json'),
+      BOXDOWN_CODEX_GLOBAL_STATE: join(tempDir('purge-batch-select-cancel-codex-state'), '.codex-global-state.json')
+    }
+    const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+    const { input, output, outputText } = fakePromptStreams()
+
+    mkdirSync(context.workspaceCacheDir, { recursive: true })
+    writeWorkspaceMetadata(context, defaultSshAlias(context.workspaceBasename))
+
+    await withFakeDocker([
+      { workspace, id: 'purge-batch-select-cancel-container' }
+    ], async (logPath, dockerEnv) => {
+      const codePromise = withProcessEnv({
+        ...dockerEnv,
+        ...env
+      }, async () => withCwd(unknown, async () => runCli(['purge'], {
+        promptInput: input,
+        promptOutput: output,
+        env: { ...process.env, CI: 'false' }
+      })))
+
+      await waitForPromptOutput(outputText, /Purge Boxdown workspaces\?/)
+      input.write('\r')
+
+      const code = await codePromise
+      const calls = fakeDockerCalls(logPath)
+
+      assert.strictEqual(code, 1)
+      assert.ok(!calls.some((line) => line.startsWith('rm -f')))
+      assert.strictEqual(existsSync(context.workspaceCacheDir), true)
+      assert.strictEqual(existsSync(context.workspaceDataDir), true)
+    })
+  })
+
+  test('cancels prompted batch purge at confirmation', async () => {
+    const workspace = tempDir('purge-batch-confirm-cancel-workspace')
+    const unknown = tempDir('purge-batch-confirm-cancel-cwd')
+    const env = {
+      HOME: tempDir('purge-batch-confirm-cancel-home'),
+      BOXDOWN_CACHE_HOME: tempDir('purge-batch-confirm-cancel-cache'),
+      BOXDOWN_DATA_HOME: tempDir('purge-batch-confirm-cancel-data'),
+      BOXDOWN_SSH_CONFIG: join(tempDir('purge-batch-confirm-cancel-ssh'), 'config'),
+      BOXDOWN_CODEX_APP_CONFIG: join(tempDir('purge-batch-confirm-cancel-codex-app'), 'config.json'),
+      BOXDOWN_CODEX_GLOBAL_STATE: join(tempDir('purge-batch-confirm-cancel-codex-state'), '.codex-global-state.json')
+    }
+    const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+    const { input, output, outputText } = fakePromptStreams()
+
+    mkdirSync(context.workspaceCacheDir, { recursive: true })
+    writeWorkspaceMetadata(context, defaultSshAlias(context.workspaceBasename))
+
+    await withFakeDocker([
+      { workspace, id: 'purge-batch-confirm-cancel-container' }
+    ], async (logPath, dockerEnv) => {
+      const codePromise = withProcessEnv({
+        ...dockerEnv,
+        ...env
+      }, async () => withCwd(unknown, async () => runCli(['purge'], {
+        promptInput: input,
+        promptOutput: output,
+        env: { ...process.env, CI: 'false' }
+      })))
+
+      await waitForPromptOutput(outputText, /Purge Boxdown workspaces\?/)
+      input.write('\u001B[A')
+      input.write(' ')
+      input.write('\r')
+      await waitForPromptOutput(outputText, /Purge selected Boxdown workspaces\?/)
+      input.write('\r')
+
+      const code = await codePromise
+      const calls = fakeDockerCalls(logPath)
+
+      assert.strictEqual(code, 1)
+      assert.ok(!calls.some((line) => line.startsWith('rm -f')))
+      assert.strictEqual(existsSync(context.workspaceCacheDir), true)
+      assert.strictEqual(existsSync(context.workspaceDataDir), true)
+    })
+  })
+
+  test('batch purge continues after one selected workspace fails', async () => {
+    const root = tempDir('purge-batch-failure-root')
+    const alpha = join(root, 'alpha')
+    const beta = join(root, 'beta')
+    const unknown = tempDir('purge-batch-failure-cwd')
+    const env = {
+      HOME: tempDir('purge-batch-failure-home'),
+      BOXDOWN_CACHE_HOME: tempDir('purge-batch-failure-cache'),
+      BOXDOWN_DATA_HOME: tempDir('purge-batch-failure-data'),
+      BOXDOWN_SSH_CONFIG: join(tempDir('purge-batch-failure-ssh'), 'config'),
+      BOXDOWN_CODEX_APP_CONFIG: join(tempDir('purge-batch-failure-codex-app'), 'config.json'),
+      BOXDOWN_CODEX_GLOBAL_STATE: join(tempDir('purge-batch-failure-codex-state'), '.codex-global-state.json')
+    }
+
+    mkdirSync(alpha)
+    mkdirSync(beta)
+
+    const alphaContext = createWorkspaceContext({ workspace: alpha, env, assetsDevcontainerDir })
+    const betaContext = createWorkspaceContext({ workspace: beta, env, assetsDevcontainerDir })
+    const { input, output, outputText } = fakePromptStreams()
+
+    mkdirSync(alphaContext.workspaceCacheDir, { recursive: true })
+    mkdirSync(betaContext.workspaceCacheDir, { recursive: true })
+    writeWorkspaceMetadata(alphaContext, defaultSshAlias(alphaContext.workspaceBasename))
+    writeWorkspaceMetadata(betaContext, defaultSshAlias(betaContext.workspaceBasename))
+
+    await withFakeDocker([
+      { workspace: alpha, id: 'purge-batch-alpha-container', removeExitCode: 37 },
+      { workspace: beta, id: 'purge-batch-beta-container' }
+    ], async (logPath, dockerEnv) => {
+      const codePromise = withProcessEnv({
+        ...dockerEnv,
+        ...env
+      }, async () => withCwd(unknown, async () => runCli(['purge'], {
+        promptInput: input,
+        promptOutput: output,
+        env: { ...process.env, CI: 'false' }
+      })))
+
+      await waitForPromptOutput(outputText, /Purge Boxdown workspaces\?/)
+      input.write('\u001B[A')
+      input.write(' ')
+      input.write('\u001B[A')
+      input.write(' ')
+      input.write('\r')
+      await waitForPromptOutput(outputText, /Purge selected Boxdown workspaces\?/)
+      input.write('\u001B[C')
+      input.write('\r')
+
+      const code = await codePromise
+      const calls = fakeDockerCalls(logPath)
+
+      assert.strictEqual(code, 1)
+      assert.ok(calls.includes('rm -f -v purge-batch-alpha-container'))
+      assert.ok(calls.includes('rm -f -v purge-batch-beta-container'))
+      assert.strictEqual(existsSync(alphaContext.workspaceCacheDir), false)
+      assert.strictEqual(existsSync(alphaContext.workspaceDataDir), false)
+      assert.strictEqual(existsSync(betaContext.workspaceCacheDir), false)
+      assert.strictEqual(existsSync(betaContext.workspaceDataDir), false)
+    })
+  })
+
+  test('non-interactive purge from an untracked cwd fails safely', async () => {
+    const workspace = tempDir('purge-noninteractive-known-workspace')
+    const unknown = tempDir('purge-noninteractive-unknown-cwd')
+    const env = {
+      HOME: tempDir('purge-noninteractive-home'),
+      BOXDOWN_CACHE_HOME: tempDir('purge-noninteractive-cache'),
+      BOXDOWN_DATA_HOME: tempDir('purge-noninteractive-data'),
+      BOXDOWN_SSH_CONFIG: join(tempDir('purge-noninteractive-ssh'), 'config'),
+      BOXDOWN_CODEX_APP_CONFIG: join(tempDir('purge-noninteractive-codex-app'), 'config.json'),
+      BOXDOWN_CODEX_GLOBAL_STATE: join(tempDir('purge-noninteractive-codex-state'), '.codex-global-state.json')
+    }
+    const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+
+    mkdirSync(context.workspaceCacheDir, { recursive: true })
+    writeWorkspaceMetadata(context, defaultSshAlias(context.workspaceBasename))
+
+    await withFakeDocker([
+      { workspace, id: 'purge-noninteractive-container' }
+    ], async (logPath, dockerEnv) => {
+      let code = 1
+
+      await withProcessEnv({
+        ...dockerEnv,
+        ...env
+      }, async () => {
+        code = await withCwd(unknown, async () => runCli(['purge'], {
+          env: { ...process.env, CI: 'true' }
+        }))
+      })
+      const calls = fakeDockerCalls(logPath)
+
+      assert.strictEqual(code, 1)
+      assert.deepStrictEqual(calls, [])
+      assert.strictEqual(existsSync(context.workspaceCacheDir), true)
+      assert.strictEqual(existsSync(context.workspaceDataDir), true)
+    })
   })
 
   test('purge continues after Docker cleanup failures and exits nonzero', async () => {
