@@ -72,14 +72,14 @@ The Codex app config is written to:
 
 `BOXDOWN_CODEX_APP_CONFIG` overrides this path for tests and local development.
 
-The generated Codex entry points at the container-side project symlink:
+The generated Codex entry points at the canonical container workspace path:
 
 ```json
 {
   "sshAlias": "<repo-name>-devcontainer",
   "projects": [
     {
-      "remotePath": "/home/node/<repo-name>",
+      "remotePath": "/workspaces/<repo-name>",
       "label": "<repo-name>"
     }
   ]
@@ -87,13 +87,31 @@ The generated Codex entry points at the container-side project symlink:
 ```
 
 Boxdown merges by SSH alias and normalized remote path, so repeated installs
-update the existing Codex project instead of duplicating it. Existing known
-Codex config keys are preserved, but unknown keys are not written back because
+update the existing Codex project instead of duplicating it. If an older
+Boxdown install registered `/home/node/<repo-name>`, the next Codex target
+install migrates that entry to `/workspaces/<repo-name>`. Existing known Codex
+config keys are preserved, but unknown keys are not written back because
 Codex's app config parser is strict.
 
-Boxdown does not edit `~/.codex/.codex-global-state.json`. Restart Codex after
-installing the target so Codex applies the app config, discovers the SSH alias
-from normal OpenSSH config, and creates or updates its sidebar project entry.
+Boxdown normalizes matching Codex sidebar state for the same SSH alias when it
+installs the Codex target. Restart Codex after installing the target so Codex
+applies the app config, discovers the SSH alias from normal OpenSSH config, and
+creates or updates its sidebar project entry.
+
+If an existing remote project shows no chats because old thread state was split
+between `/home/node/<repo-name>` and `/workspaces/<repo-name>`, inspect it with:
+
+```bash
+boxdown codex repair --workspace /path/to/repo
+```
+
+After reviewing the dry-run output, repair the remote Codex state with:
+
+```bash
+boxdown codex repair --workspace /path/to/repo --apply
+```
+
+The repair command backs up matching remote Codex files before changing them.
 
 ## Claude App Target
 

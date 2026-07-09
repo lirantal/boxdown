@@ -1,6 +1,6 @@
 import assert from 'node:assert'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readlinkSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { PassThrough } from 'node:stream'
@@ -8,7 +8,8 @@ import { fileURLToPath } from 'node:url'
 import { describe, test } from 'node:test'
 
 import { claudeSshConfigEntryForWorkspace, defaultClaudeSshConfigsPath, installClaudeSshConfigHost, mergeClaudeSshConfigHost, parseClaudeSshConfigs, removeClaudeSshConfigHost, uninstallClaudeSshConfigHost } from '../src/claude-app-config.ts'
-import { codexDiscoveredRemoteHostId, codexProjectEntryForWorkspace, defaultCodexAppConfigPath, defaultCodexGlobalStatePath, installCodexAppConfigProject, mergeCodexAppProject, parseCodexAppConfig, removeCodexAppProject, removeCodexGlobalStateProject, uninstallCodexAppConfigProject, uninstallCodexGlobalStateProject } from '../src/codex-app-config.ts'
+import { canonicalCodexRemotePathForWorkspace, codexDiscoveredRemoteHostId, codexProjectEntryForWorkspace, defaultCodexAppConfigPath, defaultCodexGlobalStatePath, installCodexAppConfigProject, installCodexGlobalStateProject, legacyCodexRemotePathForWorkspace, mergeCodexAppProject, normalizeCodexGlobalStateProject, parseCodexAppConfig, removeCodexAppProject, removeCodexGlobalStateProject, uninstallCodexAppConfigProject, uninstallCodexGlobalStateProject } from '../src/codex-app-config.ts'
+import { buildCodexRepairScript } from '../src/codex-repair.ts'
 import { codingAgentBinary, codingAgentFromCommand } from '../src/coding-agents.ts'
 import { buildGeneratedDevcontainerConfig, publishContainerPortFromConfig } from '../src/config.ts'
 import { BOXDOWN_CONTAINER_AGENTS_DIR, BOXDOWN_CONTAINER_CODEX_AUTH_PATH, BOXDOWN_CONTAINER_CODEX_DIR, BOXDOWN_CONTAINER_GITCONFIG_PATH, BOXDOWN_CONTAINER_HOST_GITCONFIG_DIR, DEVCONTAINER_CLI_VERSION } from '../src/constants.ts'
@@ -540,6 +541,27 @@ describe('CLI parsing', () => {
     assert.throws(() => parseCliArgs(['purge', '--workspace', '/tmp/a', '--workspace', '/tmp/b']), /--workspace can only be repeated with down/)
   })
 
+  test('parses Codex repair command', () => {
+    assert.deepStrictEqual(parseCliArgs(['codex', 'repair']), {
+      command: 'codex-repair',
+      workspace: undefined,
+      alias: undefined,
+      codexRepairApply: false,
+      recreate: false,
+      json: false,
+      verbose: false
+    })
+    assert.deepStrictEqual(parseCliArgs(['codex', 'repair', '--apply']), {
+      command: 'codex-repair',
+      workspace: undefined,
+      alias: undefined,
+      codexRepairApply: true,
+      recreate: false,
+      json: false,
+      verbose: false
+    })
+  })
+
   test('rejects unknown commands', () => {
     assert.throws(() => parseCliArgs(['ssh-config']), /Unknown command: ssh-config/)
     assert.throws(() => parseCliArgs(['ssh-config', 'install']), /Unknown command: ssh-config install/)
@@ -553,6 +575,8 @@ describe('CLI parsing', () => {
     assert.throws(() => parseCliArgs(['start', '--port', '3030']), /--port is only supported with tunnel/)
     assert.throws(() => parseCliArgs(['codex', '--target', 'codex']), /--target is only supported with setup and ssh install/)
     assert.throws(() => parseCliArgs(['codex', '--port', '3030']), /--port is only supported with tunnel/)
+    assert.throws(() => parseCliArgs(['codex', 'repair', '--dry-run', '--apply']), /--dry-run and --apply cannot be combined/)
+    assert.throws(() => parseCliArgs(['start', '--dry-run']), /--dry-run and --apply are only supported with codex repair/)
     assert.throws(() => parseCliArgs(['start', '--', '--ignored']), /passthrough is only supported/)
     assert.throws(() => parseCliArgs(['setup', '--json']), /--json is only supported with status and list/)
     assert.throws(() => parseCliArgs(['setup', '--port', '3030']), /--port is only supported with tunnel/)
@@ -2721,9 +2745,11 @@ describe('Codex app config injection', () => {
 
     assert.strictEqual(defaultCodexAppConfigPath({ HOME: home }), join(home, '.codex', 'codex-app', 'config.json'))
     assert.strictEqual(defaultCodexAppConfigPath({ HOME: home, BOXDOWN_CODEX_APP_CONFIG: '/tmp/codex.json' }), '/tmp/codex.json')
+    assert.strictEqual(canonicalCodexRemotePathForWorkspace(context), `/workspaces/${context.workspaceBasename}`)
+    assert.strictEqual(legacyCodexRemotePathForWorkspace(context), `/home/node/${context.workspaceBasename}`)
     assert.deepStrictEqual(codexProjectEntryForWorkspace(context, 'demo-devcontainer'), {
       sshAlias: 'demo-devcontainer',
-      remotePath: `/home/node/${context.workspaceBasename}`,
+      remotePath: `/workspaces/${context.workspaceBasename}`,
       label: context.workspaceBasename
     })
   })
@@ -2790,6 +2816,48 @@ describe('Codex app config injection', () => {
         }
       ]
     })
+  })
+
+  test('canonicalizes legacy Codex app projects during install', () => {
+    const config = parseCodexAppConfig({
+      version: 1,
+      remoteConnections: [
+        {
+          sshAlias: 'demo-devcontainer',
+          projects: [
+            {
+              remotePath: '/home/node/demo/',
+              label: 'Old demo'
+            },
+            {
+              remotePath: '/workspaces/demo',
+              label: 'Duplicate demo'
+            },
+            {
+              remotePath: '/home/node/other',
+              label: 'Other'
+            }
+          ]
+        }
+      ]
+    })
+
+    assert.deepStrictEqual(mergeCodexAppProject(config, {
+      sshAlias: 'demo-devcontainer',
+      remotePath: '/workspaces/demo',
+      label: 'Demo'
+    }, {
+      legacyRemotePaths: ['/home/node/demo']
+    }).remoteConnections[0]?.projects, [
+      {
+        remotePath: '/workspaces/demo',
+        label: 'Demo'
+      },
+      {
+        remotePath: '/home/node/other',
+        label: 'Other'
+      }
+    ])
   })
 
   test('removes by SSH alias and normalized remote path', () => {
@@ -3059,6 +3127,49 @@ describe('Codex app config injection', () => {
     })
   })
 
+  test('uninstalls canonical and legacy Codex project config entries together', () => {
+    const config = parseCodexAppConfig({
+      version: 1,
+      remoteConnections: [
+        {
+          sshAlias: 'demo-devcontainer',
+          projects: [
+            {
+              remotePath: '/workspaces/demo',
+              label: 'Demo'
+            },
+            {
+              remotePath: '/home/node/demo',
+              label: 'Legacy demo'
+            },
+            {
+              remotePath: '/home/node/other',
+              label: 'Other'
+            }
+          ]
+        }
+      ]
+    })
+
+    assert.deepStrictEqual(removeCodexAppProject(config, {
+      sshAlias: 'demo-devcontainer',
+      remotePath: '/workspaces/demo',
+      label: 'Demo'
+    }, {
+      additionalRemotePaths: ['/home/node/demo']
+    }).remoteConnections, [
+      {
+        sshAlias: 'demo-devcontainer',
+        projects: [
+          {
+            remotePath: '/home/node/other',
+            label: 'Other'
+          }
+        ]
+      }
+    ])
+  })
+
   test('uninstalls matching Codex global sidebar state and writes a backup', () => {
     const statePath = join(tempDir('codex-state-uninstall'), '.codex-global-state.json')
     const entry = {
@@ -3171,6 +3282,80 @@ describe('Codex app config injection', () => {
     })
   })
 
+  test('canonicalizes matching Codex global sidebar state and preserves project identity', () => {
+    const statePath = join(tempDir('codex-state-normalize'), '.codex-global-state.json')
+    const entry = {
+      sshAlias: 'demo-devcontainer',
+      remotePath: '/workspaces/demo',
+      label: 'Demo'
+    }
+    const hostId = codexDiscoveredRemoteHostId(entry.sshAlias)
+    const otherHostId = codexDiscoveredRemoteHostId('other-devcontainer')
+    const state = {
+      'project-order': ['demo-project-id', 'duplicate-project-id', 'other-project-id'],
+      'sidebar-collapsed-groups': {
+        'demo-project-id': true,
+        'duplicate-project-id': true,
+        'other-project-id': true
+      },
+      'remote-projects': [
+        {
+          id: 'demo-project-id',
+          hostId,
+          remotePath: '/home/node/demo',
+          label: 'Demo'
+        },
+        {
+          id: 'duplicate-project-id',
+          hostId,
+          remotePath: '/workspaces/demo',
+          label: 'Duplicate Demo'
+        },
+        {
+          id: 'other-project-id',
+          hostId: otherHostId,
+          remotePath: '/home/node/demo',
+          label: 'Other'
+        }
+      ]
+    }
+
+    writeFileSync(statePath, `${JSON.stringify(state)}\n`)
+
+    const pure = normalizeCodexGlobalStateProject(state, entry, {
+      legacyRemotePaths: ['/home/node/demo']
+    })
+    const result = installCodexGlobalStateProject(entry, {
+      statePath,
+      legacyRemotePaths: ['/home/node/demo'],
+      now: new Date('2026-01-01T00:00:00.000Z')
+    })
+    const nextState = JSON.parse(readFileSync(statePath, 'utf8'))
+
+    assert.deepStrictEqual(pure, nextState)
+    assert.strictEqual(result.changed, true)
+    assert.strictEqual(result.backupPath, `${statePath}.2026-01-01T00-00-00-000Z.bak`)
+    assert.deepStrictEqual(nextState['remote-projects'], [
+      {
+        id: 'demo-project-id',
+        hostId,
+        remotePath: '/workspaces/demo',
+        label: 'Demo'
+      },
+      {
+        id: 'other-project-id',
+        hostId: otherHostId,
+        remotePath: '/home/node/demo',
+        label: 'Other'
+      }
+    ])
+    assert.deepStrictEqual(nextState['project-order'], ['demo-project-id', 'other-project-id'])
+    assert.deepStrictEqual(nextState['sidebar-collapsed-groups'], {
+      'demo-project-id': true,
+      'other-project-id': true
+    })
+  })
+
   test('fails without rewriting invalid or unsupported Codex app configs', () => {
     const invalidJsonPath = join(tempDir('codex-invalid-json'), 'config.json')
     writeFileSync(invalidJsonPath, '{ invalid json')
@@ -3220,9 +3405,119 @@ describe('Codex app config injection', () => {
     assert.strictEqual(codexConfig.remoteConnections[0]?.sshAlias, alias)
     assert.strictEqual(codexConfig.remoteConnections[0]?.projects.length, 1)
     assert.deepStrictEqual(codexConfig.remoteConnections[0]?.projects[0], {
-      remotePath: `/home/node/${context.workspaceBasename}`,
+      remotePath: `/workspaces/${context.workspaceBasename}`,
       label: context.workspaceBasename
     })
+  })
+})
+
+describe('Codex path repair', () => {
+  function python3Available (): boolean {
+    try {
+      execFileSync('python3', ['--version'])
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  function runRepairPython (script: string): Record<string, unknown> {
+    return JSON.parse(execFileSync('python3', ['-c', script]).toString('utf8')) as Record<string, unknown>
+  }
+
+  function queryRepairSqliteCounts (databasePath: string, legacyPath: string, canonicalPath: string): Record<string, number> {
+    const script = [
+      'import json, sqlite3, sys',
+      'database_path, legacy_path, canonical_path = sys.argv[1:4]',
+      'con = sqlite3.connect(database_path)',
+      'rows = dict(con.execute("select cwd, count(*) from threads where cwd in (?, ?) group by cwd", (legacy_path, canonical_path)))',
+      'print(json.dumps({legacy_path: rows.get(legacy_path, 0), canonical_path: rows.get(canonical_path, 0)}))'
+    ].join('\n')
+
+    return JSON.parse(execFileSync('python3', ['-c', script, databasePath, legacyPath, canonicalPath]).toString('utf8')) as Record<string, number>
+  }
+
+  test('dry-runs and applies remote Codex path repair with backups', () => {
+    if (!python3Available()) {
+      return
+    }
+
+    const root = tempDir('codex-repair')
+    const context = createWorkspaceContext({
+      workspace: tempDir('codex-repair-workspace'),
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('codex-repair-cache'),
+        BOXDOWN_DATA_HOME: tempDir('codex-repair-data')
+      },
+      assetsDevcontainerDir
+    })
+    const canonicalPathInput = join(root, 'workspaces', 'demo')
+    const legacyPath = join(root, 'home', 'node', 'demo')
+    const codexHome = join(root, '.codex')
+    const databasePath = join(codexHome, 'state_5.sqlite')
+    const sessionIndexPath = join(codexHome, 'session_index.jsonl')
+    const configPath = join(codexHome, 'config.toml')
+
+    mkdirSync(canonicalPathInput, { recursive: true })
+    mkdirSync(join(root, 'home', 'node'), { recursive: true })
+    mkdirSync(codexHome, { recursive: true })
+    const canonicalPath = realpathSync(canonicalPathInput)
+    symlinkSync(canonicalPath, legacyPath, 'dir')
+
+    const createSqlite = [
+      'import sqlite3, sys',
+      'database_path, legacy_path, canonical_path = sys.argv[1:4]',
+      'con = sqlite3.connect(database_path)',
+      'con.execute("create table threads (cwd text not null)")',
+      'con.executemany("insert into threads (cwd) values (?)", [(legacy_path,), (canonical_path,), ("/elsewhere",)])',
+      'con.commit()'
+    ].join('\n')
+    execFileSync('python3', ['-c', createSqlite, databasePath, legacyPath, canonicalPath])
+    writeFileSync(sessionIndexPath, `{"cwd":${JSON.stringify(legacyPath)}}\n`)
+    writeFileSync(configPath, [
+      `[projects.${JSON.stringify(canonicalPath)}]`,
+      'trust_level = "trusted"',
+      '',
+      `[projects.${JSON.stringify(legacyPath)}]`,
+      'trust_level = "trusted"',
+      ''
+    ].join('\n'))
+
+    const dryRun = runRepairPython(buildCodexRepairScript(context, {
+      legacyPath,
+      canonicalPath,
+      codexHome,
+      now: new Date('2026-01-01T00:00:00.000Z')
+    }))
+
+    assert.strictEqual(dryRun.ok, true)
+    assert.strictEqual(dryRun.mode, 'dry-run')
+    assert.deepStrictEqual(queryRepairSqliteCounts(databasePath, legacyPath, canonicalPath), {
+      [legacyPath]: 1,
+      [canonicalPath]: 1
+    })
+    assert.strictEqual(readFileSync(sessionIndexPath, 'utf8').includes(legacyPath), true)
+
+    const apply = runRepairPython(buildCodexRepairScript(context, {
+      apply: true,
+      legacyPath,
+      canonicalPath,
+      codexHome,
+      now: new Date('2026-01-01T00:00:00.000Z')
+    }))
+
+    assert.strictEqual(apply.ok, true)
+    assert.strictEqual(apply.mode, 'apply')
+    assert.deepStrictEqual(queryRepairSqliteCounts(databasePath, legacyPath, canonicalPath), {
+      [legacyPath]: 0,
+      [canonicalPath]: 2
+    })
+    assert.strictEqual(readFileSync(sessionIndexPath, 'utf8').includes(legacyPath), false)
+    assert.strictEqual(readFileSync(sessionIndexPath, 'utf8').includes(canonicalPath), true)
+    assert.strictEqual(readFileSync(configPath, 'utf8').includes(legacyPath), false)
+    assert.strictEqual(existsSync(join(codexHome, 'backups', 'boxdown-codex-path-repair', '20260101T000000Z', 'state_5.sqlite')), true)
+    assert.strictEqual(existsSync(join(codexHome, 'backups', 'boxdown-codex-path-repair', '20260101T000000Z', 'session_index.jsonl')), true)
+    assert.strictEqual(existsSync(join(codexHome, 'backups', 'boxdown-codex-path-repair', '20260101T000000Z', 'config.toml')), true)
   })
 })
 

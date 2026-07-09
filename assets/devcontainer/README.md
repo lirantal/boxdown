@@ -127,7 +127,7 @@ Then use the same host alias in Cursor, Claude, or any other SSH client:
 - **SSH Host:** `<repo-name>-devcontainer`
 - **SSH Port:** leave empty
 - **Identity File:** leave empty if the client reads `~/.ssh/config`; otherwise use `.devcontainer/.ssh/id_ed25519`
-- **Remote Folder:** select `<repo-name>` from the default home folder, or enter `/workspaces/<repo-name>`
+- **Remote Folder:** enter `/workspaces/<repo-name>`
 
 To customize the alias, run:
 
@@ -153,7 +153,7 @@ Use the generated host alias when configuring the agent:
 - **SSH Host:** `<repo-name>-devcontainer`
 - **SSH Port:** leave empty
 - **Identity File:** leave empty if the agent honors `~/.ssh/config`; otherwise use `.devcontainer/.ssh/id_ed25519`
-- **Remote Folder:** select `<repo-name>` from the default home folder, or enter `/workspaces/<repo-name>`
+- **Remote Folder:** enter `/workspaces/<repo-name>`
 
 `start.sh` has two modes:
 

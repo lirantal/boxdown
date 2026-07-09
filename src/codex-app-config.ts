@@ -50,6 +50,12 @@ export interface UninstallCodexGlobalStateResult {
   changed: boolean
 }
 
+export interface InstallCodexGlobalStateResult {
+  statePath: string
+  backupPath?: string
+  changed: boolean
+}
+
 function isRecord (value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
@@ -152,8 +158,16 @@ export function defaultCodexGlobalStatePath (env: NodeJS.ProcessEnv = process.en
   return env.BOXDOWN_CODEX_GLOBAL_STATE ?? join(env.HOME ?? homedir(), '.codex', CODEX_GLOBAL_STATE_FILENAME)
 }
 
-export function codexRemotePathForWorkspace (context: WorkspaceContext): string {
+export function canonicalCodexRemotePathForWorkspace (context: WorkspaceContext): string {
+  return `/workspaces/${context.workspaceBasename}`
+}
+
+export function legacyCodexRemotePathForWorkspace (context: WorkspaceContext): string {
   return `/home/node/${context.workspaceBasename}`
+}
+
+export function codexRemotePathForWorkspace (context: WorkspaceContext): string {
+  return canonicalCodexRemotePathForWorkspace(context)
 }
 
 export function codexProjectEntryForWorkspace (context: WorkspaceContext, sshAlias: string): CodexAppProjectEntry {
@@ -178,8 +192,17 @@ export function codexDiscoveredRemoteHostId (sshAlias: string): string {
   return `remote-ssh-discovered:${sshAlias}`
 }
 
-export function mergeCodexAppProject (config: CodexAppConfig, entry: CodexAppProjectEntry): CodexAppConfig {
+function normalizedRemotePathSet (remotePaths: readonly string[] = []): Set<string> {
+  return new Set(remotePaths.map((remotePath) => normalizeRemotePath(remotePath)))
+}
+
+export function mergeCodexAppProject (
+  config: CodexAppConfig,
+  entry: CodexAppProjectEntry,
+  options: { legacyRemotePaths?: readonly string[] } = {}
+): CodexAppConfig {
   const remotePath = normalizeRemotePath(entry.remotePath)
+  const legacyRemotePaths = normalizedRemotePathSet(options.legacyRemotePaths)
   let matchedConnection = false
 
   const remoteConnections = config.remoteConnections.map((connection) => {
@@ -189,17 +212,24 @@ export function mergeCodexAppProject (config: CodexAppConfig, entry: CodexAppPro
 
     matchedConnection = true
     let matchedProject = false
-    const projects = connection.projects.map((project) => {
-      if (normalizeRemotePath(project.remotePath) !== remotePath) {
-        return project
+    const projects: CodexAppProjectConfig[] = []
+
+    for (const project of connection.projects) {
+      const projectRemotePath = normalizeRemotePath(project.remotePath)
+
+      if (projectRemotePath !== remotePath && !legacyRemotePaths.has(projectRemotePath)) {
+        projects.push(project)
+        continue
       }
 
-      matchedProject = true
-      return {
-        remotePath,
-        label: entry.label
+      if (!matchedProject) {
+        projects.push({
+          remotePath,
+          label: entry.label
+        })
+        matchedProject = true
       }
-    })
+    }
 
     if (!matchedProject) {
       projects.push({
@@ -230,14 +260,21 @@ export function mergeCodexAppProject (config: CodexAppConfig, entry: CodexAppPro
   }
 }
 
-export function removeCodexAppProject (config: CodexAppConfig, entry: CodexAppProjectEntry): CodexAppConfig {
-  const remotePath = normalizeRemotePath(entry.remotePath)
+export function removeCodexAppProject (
+  config: CodexAppConfig,
+  entry: CodexAppProjectEntry,
+  options: { additionalRemotePaths?: readonly string[] } = {}
+): CodexAppConfig {
+  const remotePaths = normalizedRemotePathSet([
+    entry.remotePath,
+    ...(options.additionalRemotePaths ?? [])
+  ])
   const remoteConnections = config.remoteConnections.flatMap((connection) => {
     if (connection.sshAlias !== entry.sshAlias) {
       return [connection]
     }
 
-    const projects = connection.projects.filter((project) => normalizeRemotePath(project.remotePath) !== remotePath)
+    const projects = connection.projects.filter((project) => !remotePaths.has(normalizeRemotePath(project.remotePath)))
 
     if (projects.length === 0) {
       return []
@@ -279,7 +316,7 @@ function cleanupStringArrayField (container: Record<string, unknown>, key: strin
   }
 }
 
-function cleanupCodexStateContainer (container: Record<string, unknown>, hostId: string, remotePath: string): Set<string> {
+function cleanupCodexStateContainer (container: Record<string, unknown>, hostId: string, remotePaths: Set<string>): Set<string> {
   const removedProjectIds = new Set<string>()
   const remoteProjects = container['remote-projects']
 
@@ -291,7 +328,7 @@ function cleanupCodexStateContainer (container: Record<string, unknown>, hostId:
 
       const matches = project.hostId === hostId &&
         typeof project.remotePath === 'string' &&
-        normalizeRemotePath(project.remotePath) === remotePath
+        remotePaths.has(normalizeRemotePath(project.remotePath))
 
       if (matches && typeof project.id === 'string') {
         removedProjectIds.add(project.id)
@@ -323,33 +360,110 @@ function cleanupCodexStateContainer (container: Record<string, unknown>, hostId:
   return removedProjectIds
 }
 
-export function removeCodexGlobalStateProject (state: Record<string, unknown>, entry: CodexAppProjectEntry): Record<string, unknown> {
+function cleanupProjectReferences (state: Record<string, unknown>, atomState: unknown, removedProjectIds: Set<string>): void {
+  if (removedProjectIds.size === 0) {
+    return
+  }
+
+  cleanupStringArrayField(state, 'project-order', removedProjectIds)
+
+  for (const projectId of removedProjectIds) {
+    removeObjectKey(state['sidebar-collapsed-groups'], projectId)
+  }
+
+  if (isRecord(atomState)) {
+    cleanupStringArrayField(atomState, 'project-order', removedProjectIds)
+    for (const projectId of removedProjectIds) {
+      removeObjectKey(atomState['sidebar-collapsed-groups'], projectId)
+    }
+  }
+}
+
+export function removeCodexGlobalStateProject (
+  state: Record<string, unknown>,
+  entry: CodexAppProjectEntry,
+  options: { additionalRemotePaths?: readonly string[] } = {}
+): Record<string, unknown> {
   const hostId = codexDiscoveredRemoteHostId(entry.sshAlias)
-  const remotePath = normalizeRemotePath(entry.remotePath)
+  const remotePaths = normalizedRemotePathSet([
+    entry.remotePath,
+    ...(options.additionalRemotePaths ?? [])
+  ])
   const nextState = cloneJsonObject(state)
-  const removedProjectIds = cleanupCodexStateContainer(nextState, hostId, remotePath)
+  const removedProjectIds = cleanupCodexStateContainer(nextState, hostId, remotePaths)
   const atomState = nextState['electron-persisted-atom-state']
 
   if (isRecord(atomState)) {
-    for (const projectId of cleanupCodexStateContainer(atomState, hostId, remotePath)) {
+    for (const projectId of cleanupCodexStateContainer(atomState, hostId, remotePaths)) {
       removedProjectIds.add(projectId)
     }
   }
 
-  if (removedProjectIds.size > 0) {
-    cleanupStringArrayField(nextState, 'project-order', removedProjectIds)
+  cleanupProjectReferences(nextState, atomState, removedProjectIds)
 
-    for (const projectId of removedProjectIds) {
-      removeObjectKey(nextState['sidebar-collapsed-groups'], projectId)
+  return nextState
+}
+
+function normalizeCodexStateContainer (
+  container: Record<string, unknown>,
+  hostId: string,
+  canonicalRemotePath: string,
+  legacyRemotePaths: Set<string>
+): Set<string> {
+  const removedProjectIds = new Set<string>()
+  const remoteProjects = container['remote-projects']
+
+  if (!Array.isArray(remoteProjects)) {
+    return removedProjectIds
+  }
+
+  let matchedProject = false
+  container['remote-projects'] = remoteProjects.flatMap((project) => {
+    if (!isRecord(project) || project.hostId !== hostId || typeof project.remotePath !== 'string') {
+      return [project]
     }
 
-    if (isRecord(atomState)) {
-      cleanupStringArrayField(atomState, 'project-order', removedProjectIds)
-      for (const projectId of removedProjectIds) {
-        removeObjectKey(atomState['sidebar-collapsed-groups'], projectId)
+    const remotePath = normalizeRemotePath(project.remotePath)
+    if (remotePath !== canonicalRemotePath && !legacyRemotePaths.has(remotePath)) {
+      return [project]
+    }
+
+    if (matchedProject) {
+      if (typeof project.id === 'string') {
+        removedProjectIds.add(project.id)
       }
+      return []
+    }
+
+    matchedProject = true
+    return [{
+      ...project,
+      remotePath: canonicalRemotePath
+    }]
+  })
+
+  return removedProjectIds
+}
+
+export function normalizeCodexGlobalStateProject (
+  state: Record<string, unknown>,
+  entry: CodexAppProjectEntry,
+  options: { legacyRemotePaths?: readonly string[] } = {}
+): Record<string, unknown> {
+  const hostId = codexDiscoveredRemoteHostId(entry.sshAlias)
+  const canonicalRemotePath = normalizeRemotePath(entry.remotePath)
+  const legacyRemotePaths = normalizedRemotePathSet(options.legacyRemotePaths)
+  const nextState = cloneJsonObject(state)
+  const removedProjectIds = normalizeCodexStateContainer(nextState, hostId, canonicalRemotePath, legacyRemotePaths)
+  const atomState = nextState['electron-persisted-atom-state']
+
+  if (isRecord(atomState)) {
+    for (const projectId of normalizeCodexStateContainer(atomState, hostId, canonicalRemotePath, legacyRemotePaths)) {
+      removedProjectIds.add(projectId)
     }
   }
+
+  cleanupProjectReferences(nextState, atomState, removedProjectIds)
 
   return nextState
 }
@@ -389,13 +503,13 @@ function writeJsonAtomic (path: string, json: string): void {
 
 export function installCodexAppConfigProject (
   entry: CodexAppProjectEntry,
-  options: { configPath?: string, now?: Date } = {}
+  options: { configPath?: string, now?: Date, legacyRemotePaths?: readonly string[] } = {}
 ): InstallCodexAppConfigResult {
   const configPath = options.configPath ?? defaultCodexAppConfigPath()
   const configDir = dirname(configPath)
   const existingConfigExists = existsSync(configPath)
   const existingConfig = readCodexAppConfigFile(configPath)
-  const nextConfig = mergeCodexAppProject(existingConfig, entry)
+  const nextConfig = mergeCodexAppProject(existingConfig, entry, { legacyRemotePaths: options.legacyRemotePaths })
   const nextJson = `${JSON.stringify(nextConfig, null, 2)}\n`
   const existingJson = existingConfigExists ? readFileSync(configPath, 'utf8') : undefined
 
@@ -425,7 +539,7 @@ export function installCodexAppConfigProject (
 
 export function uninstallCodexAppConfigProject (
   entry: CodexAppProjectEntry,
-  options: { configPath?: string, now?: Date } = {}
+  options: { configPath?: string, now?: Date, additionalRemotePaths?: readonly string[] } = {}
 ): UninstallCodexAppConfigResult {
   const configPath = options.configPath ?? defaultCodexAppConfigPath()
   const existingConfigExists = existsSync(configPath)
@@ -438,7 +552,7 @@ export function uninstallCodexAppConfigProject (
   }
 
   const existingConfig = readCodexAppConfigFile(configPath)
-  const nextConfig = removeCodexAppProject(existingConfig, entry)
+  const nextConfig = removeCodexAppProject(existingConfig, entry, { additionalRemotePaths: options.additionalRemotePaths })
 
   if (JSON.stringify(existingConfig) === JSON.stringify(nextConfig)) {
     return {
@@ -461,7 +575,7 @@ export function uninstallCodexAppConfigProject (
 
 export function uninstallCodexGlobalStateProject (
   entry: CodexAppProjectEntry,
-  options: { statePath?: string, now?: Date } = {}
+  options: { statePath?: string, now?: Date, additionalRemotePaths?: readonly string[] } = {}
 ): UninstallCodexGlobalStateResult {
   const statePath = options.statePath ?? defaultCodexGlobalStatePath()
 
@@ -479,7 +593,48 @@ export function uninstallCodexGlobalStateProject (
     throw new Error(`Invalid Codex global state JSON: ${statePath}`)
   }
 
-  const nextState = removeCodexGlobalStateProject(existingState, entry)
+  const nextState = removeCodexGlobalStateProject(existingState, entry, { additionalRemotePaths: options.additionalRemotePaths })
+  const nextJson = `${JSON.stringify(nextState)}\n`
+
+  if (JSON.stringify(existingState) === JSON.stringify(nextState)) {
+    return {
+      statePath,
+      changed: false
+    }
+  }
+
+  const backupPath = backupPathFor(statePath, options.now ?? new Date())
+  copyFileSync(statePath, backupPath)
+  writeJsonAtomic(statePath, nextJson)
+
+  return {
+    statePath,
+    backupPath,
+    changed: true
+  }
+}
+
+export function installCodexGlobalStateProject (
+  entry: CodexAppProjectEntry,
+  options: { statePath?: string, now?: Date, legacyRemotePaths?: readonly string[] } = {}
+): InstallCodexGlobalStateResult {
+  const statePath = options.statePath ?? defaultCodexGlobalStatePath()
+
+  if (!existsSync(statePath)) {
+    return {
+      statePath,
+      changed: false
+    }
+  }
+
+  const existingJson = readFileSync(statePath, 'utf8')
+  const existingState = JSON.parse(existingJson) as unknown
+
+  if (!isRecord(existingState)) {
+    throw new Error(`Invalid Codex global state JSON: ${statePath}`)
+  }
+
+  const nextState = normalizeCodexGlobalStateProject(existingState, entry, { legacyRemotePaths: options.legacyRemotePaths })
   const nextJson = `${JSON.stringify(nextState)}\n`
 
   if (JSON.stringify(existingState) === JSON.stringify(nextState)) {

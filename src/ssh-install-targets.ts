@@ -1,5 +1,5 @@
 import { claudeSshConfigEntryForWorkspace, installClaudeSshConfigHost } from './claude-app-config.ts'
-import { codexProjectEntryForWorkspace, installCodexAppConfigProject } from './codex-app-config.ts'
+import { codexProjectEntryForWorkspace, installCodexAppConfigProject, installCodexGlobalStateProject, legacyCodexRemotePathForWorkspace } from './codex-app-config.ts'
 import type { WorkspaceContext } from './paths.ts'
 
 export type SshConfigInstallTarget = 'codex' | 'claude'
@@ -18,7 +18,9 @@ export interface SshInstallTargetInstallOptions {
 
 function installCodexTarget (context: WorkspaceContext, alias: string, options: SshInstallTargetInstallOptions = {}): void {
   const entry = codexProjectEntryForWorkspace(context, alias)
-  const result = installCodexAppConfigProject(entry)
+  const legacyRemotePath = legacyCodexRemotePathForWorkspace(context)
+  const result = installCodexAppConfigProject(entry, { legacyRemotePaths: [legacyRemotePath] })
+  const stateResult = installCodexGlobalStateProject(entry, { legacyRemotePaths: [legacyRemotePath] })
 
   if (options.quiet === true) {
     return
@@ -31,6 +33,10 @@ function installCodexTarget (context: WorkspaceContext, alias: string, options: 
 
   if (result.backupPath !== undefined) {
     process.stdout.write(`Codex app config backup: ${result.backupPath}\n`)
+  }
+
+  if (stateResult.backupPath !== undefined) {
+    process.stdout.write(`Codex app state backup: ${stateResult.backupPath}\n`)
   }
 
   process.stdout.write('Restart Codex to apply the remote project entry.\n')
