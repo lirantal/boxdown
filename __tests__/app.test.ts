@@ -1,6 +1,6 @@
 import assert from 'node:assert'
 import { execFileSync, spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readlinkSync, realpathSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readlinkSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { PassThrough } from 'node:stream'
@@ -590,8 +590,8 @@ describe('CLI parsing', () => {
     assert.match(USAGE, /down\s+Remove the workspace devcontainer/)
     assert.match(USAGE, /boxdown down \[--workspace <path>\]\.\.\./)
     assert.match(USAGE, /purge\s+Remove the workspace devcontainer, exact Docker/)
-    assert.match(USAGE, /boxdown purge \[--workspace <path>\] \[--alias <name>\]/)
-    assert.match(USAGE, /--workspace <path>\s+Target project directory[\s\S]*Repeatable with down\./)
+    assert.match(USAGE, /boxdown purge \[--workspace <path\|ssh-alias\|repo>\] \[--alias <name>\]/)
+    assert.match(USAGE, /--workspace <path>\s+Target project directory[\s\S]*Repeatable with down\.[\s\S]*unambiguous REPO from boxdown list\./)
     assert.match(USAGE, /--verbose\s+Stream raw Docker, devcontainer, and hook command output\.[\s\S]*per-workspace command log either way\./)
     assert.match(USAGE, /doctor\s+Check required host tools/)
     assert.doesNotMatch(USAGE, /Alias:/)
@@ -1574,6 +1574,129 @@ describe('CLI execution', () => {
       assert.strictEqual(existsSync(context.workspaceCacheDir), false)
       assert.strictEqual(existsSync(context.workspaceDataDir), false)
     })
+  })
+
+  test('purge resolves workspace selector from recorded SSH alias', async () => {
+    const workspace = tempDir('purge-alias-selector-workspace')
+    const env = {
+      HOME: tempDir('purge-alias-selector-home'),
+      BOXDOWN_CACHE_HOME: tempDir('purge-alias-selector-cache'),
+      BOXDOWN_DATA_HOME: tempDir('purge-alias-selector-data'),
+      BOXDOWN_SSH_CONFIG: join(tempDir('purge-alias-selector-ssh'), 'config'),
+      BOXDOWN_CODEX_APP_CONFIG: join(tempDir('purge-alias-selector-codex-app'), 'config.json'),
+      BOXDOWN_CODEX_GLOBAL_STATE: join(tempDir('purge-alias-selector-codex-state'), '.codex-global-state.json')
+    }
+    const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+    const alias = 'custom-alias-selector'
+
+    mkdirSync(context.workspaceCacheDir, { recursive: true })
+    writeWorkspaceMetadata(context, alias)
+
+    await withFakeDocker([
+      { workspace, id: 'purge-alias-selector-container' }
+    ], async (logPath, dockerEnv) => {
+      const result = runCliProcess(['purge', '--workspace', alias], {
+        ...dockerEnv,
+        ...env
+      })
+      const calls = fakeDockerCalls(logPath)
+
+      assert.strictEqual(result.code, 0)
+      assert.ok(calls.includes('rm -f -v purge-alias-selector-container'))
+      assert.strictEqual(existsSync(context.workspaceCacheDir), false)
+      assert.strictEqual(existsSync(context.workspaceDataDir), false)
+    })
+  })
+
+  test('purge resolves workspace selector from unambiguous repo name', async () => {
+    const workspace = tempDir('purge-repo-selector-workspace')
+    const env = {
+      HOME: tempDir('purge-repo-selector-home'),
+      BOXDOWN_CACHE_HOME: tempDir('purge-repo-selector-cache'),
+      BOXDOWN_DATA_HOME: tempDir('purge-repo-selector-data'),
+      BOXDOWN_SSH_CONFIG: join(tempDir('purge-repo-selector-ssh'), 'config'),
+      BOXDOWN_CODEX_APP_CONFIG: join(tempDir('purge-repo-selector-codex-app'), 'config.json'),
+      BOXDOWN_CODEX_GLOBAL_STATE: join(tempDir('purge-repo-selector-codex-state'), '.codex-global-state.json')
+    }
+    const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+
+    mkdirSync(context.workspaceCacheDir, { recursive: true })
+    writeWorkspaceMetadata(context, defaultSshAlias(context.workspaceBasename))
+
+    await withFakeDocker([
+      { workspace, id: 'purge-repo-selector-container' }
+    ], async (logPath, dockerEnv) => {
+      const result = runCliProcess(['purge', '--workspace', context.workspaceBasename], {
+        ...dockerEnv,
+        ...env
+      })
+      const calls = fakeDockerCalls(logPath)
+
+      assert.strictEqual(result.code, 0)
+      assert.ok(calls.includes('rm -f -v purge-repo-selector-container'))
+      assert.strictEqual(existsSync(context.workspaceCacheDir), false)
+      assert.strictEqual(existsSync(context.workspaceDataDir), false)
+    })
+  })
+
+  test('purge resolves workspace selector from metadata when the repo path is missing', async () => {
+    const workspace = tempDir('purge-missing-selector-workspace')
+    const env = {
+      HOME: tempDir('purge-missing-selector-home'),
+      BOXDOWN_CACHE_HOME: tempDir('purge-missing-selector-cache'),
+      BOXDOWN_DATA_HOME: tempDir('purge-missing-selector-data'),
+      BOXDOWN_SSH_CONFIG: join(tempDir('purge-missing-selector-ssh'), 'config'),
+      BOXDOWN_CODEX_APP_CONFIG: join(tempDir('purge-missing-selector-codex-app'), 'config.json'),
+      BOXDOWN_CODEX_GLOBAL_STATE: join(tempDir('purge-missing-selector-codex-state'), '.codex-global-state.json')
+    }
+    const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+    const alias = defaultSshAlias(context.workspaceBasename)
+
+    mkdirSync(context.workspaceCacheDir, { recursive: true })
+    writeWorkspaceMetadata(context, alias)
+    rmSync(workspace, { recursive: true, force: true })
+
+    await withFakeDocker([], async (_logPath, dockerEnv) => {
+      const result = runCliProcess(['purge', '--workspace', alias], {
+        ...dockerEnv,
+        ...env
+      })
+
+      assert.strictEqual(result.code, 0)
+      assert.strictEqual(existsSync(context.workspaceFolder), false)
+      assert.strictEqual(existsSync(context.workspaceCacheDir), false)
+      assert.strictEqual(existsSync(context.workspaceDataDir), false)
+    })
+  })
+
+  test('purge rejects ambiguous repo name selectors', () => {
+    const firstParent = tempDir('purge-ambiguous-first-parent')
+    const secondParent = tempDir('purge-ambiguous-second-parent')
+    const firstWorkspace = join(firstParent, 'same-repo')
+    const secondWorkspace = join(secondParent, 'same-repo')
+    const env = {
+      HOME: tempDir('purge-ambiguous-home'),
+      BOXDOWN_CACHE_HOME: tempDir('purge-ambiguous-cache'),
+      BOXDOWN_DATA_HOME: tempDir('purge-ambiguous-data')
+    }
+
+    mkdirSync(firstWorkspace)
+    mkdirSync(secondWorkspace)
+    writeWorkspaceMetadata(
+      createWorkspaceContext({ workspace: firstWorkspace, env, assetsDevcontainerDir }),
+      'first-same-repo-devcontainer'
+    )
+    writeWorkspaceMetadata(
+      createWorkspaceContext({ workspace: secondWorkspace, env, assetsDevcontainerDir }),
+      'second-same-repo-devcontainer'
+    )
+
+    const result = runCliProcess(['purge', '--workspace', 'same-repo'], env)
+
+    assert.strictEqual(result.code, 1)
+    assert.match(result.stderr, /Workspace selector is ambiguous: same-repo/)
+    assert.match(result.stderr, /first-same-repo-devcontainer/)
+    assert.match(result.stderr, /second-same-repo-devcontainer/)
   })
 
   test('purge continues after Docker cleanup failures and exits nonzero', async () => {

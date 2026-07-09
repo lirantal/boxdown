@@ -9,8 +9,8 @@ import { startDevcontainer, printPortHint, openShell, openCodingAgentCli, ensure
 import { canPromptInteractively, promptConfirm, promptMultiSelect, promptText, type PromptInput, type PromptOutput } from './interactive-prompts.ts'
 import { createWorkspaceListEntries, formatWorkspaceListText } from './list.ts'
 import { createWorkspaceCommandLogger, withLoggedProcessOutput, type WorkspaceCommandLogger } from './logging.ts'
-import { listWorkspaceMetadata, readWorkspaceMetadata, writeWorkspaceMetadata } from './metadata.ts'
-import { createWorkspaceContext, defaultDataRoot, type WorkspaceContext } from './paths.ts'
+import { listWorkspaceMetadata, readWorkspaceMetadata, writeWorkspaceMetadata, type WorkspaceMetadata } from './metadata.ts'
+import { createWorkspaceContext, createWorkspaceContextFromIdentity, defaultDataRoot, type WorkspaceContext } from './paths.ts'
 import { createProgress, resolveProgressMode, type ProgressReporter, type ProgressOutputTarget, type ProgressStepDefinition } from './progress.ts'
 import { purgeWorkspace } from './purge.ts'
 import { defaultSshAlias, installSshConfig, uninstallSshConfig } from './ssh-config.ts'
@@ -66,7 +66,7 @@ export const USAGE = `Usage:
   boxdown status [--workspace <path>] [--alias <name>] [--json]
   boxdown stop [--workspace <path>]
   boxdown down [--workspace <path>]...
-  boxdown purge [--workspace <path>] [--alias <name>]
+  boxdown purge [--workspace <path|ssh-alias|repo>] [--alias <name>]
   boxdown doctor [--workspace <path>]
   boxdown ssh install [--workspace <path>] [--alias <name>] [--target <name>]...
   boxdown ssh uninstall [--workspace <path>] [--alias <name>]
@@ -115,7 +115,8 @@ Commands:
 
 Options:
   --workspace <path>  Target project directory. Defaults to the current directory.
-                      Repeatable with down.
+                      Repeatable with down. With purge, also accepts PATH,
+                      SSH ALIAS, or an unambiguous REPO from boxdown list.
   --alias <name>      SSH host alias. Defaults to <repo-name>-devcontainer.
   --target <name>     Optional SSH install target. Repeatable. Supported by
                       setup and ssh install: codex, claude.
@@ -456,6 +457,59 @@ async function runLoggedLifecycle<T> (
     logger.boxdown(`Error: ${error instanceof Error ? error.message : String(error)}\n`)
     throw error
   }
+}
+
+function uniqueWorkspaceMetadata (metadata: WorkspaceMetadata[]): WorkspaceMetadata[] {
+  return [...new Map(metadata.map((entry) => [entry.workspaceId, entry])).values()]
+}
+
+function workspaceMetadataContext (metadata: WorkspaceMetadata): WorkspaceContext {
+  return createWorkspaceContextFromIdentity({
+    workspaceFolder: metadata.workspaceFolder,
+    workspaceBasename: metadata.workspaceBasename,
+    workspaceId: metadata.workspaceId
+  })
+}
+
+function ambiguousWorkspaceSelectorError (selector: string, matches: WorkspaceMetadata[]): Error {
+  const matchList = matches
+    .map((entry) => `  - ${entry.workspaceBasename}: ${entry.workspaceFolder} (${entry.sshAlias})`)
+    .join('\n')
+
+  return new Error(`Workspace selector is ambiguous: ${selector}\nUse the PATH or SSH ALIAS from "boxdown list":\n${matchList}`)
+}
+
+function resolvePurgeWorkspaceContext (workspace: string | undefined): WorkspaceContext {
+  if (workspace === undefined) {
+    return createWorkspaceContext()
+  }
+
+  try {
+    return createWorkspaceContext({ workspace })
+  } catch {
+    // Purge can target stale metadata, so values copied from `boxdown list`
+    // should work even when the repository path no longer exists.
+  }
+
+  const metadata = listWorkspaceMetadata(defaultDataRoot())
+
+  for (const matches of [
+    metadata.filter((entry) => entry.workspaceFolder === workspace),
+    metadata.filter((entry) => entry.sshAlias === workspace),
+    metadata.filter((entry) => entry.workspaceBasename === workspace)
+  ]) {
+    const uniqueMatches = uniqueWorkspaceMetadata(matches)
+
+    if (uniqueMatches.length === 1) {
+      return workspaceMetadataContext(uniqueMatches[0] as WorkspaceMetadata)
+    }
+
+    if (uniqueMatches.length > 1) {
+      throw ambiguousWorkspaceSelectorError(workspace, uniqueMatches)
+    }
+  }
+
+  throw new Error(`Workspace does not exist and no Boxdown list entry matches PATH, SSH ALIAS, or REPO: ${workspace}`)
 }
 
 async function resolveDownWorkspaces (
@@ -864,7 +918,9 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
       return runDownCommand(parsed.workspaces, options)
     }
 
-    const context = createWorkspaceContext({ workspace: parsed.workspace })
+    const context = parsed.command === 'purge'
+      ? resolvePurgeWorkspaceContext(parsed.workspace)
+      : createWorkspaceContext({ workspace: parsed.workspace })
     const alias = parsed.alias ?? defaultSshAlias(context.workspaceBasename)
     const aliasSource = parsed.alias === undefined ? 'default' : 'provided'
 

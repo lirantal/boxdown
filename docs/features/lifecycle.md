@@ -15,8 +15,9 @@ boxdown doctor
 
 Workspace-targeting commands accept `--workspace <path>`. `down` also accepts
 repeated `--workspace` flags to remove multiple workspace containers in order.
-`status` accepts `--alias <name>` so its output can match a custom SSH host
-alias.
+`purge --workspace` also accepts the `PATH`, `SSH ALIAS`, or unambiguous `REPO`
+value shown by `boxdown list`. `status` accepts `--alias <name>` so its output
+can match a custom SSH host alias.
 
 ## List
 
@@ -69,6 +70,17 @@ Boxdown-managed SSH/Codex/Claude entries for the computed, recorded, and
 provided aliases, and deletes the workspace's Boxdown cache/data directories,
 including the per-workspace command log. It does not delete the target
 repository directory or files inside it.
+
+`purge --workspace <value>` first treats `<value>` as a filesystem path. If that
+path does not exist, it looks for an exact `PATH`, then `SSH ALIAS`, then `REPO`
+match in Boxdown metadata. `REPO` must match exactly one workspace; if multiple
+known workspaces share the same repo basename, use `PATH` or `SSH ALIAS`.
+
+```sh
+boxdown purge --workspace my-repo-devcontainer
+boxdown purge --workspace my-repo
+boxdown purge --workspace /path/to/my-repo
+```
 
 To remove multiple workspace containers, repeat `--workspace`:
 

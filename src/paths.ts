@@ -38,6 +38,12 @@ export interface WorkspaceContext {
   workspaceLogPath: string
 }
 
+export interface WorkspaceContextIdentity {
+  workspaceFolder: string
+  workspaceBasename: string
+  workspaceId: string
+}
+
 export function packageRootFromImportMeta (importMetaUrl = import.meta.url): string {
   return dirname(dirname(fileURLToPath(importMetaUrl)))
 }
@@ -96,25 +102,25 @@ export function defaultHostGitconfigPath (env: NodeJS.ProcessEnv = process.env):
   return join(env.HOME ?? homedir(), '.gitconfig')
 }
 
-export function createWorkspaceContext (options: WorkspaceContextOptions = {}): WorkspaceContext {
+export function createWorkspaceContextFromIdentity (
+  identity: WorkspaceContextIdentity,
+  options: Omit<WorkspaceContextOptions, 'workspace' | 'cwd'> = {}
+): WorkspaceContext {
   const env = options.env ?? process.env
-  const workspaceFolder = resolveWorkspaceFolder(options.workspace, options.cwd)
-  const workspaceBasename = basename(workspaceFolder)
-  const workspaceId = workspaceIdFor(workspaceFolder)
   const packageRoot = options.packageRoot ?? packageRootFromImportMeta()
   const assetsDevcontainerDir = options.assetsDevcontainerDir ?? env.BOXDOWN_DEVCONTAINER_ASSETS_DIR ?? join(packageRoot, 'assets', 'devcontainer')
   const cacheRoot = defaultCacheRoot(env)
   const dataRoot = defaultDataRoot(env)
   const hostAgentsDir = defaultHostAgentsDir(env)
   const hostCodexAuthPath = defaultHostCodexAuthPath(env)
-  const workspaceCacheDir = join(cacheRoot, 'workspaces', workspaceId)
-  const workspaceDataDir = join(dataRoot, 'workspaces', workspaceId)
+  const workspaceCacheDir = join(cacheRoot, 'workspaces', identity.workspaceId)
+  const workspaceDataDir = join(dataRoot, 'workspaces', identity.workspaceId)
   const hostGitconfigSnapshotDir = join(workspaceDataDir, 'gitconfig')
 
   return {
-    workspaceFolder,
-    workspaceBasename,
-    workspaceId,
+    workspaceFolder: identity.workspaceFolder,
+    workspaceBasename: identity.workspaceBasename,
+    workspaceId: identity.workspaceId,
     packageRoot,
     assetsDevcontainerDir,
     cacheRoot,
@@ -134,4 +140,14 @@ export function createWorkspaceContext (options: WorkspaceContextOptions = {}): 
     sshPublicKeyRuntimePath: join(workspaceDataDir, 'ssh-public', 'id_ed25519.pub'),
     workspaceLogPath: join(workspaceDataDir, 'boxdown.log')
   }
+}
+
+export function createWorkspaceContext (options: WorkspaceContextOptions = {}): WorkspaceContext {
+  const workspaceFolder = resolveWorkspaceFolder(options.workspace, options.cwd)
+
+  return createWorkspaceContextFromIdentity({
+    workspaceFolder,
+    workspaceBasename: basename(workspaceFolder),
+    workspaceId: workspaceIdFor(workspaceFolder)
+  }, options)
 }

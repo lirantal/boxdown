@@ -179,7 +179,7 @@ boxdown list --json
 Shared options:
 
 ```sh
---workspace <path>  # target project directory, defaults to cwd; repeatable with down
+--workspace <path>  # target project directory, defaults to cwd; repeatable with down; purge also accepts list values
 --alias <name>      # SSH alias, defaults to <repo-name>-devcontainer
 --target <name>     # with setup/ssh install, optional target; repeatable; supported: codex, claude
 --port <port>       # tunnel port for `boxdown tunnel`; repeatable
@@ -193,6 +193,15 @@ SSH/Codex/Claude entries, command log, and Boxdown cache/data for that
 workspace. It does not delete the local repository directory or files inside it.
 Interactive terminals ask for confirmation before purging; non-interactive runs
 keep the direct behavior.
+
+For `purge`, `--workspace` accepts the `PATH`, `SSH ALIAS`, or unambiguous
+`REPO` value shown by `boxdown list`:
+
+```sh
+boxdown purge --workspace my-repo-devcontainer
+boxdown purge --workspace my-repo
+boxdown purge --workspace /path/to/my-repo
+```
 
 ## Contributing
 
