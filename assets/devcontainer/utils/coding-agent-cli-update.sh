@@ -13,6 +13,12 @@ log() {
   echo "coding-agent-cli-update: $*" >&2
 }
 
+progress() {
+  if [ "${BOXDOWN_PROGRESS:-0}" = "1" ]; then
+    printf 'BOXDOWN_PROGRESS: %s\n' "$*"
+  fi
+}
+
 prepend_agent_bin_paths() {
   local codex_home="${CODEX_HOME:-${HOME}/.codex}"
 
@@ -475,6 +481,7 @@ update_now_agent() {
   local lock_dir
   local result=0
 
+  progress "${agent}: installing or updating CLI"
   stamp_file="$(agent_stamp_file "${agent}")" || return 1
   lock_dir="$(agent_lock_dir "${agent}")" || return 1
   ensure_state_dir "${stamp_file}" "${lock_dir}"
@@ -502,6 +509,7 @@ maybe_update_agent() {
     return 0
   fi
 
+  progress "${agent}: checking for CLI updates"
   acquire_lock "${agent}" "${lock_dir}" || return 0
   if stamp_fresh "${agent}" "${stamp_file}"; then
     release_lock
@@ -522,6 +530,7 @@ ensure_agent() {
   local agent="$1"
   local result=0
 
+  progress "${agent}: ensuring CLI is available"
   if agent_binary_available "${agent}"; then
     if maybe_update_agent "${agent}"; then
       return 0

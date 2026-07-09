@@ -7,15 +7,23 @@ SOURCE_PATH="${BOXDOWN_GITCONFIG_SOURCE_PATH:-/opt/boxdown/state/host-gitconfig/
 TARGET_PATH="${BOXDOWN_GITCONFIG_TARGET_PATH:-/home/node/.gitconfig}"
 
 main() {
+  progress "Preparing writable Git config"
   if ! install_writable_gitconfig; then
     return 0
   fi
 
+  progress "Configuring container Git authentication"
   sanitize_github_rewrites
   sanitize_host_credential_helpers credential.helper
   sanitize_host_credential_helpers credential.https://github.com.helper
   configure_container_github_auth
   disable_container_git_signing
+}
+
+progress() {
+  if [[ "${BOXDOWN_PROGRESS:-0}" == "1" ]]; then
+    printf 'BOXDOWN_PROGRESS: %s\n' "$*"
+  fi
 }
 
 install_writable_gitconfig() {

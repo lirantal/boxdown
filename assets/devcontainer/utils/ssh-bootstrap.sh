@@ -11,6 +11,12 @@ SSH_USER="${DEVCONTAINER_SSH_USER:-node}"
 PUBLIC_KEY_FILE="${DEVCONTAINER_SSH_PUBLIC_KEY_FILE:-${WORKSPACE_FOLDER}/.devcontainer/.ssh/id_ed25519.pub}"
 OPENSSH_CONFIGURE_TIMEOUT_SECONDS="${DEVCONTAINER_OPENSSH_CONFIGURE_TIMEOUT_SECONDS:-180}"
 
+progress() {
+  if [ "${BOXDOWN_PROGRESS:-0}" = "1" ]; then
+    printf 'BOXDOWN_PROGRESS: %s\n' "$*"
+  fi
+}
+
 as_root() {
   if [ "$(id -u)" -eq 0 ]; then
     "$@"
@@ -98,10 +104,12 @@ ensure_openssh_server_configured() {
 
 install_openssh_server() {
   if [ ! -x /usr/sbin/sshd ]; then
+    progress "Installing openssh-server packages"
     as_root apt-get update
     as_root env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends openssh-server
   fi
 
+  progress "Configuring openssh-server"
   ensure_openssh_server_configured
 }
 
@@ -164,6 +172,7 @@ ensure_runtime_ready() {
     return 1
   fi
 
+  progress "Preparing SSH daemon runtime"
   ensure_openssh_server_configured
   as_root ssh-keygen -A
   as_root install -d -m 0755 /run/sshd

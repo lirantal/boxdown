@@ -12,9 +12,18 @@ HOST_GITCONFIG_SNAPSHOT_PATH="${BOXDOWN_HOST_GITCONFIG_SNAPSHOT_PATH:-}"
 OP_TOKEN_REFERENCE="op://Private/1Password op CLI Service Account for DevContainers/password"
 
 main() {
+  progress "Preparing workspace environment file"
   ensure_env_file_exists
+  progress "Snapshotting host Git config"
   snapshot_host_gitconfig
+  progress "Checking 1Password service account token"
   maybe_inject_1password_service_account_token
+}
+
+progress() {
+  if [[ "${BOXDOWN_PROGRESS:-0}" == "1" ]]; then
+    printf 'BOXDOWN_PROGRESS: %s\n' "$*"
+  fi
 }
 
 ensure_env_file_exists() {

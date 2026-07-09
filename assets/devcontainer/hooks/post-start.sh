@@ -8,9 +8,23 @@ HOOKS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEVCONTAINER_DIR="$(cd "${HOOKS_DIR}/.." && pwd)"
 
 main() {
-  configure_sshd_runtime
-  refresh_coding_agent_clis
-  remove_ephemeral_env_file_if_present
+  run_step "Preparing SSH runtime" configure_sshd_runtime
+  run_step "Refreshing coding-agent CLIs" refresh_coding_agent_clis
+  run_step "Cleaning ephemeral environment file" remove_ephemeral_env_file_if_present
+}
+
+progress() {
+  if [[ "${BOXDOWN_PROGRESS:-0}" == "1" ]]; then
+    printf 'BOXDOWN_PROGRESS: %s\n' "$*"
+  fi
+}
+
+run_step() {
+  local label="$1"
+  shift
+
+  progress "$label"
+  "$@"
 }
 
 configure_sshd_runtime() {
