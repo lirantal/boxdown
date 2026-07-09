@@ -75,7 +75,7 @@ export const USAGE = `Usage:
   boxdown refresh-gh-token-running [--workspace <path>]
 
 Commands:
-  setup                    Prepare the workspace devcontainer and SSH/app
+  setup                     Prepare the workspace devcontainer and SSH/app
                             integration without opening a shell.
   start, shell              Start or reuse the workspace devcontainer, then open
                             an interactive shell inside it.

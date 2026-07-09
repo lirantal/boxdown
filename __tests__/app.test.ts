@@ -610,6 +610,24 @@ describe('CLI parsing', () => {
     assert.match(USAGE, /refresh-gh-token\s+Start or reuse the devcontainer/)
     assert.match(USAGE, /refresh-gh-token-running\s+Refresh GitHub CLI auth only if/)
   })
+
+  test('help aligns wrapped command descriptions', () => {
+    const usageLines = USAGE.split(/\r?\n/)
+    const commandsStart = usageLines.indexOf('Commands:')
+    const optionsStart = usageLines.indexOf('Options:')
+    const commandLines = usageLines.slice(commandsStart + 1, optionsStart)
+    const setupLine = commandLines.find((line) => line.startsWith('  setup'))
+    const setupContinuationLine = commandLines[commandLines.findIndex((line) => line.startsWith('  setup')) + 1]
+    const longestCommandLine = commandLines.find((line) => line.startsWith('  refresh-gh-token-running'))
+
+    assert.ok(setupLine !== undefined)
+    assert.ok(setupContinuationLine !== undefined)
+    assert.ok(longestCommandLine !== undefined)
+
+    const descriptionColumn = longestCommandLine.indexOf('Refresh')
+    assert.strictEqual(setupLine.indexOf('Prepare'), descriptionColumn)
+    assert.strictEqual(setupContinuationLine.indexOf('integration'), descriptionColumn)
+  })
 })
 
 describe('interactive install target prompt', () => {
