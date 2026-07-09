@@ -194,18 +194,24 @@ Use `boxdown purge` when you want to remove the workspace's Boxdown-managed
 environment residue: the devcontainer, its exact recorded Docker image, managed
 SSH/Codex/Claude entries, command log, and Boxdown cache/data for that
 workspace. It does not delete the local repository directory or files inside it.
-Interactive terminals ask for confirmation before purging; non-interactive runs
-keep the direct behavior.
+Interactive terminals ask for confirmation before purging.
 
 For `purge`, `--workspace` accepts the `PATH` or unambiguous `REPO` value
 shown by `boxdown list`. It also accepts exact `SSH ALIAS` values from
 `boxdown status` or `boxdown list --json`:
 
 ```sh
-boxdown purge --workspace /path/to/my-repo
-boxdown purge --workspace my-repo
+boxdown purge
 boxdown purge --workspace my-repo-devcontainer
+boxdown purge --workspace my-repo
+boxdown purge --workspace /path/to/my-repo
 ```
+
+When `boxdown purge` runs without `--workspace` from a directory that is not a
+tracked Boxdown workspace, interactive terminals show a multi-select list of all
+tracked workspaces, including missing/stale entries. Non-interactive runs fail
+safely from untracked directories; scripts should call `boxdown purge
+--workspace <value>` for each workspace.
 
 ## Contributing
 

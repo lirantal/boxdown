@@ -15,10 +15,10 @@ boxdown doctor
 
 Workspace-targeting commands accept `--workspace <path>`. `down` also accepts
 repeated `--workspace` flags to remove multiple workspace containers in order.
-`purge --workspace` also accepts the `PATH` or unambiguous `REPO` value shown by
-`boxdown list`, plus exact `SSH ALIAS` values from metadata/status output.
-`status` accepts `--alias <name>` so its output can match a custom SSH host
-alias.
+`purge --workspace` also accepts the `PATH`, `SSH ALIAS`, or unambiguous `REPO`
+value shown by `boxdown list`. `purge` does not accept repeated `--workspace`
+flags. `status` accepts `--alias <name>` so its output can match a custom SSH
+host alias.
 
 ## List
 
@@ -80,9 +80,10 @@ exactly one workspace; if multiple known workspaces share the same repo
 basename, use `PATH` or `SSH ALIAS`.
 
 ```sh
-boxdown purge --workspace /path/to/my-repo
-boxdown purge --workspace my-repo
+boxdown purge
 boxdown purge --workspace my-repo-devcontainer
+boxdown purge --workspace my-repo
+boxdown purge --workspace /path/to/my-repo
 ```
 
 To remove multiple workspace containers, repeat `--workspace`:
@@ -99,9 +100,20 @@ current-directory behavior.
 Batch `down` continues after individual workspace failures, but exits nonzero if
 any requested workspace cannot be resolved or removed.
 
+When `purge` runs without `--workspace` from a tracked Boxdown workspace, it
+purges that workspace after confirmation. When it runs without `--workspace`
+from an untracked directory, interactive terminals show a multi-select list of
+all tracked workspaces from `boxdown list`, including `running`, `exited`,
+`absent`, `missing`, and `unknown` states. After selection, `purge` asks for one
+destructive confirmation for the selected batch, then purges each selected
+workspace in order. Batch purge continues after individual workspace failures,
+but exits nonzero if any selected workspace fails.
+
 Interactive `purge` runs ask for confirmation before removing devcontainer,
 image, SSH/Codex integration, cache, and data state. Non-interactive purge runs
-do not prompt so existing scripts keep working.
+do not prompt so existing targeted scripts keep working. Non-interactive
+`purge` from an untracked directory fails safely instead of treating the current
+directory as a workspace.
 
 ## Doctor
 

@@ -97,7 +97,8 @@ Commands:
                             cache, generated config, data, and SSH keys.
   purge                     Remove the workspace devcontainer, exact Docker
                             image, managed SSH/app config, and Boxdown
-                            cache/data for this workspace.
+                            cache/data for this workspace. Prompts for
+                            tracked workspaces from untracked directories.
   doctor                    Check required host tools and Boxdown assets.
   ssh install               Install or update an SSH host alias for the workspace
                             devcontainer.
@@ -115,9 +116,11 @@ Commands:
 
 Options:
   --workspace <path>  Target project directory. Defaults to the current directory.
-                      Repeatable with down. With purge, also accepts PATH or
-                      an unambiguous REPO from boxdown list, plus SSH ALIAS
-                      from metadata/status output.
+                      Repeatable with down. With purge, also accepts PATH,
+                      SSH ALIAS, or an unambiguous REPO from boxdown list.
+                      Without --workspace, purge only targets the current
+                      directory when it is tracked; otherwise interactive
+                      terminals prompt for tracked workspaces.
   --alias <name>      SSH host alias. Defaults to <repo-name>-devcontainer.
   --target <name>     Optional SSH install target. Repeatable. Supported by
                       setup and ssh install: codex, claude.
