@@ -78,6 +78,39 @@ export function canPromptInteractively (input: PromptInput, output: PromptOutput
   return !isCiEnvironment(env) && input.isTTY === true && output.isTTY === true
 }
 
+const ansiPattern = /\u001B\[[0-?]*[ -/]*[@-~]/gu
+
+function visibleLength (value: string): number {
+  return value.replace(ansiPattern, '').length
+}
+
+function terminalColumns (output: PromptOutput): number {
+  return Number.isInteger(output.columns) && output.columns !== undefined && output.columns > 0
+    ? output.columns
+    : 80
+}
+
+function renderedRowCount (lines: readonly string[], output: PromptOutput): number {
+  const columns = terminalColumns(output)
+  return lines.reduce((rows, line) => rows + Math.max(1, Math.ceil(visibleLength(line) / columns)), 0)
+}
+
+function renderPromptLines (
+  output: PromptOutput,
+  lines: readonly string[],
+  previousRows: number
+): number {
+  if (previousRows > 0) {
+    output.write(`\u001B[${previousRows}A\r\u001B[J`)
+  }
+
+  for (const line of lines) {
+    output.write(`\u001B[2K\r${line}\n`)
+  }
+
+  return renderedRowCount(lines, output)
+}
+
 function formatChoiceLine <T extends string> (
   choice: MultiSelectChoice<T>,
   isFocused: boolean,
@@ -248,7 +281,7 @@ function promptRawMultiSelect <T extends string> (
     const selected = new Set<T>()
     let focusedIndex = options.choices.length
     let settled = false
-    let renderedLineCount = 0
+    let renderedRows = 0
 
     function lines (): string[] {
       return [
@@ -265,15 +298,8 @@ function promptRawMultiSelect <T extends string> (
     }
 
     function render (): void {
-      if (renderedLineCount > 0) {
-        options.output.write(`\u001B[${renderedLineCount}A`)
-      }
-
       const nextLines = lines()
-      for (const line of nextLines) {
-        options.output.write(`\u001B[2K\r${line}\n`)
-      }
-      renderedLineCount = nextLines.length
+      renderedRows = renderPromptLines(options.output, nextLines, renderedRows)
     }
 
     function cleanup (): void {
@@ -516,7 +542,7 @@ function promptRawConfirm (
   return new Promise((resolve) => {
     let focusedIndex = 0
     let settled = false
-    let renderedLineCount = 0
+    let renderedRows = 0
 
     function lines (): string[] {
       return [
@@ -530,15 +556,8 @@ function promptRawConfirm (
     }
 
     function render (): void {
-      if (renderedLineCount > 0) {
-        options.output.write(`\u001B[${renderedLineCount}A`)
-      }
-
       const nextLines = lines()
-      for (const line of nextLines) {
-        options.output.write(`\u001B[2K\r${line}\n`)
-      }
-      renderedLineCount = nextLines.length
+      renderedRows = renderPromptLines(options.output, nextLines, renderedRows)
     }
 
     function cleanup (): void {

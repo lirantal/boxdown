@@ -194,7 +194,7 @@ const codexPromptChoice = {
   description: 'Register this SSH alias as a Codex app remote project.'
 } as const
 
-function fakePromptStreams (options: { rawMode?: boolean } = {}): {
+function fakePromptStreams (options: { columns?: number, rawMode?: boolean } = {}): {
   input: PassThrough & PromptInput
   output: PassThrough & PromptOutput
   outputText: () => string
@@ -205,6 +205,7 @@ function fakePromptStreams (options: { rawMode?: boolean } = {}): {
 
   input.isTTY = true
   output.isTTY = true
+  output.columns = options.columns
   output.on('data', (chunk: Buffer) => {
     outputChunks.push(chunk)
   })
@@ -740,6 +741,35 @@ describe('interactive install target prompt', () => {
     })
     assert.match(outputText(), /\u001B\[36m◆\u001B\[0m {2}\u001B\[1mInstall optional SSH targets\?\u001B\[0m/)
     assert.match(outputText(), /\u001B\[36m│\u001B\[0m {2}\u001B\[32m■\u001B\[0m \u001B\[1mCodex\u001B\[0m/)
+  })
+
+  test('redraws raw-mode long choices over wrapped terminal rows', async () => {
+    const { input, output, outputText } = fakePromptStreams({ columns: 32 })
+    const resultPromise = promptMultiSelect({
+      title: 'Install optional SSH targets?',
+      choices: [{
+        value: 'codex',
+        label: 'Codex',
+        description: 'Register this SSH alias as a Codex app remote project with a deliberately long description.'
+      }],
+      skipLabel: 'Skip optional targets',
+      input,
+      output,
+      env: { CI: 'false' }
+    })
+
+    input.write('\u001B[A')
+    input.write('\u001B[B')
+    input.write('\r')
+
+    assert.deepStrictEqual(await resultPromise, {
+      status: 'skipped',
+      values: []
+    })
+
+    const redrawRows = [...outputText().matchAll(/\u001B\[(\d+)A\r\u001B\[J/gu)].map((match) => Number(match[1]))
+    assert.strictEqual(redrawRows.length, 2)
+    assert.ok(redrawRows.every((rowCount) => rowCount > 5))
   })
 
   test('starts raw-mode focus on the selected skip row', async () => {
