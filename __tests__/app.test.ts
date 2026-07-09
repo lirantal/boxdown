@@ -2296,6 +2296,34 @@ describe('SSH config generation', () => {
     assert.strictEqual(second.split(`# BEGIN ${alias} boxdown`).length - 1, 1)
   })
 
+  test('replaces legacy managed block when installing current SSH config', () => {
+    const workspace = tempDir('ssh-replace-legacy-workspace')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('ssh-replace-legacy-cache'),
+        BOXDOWN_DATA_HOME: tempDir('ssh-replace-legacy-data')
+      },
+      assetsDevcontainerDir
+    })
+    const alias = defaultSshAlias(context.workspaceBasename)
+    const block = buildSshConfigBlock(context, alias)
+    const existing = [
+      'Host github.com',
+      '  User git',
+      `# BEGIN ${alias} devcontainer ssh`,
+      `Host ${alias}`,
+      '  User node',
+      `# END ${alias} devcontainer ssh`,
+      ''
+    ].join('\n')
+    const replaced = replaceSshConfigBlock(existing, alias, block)
+
+    assert.match(replaced, /Host github.com/)
+    assert.strictEqual(replaced.includes(`# BEGIN ${alias} devcontainer ssh`), false)
+    assert.strictEqual(replaced.split(`# BEGIN ${alias} boxdown`).length - 1, 1)
+  })
+
   test('removes managed block without touching unrelated SSH config', () => {
     const workspace = tempDir('ssh-remove-workspace')
     const context = createWorkspaceContext({
@@ -2314,6 +2342,62 @@ describe('SSH config generation', () => {
     assert.strictEqual(removed, 'Host github.com\n  User git\n')
     assert.strictEqual(removed.includes(`# BEGIN ${alias} boxdown`), false)
     assert.strictEqual(removeSshConfigBlock(removed, alias), removed)
+  })
+
+  test('removes legacy managed block without touching unrelated SSH config', () => {
+    const workspace = tempDir('ssh-remove-legacy-workspace')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('ssh-remove-legacy-cache'),
+        BOXDOWN_DATA_HOME: tempDir('ssh-remove-legacy-data')
+      },
+      assetsDevcontainerDir
+    })
+    const alias = defaultSshAlias(context.workspaceBasename)
+    const existing = [
+      'Host github.com',
+      '  User git',
+      `# BEGIN ${alias} devcontainer ssh`,
+      `Host ${alias}`,
+      '  User node',
+      `# END ${alias} devcontainer ssh`,
+      ''
+    ].join('\n')
+
+    assert.strictEqual(removeSshConfigBlock(existing, alias), 'Host github.com\n  User git\n')
+  })
+
+  test('refuses to rewrite malformed managed SSH config blocks', async () => {
+    const workspace = tempDir('ssh-malformed-workspace')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('ssh-malformed-cache'),
+        BOXDOWN_DATA_HOME: tempDir('ssh-malformed-data')
+      },
+      assetsDevcontainerDir
+    })
+    const alias = defaultSshAlias(context.workspaceBasename)
+    const block = buildSshConfigBlock(context, alias)
+    const sshConfigPath = join(tempDir('ssh-malformed-config'), 'config')
+    const malformed = [
+      'Host github.com',
+      '  User git',
+      `# BEGIN ${alias} boxdown devcontainer ssh`,
+      `Host ${alias}`,
+      '  User node',
+      'Host lirantaldotcom',
+      '  User deploy',
+      ''
+    ].join('\n')
+
+    assert.throws(() => replaceSshConfigBlock(malformed, alias, block), /without matching/)
+    assert.throws(() => removeSshConfigBlock(malformed, alias), /without matching/)
+
+    writeFileSync(sshConfigPath, malformed)
+    assert.throws(() => uninstallSshConfig(alias, { quiet: true, configPath: sshConfigPath }), /without matching/)
+    assert.strictEqual(readFileSync(sshConfigPath, 'utf8'), malformed)
   })
 
   test('uninstalls managed SSH config block idempotently', async () => {
@@ -3085,6 +3169,45 @@ describe('Claude SSH config injection', () => {
 describe('packaged assets', () => {
   test('does not include generated SSH key material', () => {
     assert.strictEqual(existsSync(join(assetsDevcontainerDir, '.ssh')), false)
+  })
+
+  test('legacy shell SSH installer refuses malformed managed blocks', () => {
+    const stateDir = tempDir('legacy-ssh-installer-state')
+    const configPath = join(stateDir, 'config')
+    const keyPath = join(stateDir, 'id_ed25519')
+    const alias = 'legacy-demo-devcontainer'
+    const malformed = [
+      'Host github.com',
+      '  User git',
+      `# BEGIN ${alias} devcontainer ssh`,
+      `Host ${alias}`,
+      '  User node',
+      'Host lirantaldotcom',
+      '  User deploy',
+      ''
+    ].join('\n')
+
+    writeFileSync(configPath, malformed)
+
+    const result = spawnSync('bash', [
+      join(assetsDevcontainerDir, 'ssh-config-install.sh'),
+      '--alias',
+      alias,
+      '--config',
+      configPath,
+      '--quiet'
+    ], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        DEVCONTAINER_SSH_KEY_DIR: stateDir,
+        DEVCONTAINER_SSH_KEY_PATH: keyPath
+      }
+    })
+
+    assert.notStrictEqual(result.status, 0)
+    assert.match(result.stderr, /without matching/)
+    assert.strictEqual(readFileSync(configPath, 'utf8'), malformed)
   })
 
   test('refreshes coding-agent CLIs from lifecycle hooks through updater utility', () => {

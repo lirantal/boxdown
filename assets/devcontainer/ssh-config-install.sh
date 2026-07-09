@@ -89,11 +89,19 @@ write_ssh_config_block() {
   chmod 0600 "$SSH_CONFIG"
 
   tmp_file="$(mktemp)"
-  awk -v begin="$BEGIN_MARKER" -v end="$END_MARKER" '
+  if ! awk -v begin="$BEGIN_MARKER" -v end="$END_MARKER" '
     $0 == begin { skip = 1; next }
-    $0 == end { skip = 0; next }
+    $0 == end && skip { skip = 0; next }
     !skip { print }
-  ' "$SSH_CONFIG" > "$tmp_file"
+    END {
+      if (skip) {
+        exit 42
+      }
+    }
+  ' "$SSH_CONFIG" > "$tmp_file"; then
+    rm -f "$tmp_file"
+    die "Refusing to update SSH config for ${HOST_ALIAS}: found \"${BEGIN_MARKER}\" without matching \"${END_MARKER}\". Repair the config manually before running Boxdown again."
+  fi
 
   start_script_quoted="$(ssh_config_quote "$START_SCRIPT")"
   key_path_quoted="$(ssh_config_quote "$SSH_KEY_PATH")"

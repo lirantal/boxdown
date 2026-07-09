@@ -1,4 +1,4 @@
-import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 
 import type { WorkspaceContext } from './paths.ts'
@@ -45,68 +45,87 @@ export function buildSshConfigBlock (context: WorkspaceContext, alias: string): 
   ].join('\n')
 }
 
-export function replaceSshConfigBlock (existingConfig: string, alias: string, block: string): string {
-  const begin = `# BEGIN ${alias} boxdown devcontainer ssh`
-  const end = `# END ${alias} boxdown devcontainer ssh`
+interface SshConfigMarkerSet {
+  begin: string
+  end: string
+}
+
+function managedSshConfigMarkerSets (alias: string): SshConfigMarkerSet[] {
+  return [
+    {
+      begin: `# BEGIN ${alias} boxdown devcontainer ssh`,
+      end: `# END ${alias} boxdown devcontainer ssh`
+    },
+    {
+      begin: `# BEGIN ${alias} devcontainer ssh`,
+      end: `# END ${alias} devcontainer ssh`
+    }
+  ]
+}
+
+function malformedSshConfigBlockError (alias: string, markers: SshConfigMarkerSet): Error {
+  return new Error(`Refusing to update SSH config for ${alias}: found "${markers.begin}" without matching "${markers.end}". Repair the config manually before running Boxdown again.`)
+}
+
+function stripManagedSshConfigBlocks (existingConfig: string, alias: string): { lines: string[], removed: boolean } {
+  const markerSets = managedSshConfigMarkerSets(alias)
   const lines = existingConfig.split(/\r?\n/)
   const nextLines: string[] = []
-  let skipping = false
+  let removed = false
 
-  for (const line of lines) {
-    if (line === begin) {
-      skipping = true
+  for (let index = 0; index < lines.length; index++) {
+    const line = lines[index]
+    const markers = markerSets.find((candidate) => candidate.begin === line)
+
+    if (markers === undefined) {
+      nextLines.push(line ?? '')
       continue
     }
 
-    if (line === end) {
-      skipping = false
-      continue
+    const endIndex = lines.findIndex((candidate, candidateIndex) => candidateIndex > index && candidate === markers.end)
+
+    if (endIndex === -1) {
+      throw malformedSshConfigBlockError(alias, markers)
     }
 
-    if (!skipping) {
-      nextLines.push(line)
-    }
+    removed = true
+    index = endIndex
   }
 
-  while (nextLines.length > 0 && nextLines[nextLines.length - 1] === '') {
-    nextLines.pop()
+  return { lines: nextLines, removed }
+}
+
+function trimTrailingBlankLines (lines: string[]): void {
+  while (lines.length > 0 && lines[lines.length - 1] === '') {
+    lines.pop()
   }
+}
+
+function writeFileAtomic (path: string, contents: string, mode: number): void {
+  const destinationPath = existsSync(path) ? realpathSync(path) : path
+  const tmpPath = `${destinationPath}.tmp-${process.pid}-${Date.now()}`
+
+  writeFileSync(tmpPath, contents, { mode })
+  chmodSync(tmpPath, mode)
+  renameSync(tmpPath, destinationPath)
+}
+
+export function replaceSshConfigBlock (existingConfig: string, alias: string, block: string): string {
+  const { lines: nextLines } = stripManagedSshConfigBlocks(existingConfig, alias)
+
+  trimTrailingBlankLines(nextLines)
 
   return `${nextLines.join('\n')}${nextLines.length > 0 ? '\n\n' : ''}${block}`
 }
 
 export function removeSshConfigBlock (existingConfig: string, alias: string): string {
-  const begin = `# BEGIN ${alias} boxdown devcontainer ssh`
-  const end = `# END ${alias} boxdown devcontainer ssh`
-  const lines = existingConfig.split(/\r?\n/)
-  const nextLines: string[] = []
-  let skipping = false
-  let removed = false
-
-  for (const line of lines) {
-    if (line === begin) {
-      skipping = true
-      removed = true
-      continue
-    }
-
-    if (line === end && skipping) {
-      skipping = false
-      continue
-    }
-
-    if (!skipping) {
-      nextLines.push(line)
-    }
-  }
+  const { lines: nextLines, removed } = stripManagedSshConfigBlocks(existingConfig, alias)
 
   if (!removed) {
     return existingConfig
   }
 
-  while (nextLines.length > 0 && nextLines[nextLines.length - 1] === '') {
-    nextLines.pop()
-  }
+  trimTrailingBlankLines(nextLines)
 
   return nextLines.length > 0 ? `${nextLines.join('\n')}\n` : ''
 }
@@ -131,7 +150,7 @@ export async function installSshConfig (context: WorkspaceContext, alias: string
   const nextConfig = replaceSshConfigBlock(existingConfig, alias, block)
 
   if (nextConfig !== existingConfig) {
-    writeFileSync(sshConfigPath, nextConfig)
+    writeFileAtomic(sshConfigPath, nextConfig, 0o600)
     if (!options.quiet) {
       process.stdout.write(`Installed SSH alias: ${alias}\n`)
     }
@@ -167,7 +186,7 @@ export function uninstallSshConfig (alias: string, options: { quiet?: boolean, c
   const changed = nextConfig !== existingConfig
 
   if (changed) {
-    writeFileSync(sshConfigPath, nextConfig)
+    writeFileAtomic(sshConfigPath, nextConfig, 0o600)
     chmodSync(sshConfigPath, 0o600)
   }
 
