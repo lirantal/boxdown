@@ -32,6 +32,13 @@ export interface ResolveProgressModeOptions {
   isTTY?: boolean
 }
 
+export type ProgressStepState = 'pending' | 'running' | 'complete' | 'failed' | 'skipped'
+
+export interface ProgressStepDefinition {
+  id: string
+  label: string
+}
+
 const PROGRESS_MARKER_PREFIX = 'BOXDOWN_PROGRESS:'
 const DEFAULT_FAILURE_TAIL_LINES = 20
 const DEFAULT_SPINNER_FRAMES = ['◒', '◐', '◓', '◑'] as const
@@ -42,6 +49,10 @@ interface ActiveSpinner {
   frameIndex: number
   timer?: ReturnType<typeof setInterval>
   tty: boolean
+}
+
+interface ProgressStep extends ProgressStepDefinition {
+  state: ProgressStepState
 }
 
 function writeLine (target: ProgressOutputTarget, message: string): void {
@@ -99,6 +110,9 @@ export class ProgressReporter {
   #sectionPrinted = false
   #sectionOpen = false
   #spinner: ActiveSpinner | undefined
+  #steps: ProgressStep[] = []
+  #renderedStepLineCount = 0
+  #stepFrameIndex = 0
 
   constructor (options: ProgressReporterOptions = {}) {
     this.mode = options.mode ?? (options.verbose === true ? 'verbose' : 'interactive')
@@ -140,6 +154,8 @@ export class ProgressReporter {
 
     this.#write(this.target, formatPromptEnd())
     this.#sectionOpen = false
+    this.#steps = []
+    this.#renderedStepLineCount = 0
   }
 
   item (message: string): void {
@@ -179,6 +195,32 @@ export class ProgressReporter {
     }
   }
 
+  setSteps (steps: readonly ProgressStepDefinition[]): void {
+    this.#steps = steps.map((step) => ({
+      ...step,
+      state: 'pending'
+    }))
+    this.#stepFrameIndex = 0
+    this.#renderedStepLineCount = 0
+    this.#renderChecklist()
+  }
+
+  startStep (id: string): void {
+    this.#updateStep(id, 'running')
+  }
+
+  completeStep (id: string): void {
+    this.#updateStep(id, 'complete')
+  }
+
+  failStep (id: string): void {
+    this.#updateStep(id, 'failed')
+  }
+
+  skipStep (id: string): void {
+    this.#updateStep(id, 'skipped')
+  }
+
   startSpinner (message: string): void {
     if (this.mode !== 'interactive') {
       return
@@ -209,6 +251,12 @@ export class ProgressReporter {
   }
 
   tickSpinner (): void {
+    if (this.#steps.some((step) => step.state === 'running')) {
+      this.#stepFrameIndex += 1
+      this.#renderChecklist()
+      return
+    }
+
     const spinner = this.#spinner
     if (spinner === undefined || !spinner.tty) {
       return
@@ -272,6 +320,71 @@ export class ProgressReporter {
 
   #clearSpinnerLine (): void {
     this.#writeRaw(this.target, '\r\u001B[2K')
+  }
+
+  #updateStep (id: string, state: ProgressStepState): void {
+    const index = this.#steps.findIndex((step) => step.id === id)
+
+    if (index === -1) {
+      return
+    }
+
+    this.#steps[index] = {
+      ...this.#steps[index],
+      state
+    }
+
+    this.#renderChecklist()
+  }
+
+  #renderChecklist (): void {
+    if (this.mode !== 'interactive' || this.#steps.length === 0) {
+      return
+    }
+
+    const lines = this.#steps.map((step) => this.#formatStep(step))
+
+    if (this.#isTTY) {
+      if (this.#renderedStepLineCount > 0) {
+        this.#writeRaw(this.target, `\u001B[${this.#renderedStepLineCount}A`)
+      }
+
+      for (const line of lines) {
+        this.#writeRaw(this.target, `\u001B[2K\r${line}\n`)
+      }
+
+      this.#renderedStepLineCount = lines.length
+      return
+    }
+
+    if (this.#renderedStepLineCount === 0) {
+      for (const line of lines) {
+        this.#write(this.target, line)
+      }
+      this.#renderedStepLineCount = lines.length
+    }
+  }
+
+  #formatStep (step: ProgressStep): string {
+    const label = step.state === 'skipped' ? color(step.label, 'dim') : step.label
+    return `${promptRail()}  ${this.#stepMark(step.state)} ${label}`
+  }
+
+  #stepMark (state: ProgressStepState): string {
+    if (state === 'running') {
+      const frame = this.#spinnerFrames[this.#stepFrameIndex % this.#spinnerFrames.length] ?? '◐'
+      return color(frame, 'cyan')
+    }
+
+    if (state === 'complete') {
+      return color('✔', 'green')
+    }
+
+    if (state === 'failed') {
+      return color('!', 'dim')
+    }
+
+    return color('□', 'dim')
   }
 }
 

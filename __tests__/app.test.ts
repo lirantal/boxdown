@@ -2084,6 +2084,51 @@ describe('progress output', () => {
     ])
   })
 
+  test('renders live checklist state in place on a TTY', () => {
+    const lines: string[] = []
+    const raw: string[] = []
+    const progress = createProgress({
+      isTTY: true,
+      spinnerFrames: ['◒', '◐'],
+      spinnerIntervalMs: 60_000,
+      write: (target, message) => {
+        lines.push(`${target}:${message}`)
+      },
+      writeRaw: (target, message) => {
+        raw.push(`${target}:${message}`)
+      }
+    })
+
+    progress.section('Boxdown setup')
+    progress.setSteps([
+      { id: 'config', label: 'Writing generated devcontainer config' },
+      { id: 'start', label: 'Starting devcontainer' },
+      { id: 'install', label: 'Installing SSH alias' }
+    ])
+    progress.completeStep('config')
+    progress.startStep('start')
+    progress.tickSpinner()
+    progress.completeStep('start')
+    progress.failStep('install')
+    progress.skipStep('install')
+    progress.end()
+
+    assert.deepStrictEqual(lines, [
+      `stdout:${formatPromptTitle('Boxdown setup')}`,
+      `stdout:${formatPromptEnd()}`
+    ])
+
+    const rendered = raw.join('')
+    assert.ok(rendered.includes(`${color('□', 'dim')} Writing generated devcontainer config`))
+    assert.ok(rendered.includes(`${color('✔', 'green')} Writing generated devcontainer config`))
+    assert.ok(rendered.includes(`${color('◒', 'cyan')} Starting devcontainer`))
+    assert.ok(rendered.includes(`${color('◐', 'cyan')} Starting devcontainer`))
+    assert.ok(rendered.includes(`${color('✔', 'green')} Starting devcontainer`))
+    assert.ok(rendered.includes(`${color('!', 'dim')} Installing SSH alias`))
+    assert.ok(rendered.includes(`${color('□', 'dim')} ${color('Installing SSH alias', 'dim')}`))
+    assert.match(rendered, /\u001B\[3A/)
+  })
+
   test('captures raw command output while surfacing progress markers', async () => {
     const lines: string[] = []
     const progress = createProgress({
