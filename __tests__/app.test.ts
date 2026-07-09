@@ -24,7 +24,7 @@ import { listWorkspaceMetadata, readWorkspaceMetadata, recordWorkspaceDockerImag
 import { createWorkspaceContext } from '../src/paths.ts'
 import { promptConfirm, promptMultiSelect, promptText, type PromptInput, type PromptOutput } from '../src/interactive-prompts.ts'
 import { buildHostToolPath } from '../src/process.ts'
-import { createProgress, formatCommandFailure, runProgressCommand } from '../src/progress.ts'
+import { createProgress, formatCommandFailure, resolveProgressMode, runProgressCommand } from '../src/progress.ts'
 import { DEFAULT_TTY_MAX_COLUMNS, interactiveCommandScript, interactiveShellEnvArgs, interactiveShellScript } from '../src/shell.ts'
 import { buildSshConfigBlock, defaultSshAlias, installSshConfig, removeSshConfigBlock, replaceSshConfigBlock, uninstallSshConfig } from '../src/ssh-config.ts'
 import { createStatusInfo, formatStatusText, inspectSshConfigStatus, parseDockerPsJsonLines, statusIsHealthy } from '../src/status.ts'
@@ -2026,6 +2026,41 @@ describe('doctor output', () => {
 })
 
 describe('progress output', () => {
+  test('resolves progress modes from terminal and output context', () => {
+    assert.strictEqual(resolveProgressMode({ isTTY: true, env: { CI: 'false' } }), 'interactive')
+    assert.strictEqual(resolveProgressMode({ isTTY: true, verbose: true, env: { CI: 'false' } }), 'verbose')
+    assert.strictEqual(resolveProgressMode({ isTTY: true, env: { CI: 'true' } }), 'verbose')
+    assert.strictEqual(resolveProgressMode({ isTTY: false, env: { CI: 'false' } }), 'verbose')
+    assert.strictEqual(resolveProgressMode({ json: true, isTTY: true, env: { CI: 'false' } }), 'none')
+  })
+
+  test('verbose progress mode suppresses styled progress but keeps warnings visible', () => {
+    const lines: string[] = []
+    const progress = createProgress({
+      mode: 'verbose',
+      write: (target, message) => {
+        lines.push(`${target}:${message}`)
+      }
+    })
+
+    progress.section('Boxdown setup')
+    progress.detail('Workspace: /tmp/demo')
+    progress.item('Starting devcontainer')
+    progress.warn('Could not refresh one or more coding-agent CLIs inside the devcontainer.')
+    progress.end()
+
+    assert.deepStrictEqual(lines, [
+      'stdout:Warning: Could not refresh one or more coding-agent CLIs inside the devcontainer.'
+    ])
+    assert.deepStrictEqual({
+      BOXDOWN_VERBOSE: progress.commandEnv().BOXDOWN_VERBOSE,
+      BOXDOWN_PROGRESS: progress.commandEnv().BOXDOWN_PROGRESS
+    }, {
+      BOXDOWN_VERBOSE: '1',
+      BOXDOWN_PROGRESS: '0'
+    })
+  })
+
   test('formats styled progress sections', () => {
     const lines: string[] = []
     const progress = createProgress({

@@ -2,10 +2,12 @@ import { runBuffered, type BufferedCommandOptions, type CommandResult } from './
 import { color, formatPromptEnd, formatPromptTitle, promptRail, selectedMark } from './cli-style.ts'
 
 export type ProgressOutputTarget = 'stdout' | 'stderr'
+export type ProgressMode = 'interactive' | 'verbose' | 'none'
 export type ProgressWriter = (target: ProgressOutputTarget, message: string) => void
 export type ProgressRawWriter = (target: ProgressOutputTarget, message: string) => void
 
 export interface ProgressReporterOptions {
+  mode?: ProgressMode
   verbose?: boolean
   target?: ProgressOutputTarget
   write?: ProgressWriter
@@ -20,6 +22,14 @@ export interface ProgressCommandOptions extends Pick<BufferedCommandOptions, 'cw
   verboseStdout?: ProgressOutputTarget | false
   verboseStderr?: ProgressOutputTarget | false
   spinnerLabel?: string
+}
+
+export interface ResolveProgressModeOptions {
+  verbose?: boolean
+  json?: boolean
+  target?: ProgressOutputTarget
+  env?: NodeJS.ProcessEnv
+  isTTY?: boolean
 }
 
 const PROGRESS_MARKER_PREFIX = 'BOXDOWN_PROGRESS:'
@@ -49,11 +59,36 @@ function targetIsTTY (target: ProgressOutputTarget): boolean {
   return stream.isTTY === true
 }
 
+function isCiEnvironment (env: NodeJS.ProcessEnv): boolean {
+  const ci = env.CI
+  return ci !== undefined && ci !== '' && ci !== '0' && ci !== 'false'
+}
+
 function normalizeMessage (message: string): string {
   return message.trim().replace(/\s+/g, ' ')
 }
 
+export function resolveProgressMode (options: ResolveProgressModeOptions = {}): ProgressMode {
+  if (options.json === true) {
+    return 'none'
+  }
+
+  if (options.verbose === true) {
+    return 'verbose'
+  }
+
+  if (isCiEnvironment(options.env ?? process.env)) {
+    return 'verbose'
+  }
+
+  const target = options.target ?? 'stdout'
+  const isTTY = options.isTTY ?? targetIsTTY(target)
+
+  return isTTY ? 'interactive' : 'verbose'
+}
+
 export class ProgressReporter {
+  readonly mode: ProgressMode
   readonly verbose: boolean
   readonly target: ProgressOutputTarget
   readonly #write: ProgressWriter
@@ -66,7 +101,8 @@ export class ProgressReporter {
   #spinner: ActiveSpinner | undefined
 
   constructor (options: ProgressReporterOptions = {}) {
-    this.verbose = options.verbose ?? false
+    this.mode = options.mode ?? (options.verbose === true ? 'verbose' : 'interactive')
+    this.verbose = this.mode === 'verbose'
     this.target = options.target ?? 'stdout'
     this.#write = options.write ?? writeLine
     this.#writeRaw = options.writeRaw ?? writeRaw
@@ -76,6 +112,10 @@ export class ProgressReporter {
   }
 
   section (title: string): void {
+    if (this.mode !== 'interactive') {
+      return
+    }
+
     if (this.#sectionOpen) {
       this.end()
     } else if (this.#sectionPrinted) {
@@ -90,6 +130,10 @@ export class ProgressReporter {
   end (): void {
     this.stopSpinner()
 
+    if (this.mode !== 'interactive') {
+      return
+    }
+
     if (!this.#sectionOpen) {
       return
     }
@@ -99,14 +143,31 @@ export class ProgressReporter {
   }
 
   item (message: string): void {
+    if (this.mode !== 'interactive') {
+      return
+    }
+
     this.#writeLine(`${promptRail()}  ${selectedMark()} ${message}`)
   }
 
   detail (message: string): void {
+    if (this.mode !== 'interactive') {
+      return
+    }
+
     this.#writeLine(`${promptRail()}  ${color(message, 'dim')}`)
   }
 
   warn (message: string): void {
+    if (this.mode === 'none') {
+      return
+    }
+
+    if (this.mode === 'verbose') {
+      this.#write(this.target, `Warning: ${message}`)
+      return
+    }
+
     this.#writeLine(`${promptRail()}  ${color('!', 'dim')} ${message}`)
   }
 
@@ -119,7 +180,7 @@ export class ProgressReporter {
   }
 
   startSpinner (message: string): void {
-    if (this.verbose) {
+    if (this.mode !== 'interactive') {
       return
     }
 
@@ -182,7 +243,7 @@ export class ProgressReporter {
     return {
       ...(env ?? {}),
       BOXDOWN_VERBOSE: this.verbose ? '1' : '0',
-      BOXDOWN_PROGRESS: this.verbose ? '0' : '1'
+      BOXDOWN_PROGRESS: this.mode === 'interactive' ? '1' : '0'
     }
   }
 
