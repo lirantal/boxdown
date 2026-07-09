@@ -1,6 +1,6 @@
 {
   "name": "boxdown",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Run a reusable devcontainer sandbox for any local project",
   "types": "dist/main.d.mts",
   "type": "module",
