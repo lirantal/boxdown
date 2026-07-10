@@ -161,6 +161,14 @@ documentation uses `start` as the canonical command.
 `boxdown cc` remains supported as an alias for `boxdown claude`, but
 documentation uses `claude` as the canonical command.
 
+`boxdown setup` begins with a host-readiness preflight before it prompts for
+SSH targets, writes workspace state, or starts Docker work. Required failures
+such as an unavailable Docker daemon stop setup with an actionable summary.
+When a local Docker image is available, the preflight also performs a no-pull,
+no-start bind-mount probe for the workspace and Boxdown-managed mount paths.
+Run `boxdown doctor` directly for the complete diagnostic report; an unavailable
+best-effort mount probe is reported as a warning and does not block setup.
+
 Container bring-up installs Codex and Claude Code by default. The OpenCode and
 Antigravity commands stay available, but install/update those CLIs only when you
 launch them. Use `--` to pass arguments to the selected agent:

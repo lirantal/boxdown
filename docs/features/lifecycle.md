@@ -133,7 +133,18 @@ directory as a workspace.
 
 `doctor` validates required host prerequisites: Node, Docker CLI, Docker
 daemon access, SSH tools, packaged devcontainer assets, and Boxdown's packaged
-`@devcontainers/cli` dependency.
+`@devcontainers/cli` dependency. It also uses a local Docker image, when one is
+available, to create and immediately remove disposable containers that verify
+Docker can bind-mount the workspace, Boxdown assets, and Boxdown runtime-state
+paths. The probe never pulls an image or starts container code.
+
+Known bind-mount/share failures are errors with the affected host path and
+Docker Desktop remediation guidance. If Docker has no local image or the probe
+cannot complete for another reason, doctor reports a warning instead.
+
+`boxdown setup` runs the required doctor checks before it prompts, writes
+workspace metadata, creates SSH keys, generates devcontainer configuration, or
+starts Docker. Required failures stop setup; warnings remain non-blocking.
 
 GitHub CLI auth is optional. Missing or unauthenticated `gh` is reported as a
 warning rather than a failure.
