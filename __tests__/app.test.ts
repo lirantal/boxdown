@@ -2771,6 +2771,7 @@ describe('doctor output', () => {
 
     const checks = await runDoctorChecks(context, {
       includeOptional: false,
+      includeDockerMountProbe: false,
       runCommand: async (command, args) => {
         calls.push(`${command} ${args.join(' ')}`)
         return { code: 0, stdout: '', stderr: '' }
@@ -2780,6 +2781,118 @@ describe('doctor output', () => {
     assert.ok(checks.every((item) => item.name !== 'gh' && item.name !== 'gh-auth'))
     assert.ok(calls.every((call) => !call.startsWith('gh ')))
     assert.ok(checks.every((item) => item.level === 'ok'))
+  })
+
+  test('reports a Docker bind-mount failure and removes successful disposable probes', async () => {
+    const workspace = tempDir('doctor-mount-workspace')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('doctor-mount-cache'),
+        BOXDOWN_DATA_HOME: tempDir('doctor-mount-data')
+      },
+      assetsDevcontainerDir
+    })
+    const calls: string[] = []
+    const probeSources: string[] = []
+
+    const checks = await runDoctorChecks(context, {
+      includeOptional: false,
+      runCommand: async (command, args) => {
+        calls.push(`${command} ${args.join(' ')}`)
+        if (command === 'docker' && args[0] === 'image') {
+          return { code: 0, stdout: 'example:latest\n', stderr: '' }
+        }
+
+        if (command === 'docker' && args[0] === 'create') {
+          const mount = args.find((arg) => arg.startsWith('type=bind,')) ?? ''
+          probeSources.push(mount)
+          if (mount.includes(`source=${context.assetsDevcontainerDir},`)) {
+            return { code: 1, stdout: '', stderr: 'invalid mount config for type "bind": bind source path does not exist' }
+          }
+          return { code: 0, stdout: `probe-${probeSources.length}\n`, stderr: '' }
+        }
+
+        return { code: 0, stdout: '', stderr: '' }
+      }
+    })
+
+    const mountCheck = checks.find((item) => item.name === 'docker-bind-mounts')
+    assert.deepStrictEqual(mountCheck?.level, 'fail')
+    assert.match(mountCheck?.message ?? '', /Boxdown devcontainer assets/)
+    assert.ok(calls.includes('docker rm -f probe-1'))
+    assert.ok(probeSources.some((source) => source.includes(`source=${context.workspaceFolder},`)))
+    assert.ok(probeSources.some((source) => source.includes(`source=${context.assetsDevcontainerDir},`)))
+    assert.strictEqual(existsSync(context.sshKeyPath), false)
+    assert.strictEqual(existsSync(context.workspaceDataDir), true)
+  })
+
+  test('removes every successful Docker mount probe and its temporary runtime path', async () => {
+    const workspace = tempDir('doctor-mount-cleanup-workspace')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('doctor-mount-cleanup-cache'),
+        BOXDOWN_DATA_HOME: tempDir('doctor-mount-cleanup-data')
+      },
+      assetsDevcontainerDir
+    })
+    const calls: string[] = []
+    const probeSources: string[] = []
+
+    const checks = await runDoctorChecks(context, {
+      includeOptional: false,
+      runCommand: async (command, args) => {
+        calls.push(`${command} ${args.join(' ')}`)
+        if (command === 'docker' && args[0] === 'image') {
+          return { code: 0, stdout: 'example:latest\n', stderr: '' }
+        }
+        if (command === 'docker' && args[0] === 'create') {
+          probeSources.push(args.find((arg) => arg.startsWith('type=bind,')) ?? '')
+          return { code: 0, stdout: `probe-${probeSources.length}\n`, stderr: '' }
+        }
+        return { code: 0, stdout: '', stderr: '' }
+      }
+    })
+
+    assert.strictEqual(checks.find((item) => item.name === 'docker-bind-mounts')?.level, 'ok')
+    assert.deepStrictEqual(calls.filter((call) => call.startsWith('docker rm -f ')), [
+      'docker rm -f probe-1',
+      'docker rm -f probe-2',
+      'docker rm -f probe-3'
+    ])
+    const runtimeProbeSource = probeSources[2]?.match(/source=([^,]+)/)?.[1]
+    assert.ok(runtimeProbeSource !== undefined)
+    assert.strictEqual(existsSync(runtimeProbeSource ?? ''), false)
+  })
+
+  test('warns when Docker bind-mount readiness cannot be probed without a local image', async () => {
+    const workspace = tempDir('doctor-mount-unavailable-workspace')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('doctor-mount-unavailable-cache'),
+        BOXDOWN_DATA_HOME: tempDir('doctor-mount-unavailable-data')
+      },
+      assetsDevcontainerDir
+    })
+
+    const checks = await runDoctorChecks(context, {
+      includeOptional: false,
+      runCommand: async (command, args) => {
+        if (command === 'docker' && args[0] === 'image') {
+          return { code: 0, stdout: '', stderr: '' }
+        }
+        return { code: 0, stdout: '', stderr: '' }
+      }
+    })
+
+    assert.deepStrictEqual(checks.find((item) => item.name === 'docker-bind-mounts'), {
+      name: 'docker-bind-mounts',
+      level: 'warn',
+      message: 'Docker bind-mount readiness was not checked because no local Docker image is available'
+    })
+    assert.strictEqual(existsSync(context.workspaceDataDir), false)
   })
 
   test('formats doctor checks and detects failures', () => {

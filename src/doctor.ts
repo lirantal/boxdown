@@ -1,4 +1,5 @@
-import { existsSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { join } from 'node:path'
 
 import { resolveDevcontainerCli } from './devcontainer-cli.ts'
 import type { WorkspaceContext } from './paths.ts'
@@ -22,6 +23,7 @@ export type DoctorCommandRunner = (command: string, args: string[]) => Promise<D
 
 export interface RunDoctorChecksOptions {
   includeOptional?: boolean
+  includeDockerMountProbe?: boolean
   runCommand?: DoctorCommandRunner
 }
 
@@ -74,16 +76,18 @@ export async function runDoctorChecks (context: WorkspaceContext, options: RunDo
     'Packaged @devcontainers/cli is required but was not available'
   ))
 
+  const dockerCliWorks = await commandWorks(runCommand, 'docker', ['--version'])
   checks.push(check(
     'docker-cli',
-    await commandWorks(runCommand, 'docker', ['--version']),
+    dockerCliWorks,
     'Docker CLI is available',
     'Docker CLI is required but was not available'
   ))
 
+  const dockerDaemonWorks = await commandWorks(runCommand, 'docker', ['info'])
   checks.push(check(
     'docker-daemon',
-    await commandWorks(runCommand, 'docker', ['info']),
+    dockerDaemonWorks,
     'Docker daemon is reachable',
     'Docker daemon is required but was not reachable'
   ))
@@ -94,6 +98,10 @@ export async function runDoctorChecks (context: WorkspaceContext, options: RunDo
     'ssh is available',
     'ssh is required but was not available'
   ))
+
+  if (options.includeDockerMountProbe ?? true) {
+    checks.push(await checkDockerBindMounts(context, runCommand, dockerCliWorks && dockerDaemonWorks))
+  }
 
   checks.push(check(
     'ssh-keygen',
@@ -127,6 +135,116 @@ export async function runDoctorChecks (context: WorkspaceContext, options: RunDo
   }
 
   return checks
+}
+
+function dockerProbeImage (output: string): string | undefined {
+  return output
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((image) => image.length > 0 && image !== '<none>:<none>')
+}
+
+function dockerMountError (output: string): boolean {
+  return /invalid mount config|bind source path does not exist|mount denied|file sharing|mounts denied|permission denied|operation not permitted/i.test(output)
+}
+
+function compactOutput (output: string): string {
+  return output.trim().replace(/\s+/g, ' ').slice(0, 300)
+}
+
+interface DockerMountSource {
+  label: string
+  path: string
+}
+
+async function checkDockerBindMounts (
+  context: WorkspaceContext,
+  runCommand: DoctorCommandRunner,
+  dockerReady: boolean
+): Promise<DoctorCheck> {
+  if (!dockerReady) {
+    return {
+      name: 'docker-bind-mounts',
+      level: 'warn',
+      message: 'Docker bind-mount readiness was not checked because Docker is unavailable'
+    }
+  }
+
+  const imageResult = await runCommand('docker', ['image', 'ls', '--format', '{{.Repository}}:{{.Tag}}'])
+  const image = imageResult.code === 0 ? dockerProbeImage(imageResult.stdout) : undefined
+
+  if (image === undefined) {
+    return {
+      name: 'docker-bind-mounts',
+      level: 'warn',
+      message: 'Docker bind-mount readiness was not checked because no local Docker image is available'
+    }
+  }
+
+  mkdirSync(context.workspaceDataDir, { recursive: true })
+  const runtimeProbeDir = mkdtempSync(join(context.workspaceDataDir, 'doctor-mount-probe-'))
+  const sources: DockerMountSource[] = [
+    { label: 'workspace', path: context.workspaceFolder },
+    { label: 'Boxdown devcontainer assets', path: context.assetsDevcontainerDir },
+    { label: 'Boxdown runtime state', path: runtimeProbeDir }
+  ]
+
+  try {
+    for (const source of sources) {
+      const createResult = await runCommand('docker', [
+        'create',
+        '--pull=never',
+        '--entrypoint',
+        '/bin/true',
+        '--mount',
+        `type=bind,source=${source.path},target=/boxdown-preflight,readonly`,
+        image
+      ])
+      const output = `${createResult.stderr}\n${createResult.stdout}`
+
+      if (createResult.code !== 0) {
+        if (dockerMountError(output)) {
+          return {
+            name: 'docker-bind-mounts',
+            level: 'fail',
+            message: `Docker cannot bind-mount the ${source.label} path (${source.path}). Check Docker Desktop file sharing and host-folder permissions.`
+          }
+        }
+
+        return {
+          name: 'docker-bind-mounts',
+          level: 'warn',
+          message: `Docker bind-mount readiness could not be checked for ${source.label}: ${compactOutput(output) || 'Docker create failed'}`
+        }
+      }
+
+      const containerId = createResult.stdout.trim().split(/\r?\n/)[0]
+      if (containerId === undefined || containerId.length === 0) {
+        return {
+          name: 'docker-bind-mounts',
+          level: 'warn',
+          message: `Docker bind-mount readiness could not be checked for ${source.label}: Docker did not return a container ID`
+        }
+      }
+
+      const removeResult = await runCommand('docker', ['rm', '-f', containerId])
+      if (removeResult.code !== 0) {
+        return {
+          name: 'docker-bind-mounts',
+          level: 'warn',
+          message: `Docker bind-mount readiness was checked, but the disposable probe container could not be removed: ${compactOutput(removeResult.stderr) || 'docker rm failed'}`
+        }
+      }
+    }
+  } finally {
+    rmSync(runtimeProbeDir, { recursive: true, force: true })
+  }
+
+  return {
+    name: 'docker-bind-mounts',
+    level: 'ok',
+    message: 'Docker can bind-mount Boxdown workspace, assets, and runtime-state paths'
+  }
 }
 
 async function packagedDevcontainerCliWorks (context: WorkspaceContext, runCommand: DoctorCommandRunner): Promise<boolean> {
