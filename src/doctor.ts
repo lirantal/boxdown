@@ -12,6 +12,19 @@ export interface DoctorCheck {
   message: string
 }
 
+export interface DoctorCommandResult {
+  code: number
+  stdout: string
+  stderr: string
+}
+
+export type DoctorCommandRunner = (command: string, args: string[]) => Promise<DoctorCommandResult>
+
+export interface RunDoctorChecksOptions {
+  includeOptional?: boolean
+  runCommand?: DoctorCommandRunner
+}
+
 function nodeVersionPasses (version: string): boolean {
   const major = Number.parseInt(version.split('.')[0] ?? '', 10)
   return Number.isInteger(major) && major >= 24
@@ -25,26 +38,26 @@ function check (name: string, pass: boolean, okMessage: string, failMessage: str
   }
 }
 
-async function commandWorks (command: string, args: string[]): Promise<boolean> {
-  const result = await runBuffered(command, args, {
+async function runDoctorCommand (command: string, args: string[]): Promise<DoctorCommandResult> {
+  return runBuffered(command, args, {
     mirrorStdout: false,
     mirrorStderr: false
   })
+}
 
+async function commandWorks (runCommand: DoctorCommandRunner, command: string, args: string[]): Promise<boolean> {
+  const result = await runCommand(command, args)
   return result.code === 0
 }
 
-async function commandExists (command: string, args: string[]): Promise<boolean> {
-  const result = await runBuffered(command, args, {
-    mirrorStdout: false,
-    mirrorStderr: false
-  })
-
+async function commandExists (runCommand: DoctorCommandRunner, command: string, args: string[]): Promise<boolean> {
+  const result = await runCommand(command, args)
   return result.code !== 127
 }
 
-export async function runDoctorChecks (context: WorkspaceContext): Promise<DoctorCheck[]> {
+export async function runDoctorChecks (context: WorkspaceContext, options: RunDoctorChecksOptions = {}): Promise<DoctorCheck[]> {
   const checks: DoctorCheck[] = []
+  const runCommand = options.runCommand ?? runDoctorCommand
   const nodeVersion = process.versions.node
 
   checks.push(check(
@@ -56,35 +69,35 @@ export async function runDoctorChecks (context: WorkspaceContext): Promise<Docto
 
   checks.push(check(
     'devcontainers-cli',
-    await packagedDevcontainerCliWorks(context),
+    await packagedDevcontainerCliWorks(context, runCommand),
     'Packaged @devcontainers/cli is available',
     'Packaged @devcontainers/cli is required but was not available'
   ))
 
   checks.push(check(
     'docker-cli',
-    await commandWorks('docker', ['--version']),
+    await commandWorks(runCommand, 'docker', ['--version']),
     'Docker CLI is available',
     'Docker CLI is required but was not available'
   ))
 
   checks.push(check(
     'docker-daemon',
-    await commandWorks('docker', ['info']),
+    await commandWorks(runCommand, 'docker', ['info']),
     'Docker daemon is reachable',
     'Docker daemon is required but was not reachable'
   ))
 
   checks.push(check(
     'ssh',
-    await commandExists('ssh', ['-V']),
+    await commandExists(runCommand, 'ssh', ['-V']),
     'ssh is available',
     'ssh is required but was not available'
   ))
 
   checks.push(check(
     'ssh-keygen',
-    await commandExists('ssh-keygen', ['-?']),
+    await commandExists(runCommand, 'ssh-keygen', ['-?']),
     'ssh-keygen is available',
     'ssh-keygen is required but was not available'
   ))
@@ -96,28 +109,30 @@ export async function runDoctorChecks (context: WorkspaceContext): Promise<Docto
     `Missing Boxdown devcontainer assets: ${context.assetsDevcontainerDir}`
   ))
 
-  if (await commandWorks('gh', ['--version'])) {
-    const ghAuth = await commandWorks('gh', ['auth', 'status', '--hostname', 'github.com'])
-    checks.push({
-      name: 'gh-auth',
-      level: ghAuth ? 'ok' : 'warn',
-      message: ghAuth ? 'GitHub CLI auth is available' : 'GitHub CLI is available but not authenticated'
-    })
-  } else {
-    checks.push({
-      name: 'gh',
-      level: 'warn',
-      message: 'GitHub CLI is optional and was not available'
-    })
+  if (options.includeOptional ?? true) {
+    if (await commandWorks(runCommand, 'gh', ['--version'])) {
+      const ghAuth = await commandWorks(runCommand, 'gh', ['auth', 'status', '--hostname', 'github.com'])
+      checks.push({
+        name: 'gh-auth',
+        level: ghAuth ? 'ok' : 'warn',
+        message: ghAuth ? 'GitHub CLI auth is available' : 'GitHub CLI is available but not authenticated'
+      })
+    } else {
+      checks.push({
+        name: 'gh',
+        level: 'warn',
+        message: 'GitHub CLI is optional and was not available'
+      })
+    }
   }
 
   return checks
 }
 
-async function packagedDevcontainerCliWorks (context: WorkspaceContext): Promise<boolean> {
+async function packagedDevcontainerCliWorks (context: WorkspaceContext, runCommand: DoctorCommandRunner): Promise<boolean> {
   try {
     const cli = resolveDevcontainerCli(context)
-    return await commandWorks(cli.command, [...cli.argsPrefix, '--version'])
+    return await commandWorks(runCommand, cli.command, [...cli.argsPrefix, '--version'])
   } catch {
     return false
   }

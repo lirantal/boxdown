@@ -15,7 +15,7 @@ import { buildGeneratedDevcontainerConfig, publishContainerPortFromConfig } from
 import { BOXDOWN_CONTAINER_AGENTS_DIR, BOXDOWN_CONTAINER_CODEX_AUTH_PATH, BOXDOWN_CONTAINER_CODEX_DIR, BOXDOWN_CONTAINER_GITCONFIG_PATH, BOXDOWN_CONTAINER_HOST_GITCONFIG_DIR, DEVCONTAINER_CLI_VERSION } from '../src/constants.ts'
 import { codingAgentDevcontainerExecArgs, sshTunnelArgs } from '../src/devcontainer.ts'
 import { resolveDevcontainerCli } from '../src/devcontainer-cli.ts'
-import { doctorHasFailures, formatDoctorText } from '../src/doctor.ts'
+import { doctorHasFailures, formatDoctorText, runDoctorChecks } from '../src/doctor.ts'
 import { canonicalGithubRemoteUrl, configureWorkspaceGithubGitAuth } from '../src/github-git-auth.ts'
 import { parseJsonc } from '../src/jsonc.ts'
 import { createWorkspaceListEntries, formatWorkspaceListDetailsText, formatWorkspaceListText } from '../src/list.ts'
@@ -2757,6 +2757,31 @@ describe('workspace list output', () => {
 })
 
 describe('doctor output', () => {
+  test('runs required checks without optional diagnostics when requested', async () => {
+    const workspace = tempDir('doctor-required-workspace')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('doctor-required-cache'),
+        BOXDOWN_DATA_HOME: tempDir('doctor-required-data')
+      },
+      assetsDevcontainerDir
+    })
+    const calls: string[] = []
+
+    const checks = await runDoctorChecks(context, {
+      includeOptional: false,
+      runCommand: async (command, args) => {
+        calls.push(`${command} ${args.join(' ')}`)
+        return { code: 0, stdout: '', stderr: '' }
+      }
+    })
+
+    assert.ok(checks.every((item) => item.name !== 'gh' && item.name !== 'gh-auth'))
+    assert.ok(calls.every((call) => !call.startsWith('gh ')))
+    assert.ok(checks.every((item) => item.level === 'ok'))
+  })
+
   test('formats doctor checks and detects failures', () => {
     const passing = [
       { name: 'node', level: 'ok' as const, message: 'Node 24.15.0' },
