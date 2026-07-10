@@ -12,14 +12,15 @@ export interface EnsureHostSshKeyOptions {
 export async function ensureHostSshKey (context: WorkspaceContext, options: boolean | EnsureHostSshKeyOptions = false): Promise<void> {
   const quiet = typeof options === 'boolean' ? options : options.quiet ?? false
   const progress = typeof options === 'boolean' ? undefined : options.progress
+  const checklistActive = progress?.isChecklistActive() ?? false
   const sshIdentityStepId = progress?.hasStep('ssh-identity') === true ? 'ssh-identity' : undefined
 
   mkdirSync(context.sshKeyDir, { recursive: true, mode: 0o700 })
 
   if (!existsSync(context.sshKeyPath)) {
-    if (progress !== undefined && sshIdentityStepId === undefined) {
+    if (progress !== undefined && !checklistActive) {
       progress.detail(context.sshKeyPath)
-    } else if (!quiet) {
+    } else if (progress === undefined && !quiet) {
       process.stderr.write(`Generating Boxdown SSH identity: ${context.sshKeyPath}\n`)
     }
 
@@ -40,7 +41,7 @@ export async function ensureHostSshKey (context: WorkspaceContext, options: bool
         })
       : await runProgressCommand('ssh-keygen create identity', 'ssh-keygen', args, {
           progress,
-          spinnerLabel: 'Generating Boxdown SSH identity',
+          spinnerLabel: checklistActive ? undefined : 'Generating Boxdown SSH identity',
           stepId: sshIdentityStepId,
           verboseStdout: 'stderr',
           verboseStderr: 'stderr'
@@ -56,7 +57,7 @@ export async function ensureHostSshKey (context: WorkspaceContext, options: bool
   }
 
   if (!existsSync(context.sshPublicKeyPath)) {
-    if (progress !== undefined && sshIdentityStepId === undefined) {
+    if (progress !== undefined && !checklistActive) {
       progress.detail(context.sshPublicKeyPath)
     }
 
@@ -68,7 +69,7 @@ export async function ensureHostSshKey (context: WorkspaceContext, options: bool
         })
       : await runProgressCommand('ssh-keygen derive public key', 'ssh-keygen', args, {
           progress,
-          spinnerLabel: 'Writing Boxdown SSH public key',
+          spinnerLabel: checklistActive ? undefined : 'Writing Boxdown SSH public key',
           stepId: sshIdentityStepId,
           verboseStdout: false,
           verboseStderr: 'stderr'

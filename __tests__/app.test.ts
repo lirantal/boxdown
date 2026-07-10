@@ -30,6 +30,7 @@ import { createProgress, formatCommandFailure, resolveProgressMode, runProgressC
 import { DEFAULT_TTY_MAX_COLUMNS, interactiveCommandScript, interactiveShellEnvArgs, interactiveShellScript } from '../src/shell.ts'
 import { buildSshConfigBlock, defaultSshAlias, installSshConfig, removeSshConfigBlock, replaceSshConfigBlock, uninstallSshConfig } from '../src/ssh-config.ts'
 import { createStatusInfo, formatStatusText, inspectSshConfigStatus, parseDockerPsJsonLines, statusIsHealthy } from '../src/status.ts'
+import { ensureHostSshKey } from '../src/ssh-key.ts'
 
 const assetsDevcontainerDir = fileURLToPath(new URL('../assets/devcontainer', import.meta.url))
 
@@ -2883,6 +2884,57 @@ describe('progress output', () => {
     assert.strictEqual(progress.isChecklistActive(), true)
     progress.end()
     assert.strictEqual(progress.isChecklistActive(), false)
+  })
+
+  test('keeps first-time SSH identity output within an active checklist', async () => {
+    const workspace = tempDir('progress-ssh-identity-workspace')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('progress-ssh-identity-cache'),
+        BOXDOWN_DATA_HOME: tempDir('progress-ssh-identity-data')
+      },
+      assetsDevcontainerDir
+    })
+    const lines: string[] = []
+    const raw: string[] = []
+    const stderr: string[] = []
+    const progress = createProgress({
+      isTTY: true,
+      spinnerIntervalMs: 60_000,
+      write: (target, message) => {
+        lines.push(`${target}:${message}`)
+      },
+      writeRaw: (target, message) => {
+        raw.push(`${target}:${message}`)
+      }
+    })
+    const originalStderrWrite = process.stderr.write
+
+    progress.section('Boxdown setup')
+    progress.setSteps([{ id: 'ssh-identity', label: 'Preparing SSH identity' }])
+    progress.startStep('ssh-identity')
+    process.stderr.write = function capturedStderrWrite (this: typeof process.stderr, chunk: string | Uint8Array): boolean {
+      stderr.push(Buffer.isBuffer(chunk) ? chunk.toString('utf8') : chunk)
+      return true
+    } as typeof process.stderr.write
+
+    try {
+      await ensureHostSshKey(context, { progress })
+    } finally {
+      process.stderr.write = originalStderrWrite
+      progress.end()
+    }
+
+    assert.deepStrictEqual(stderr, [])
+    assert.ok(existsSync(context.sshKeyPath))
+    assert.ok(existsSync(context.sshPublicKeyPath))
+    assert.deepStrictEqual(lines, [
+      `stdout:${formatPromptTitle('Boxdown setup')}`,
+      `stdout:${formatPromptEnd()}`
+    ])
+    assert.ok(!raw.join('').includes('Generating Boxdown SSH identity'))
+    assert.ok(!raw.join('').includes('Writing Boxdown SSH public key'))
   })
 
   test('verbose progress mode suppresses styled progress but keeps warnings visible', () => {
