@@ -1,5 +1,11 @@
 # boxdown
 
+## 1.1.1
+
+### Patch Changes
+
+- [`4bd19cc`](https://github.com/lirantal/boxdown/commit/4bd19cce45aed6f8e1b43b4a0e8a451face4d93a) Thanks [@lirantal](https://github.com/lirantal)! - Add `boxdown --version` and `boxdown -v` for semver-only version output.
+
 ## 1.1.0
 
 ### Minor Changes
