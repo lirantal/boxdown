@@ -214,6 +214,10 @@ export class ProgressReporter {
     this.#renderChecklist()
   }
 
+  isChecklistActive (): boolean {
+    return this.#steps.length > 0
+  }
+
   startStep (id: string): void {
     this.#updateStep(id, 'running')
     this.#startStepTimer()

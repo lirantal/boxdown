@@ -2873,6 +2873,18 @@ describe('progress output', () => {
     })
   })
 
+  test('reports whether a checklist is active', () => {
+    const progress = createProgress({
+      mode: 'none'
+    })
+
+    assert.strictEqual(progress.isChecklistActive(), false)
+    progress.setSteps([{ id: 'demo', label: 'Demo step' }])
+    assert.strictEqual(progress.isChecklistActive(), true)
+    progress.end()
+    assert.strictEqual(progress.isChecklistActive(), false)
+  })
+
   test('verbose progress mode suppresses styled progress but keeps warnings visible', () => {
     const lines: string[] = []
     const progress = createProgress({
