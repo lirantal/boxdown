@@ -3653,6 +3653,67 @@ describe('SSH config generation', () => {
     assert.strictEqual(second.split(`# BEGIN ${alias} boxdown`).length - 1, 1)
   })
 
+  test('repairs accumulated blank lines in an SSH config containing only managed blocks', () => {
+    const workspace = tempDir('ssh-replace-blank-lines-workspace')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('ssh-replace-blank-lines-cache'),
+        BOXDOWN_DATA_HOME: tempDir('ssh-replace-blank-lines-data')
+      },
+      assetsDevcontainerDir
+    })
+    const alias = defaultSshAlias(context.workspaceBasename)
+    const otherAlias = 'npq-devcontainer'
+    const fixture = `${'\n'.repeat(140)}${buildSshConfigBlock(context, alias)}\n${buildSshConfigBlock(context, otherAlias)}`
+
+    const replaced = replaceSshConfigBlock(fixture, alias, buildSshConfigBlock(context, alias))
+
+    assert.strictEqual(replaced.startsWith('\n'), false)
+    assert.strictEqual(replaced.includes('\n\n\n'), false)
+    assert.strictEqual(replaced.split(`# BEGIN ${alias} boxdown`).length - 1, 1)
+    assert.strictEqual(replaced.split(`# BEGIN ${otherAlias} boxdown`).length - 1, 1)
+  })
+
+  test('removes accumulated leading blank lines when uninstalling a managed SSH block', () => {
+    const workspace = tempDir('ssh-remove-blank-lines-workspace')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('ssh-remove-blank-lines-cache'),
+        BOXDOWN_DATA_HOME: tempDir('ssh-remove-blank-lines-data')
+      },
+      assetsDevcontainerDir
+    })
+    const alias = defaultSshAlias(context.workspaceBasename)
+    const otherAlias = 'npq-devcontainer'
+    const fixture = `${'\n'.repeat(140)}${buildSshConfigBlock(context, alias)}\n${buildSshConfigBlock(context, otherAlias)}`
+
+    const removed = removeSshConfigBlock(fixture, alias)
+
+    assert.strictEqual(removed.startsWith('\n'), false)
+    assert.strictEqual(removed.includes('\n\n'), false)
+    assert.strictEqual(removed, buildSshConfigBlock(context, otherAlias))
+  })
+
+  test('preserves leading blank lines before unmanaged SSH config', () => {
+    const workspace = tempDir('ssh-preserve-unmanaged-blank-lines-workspace')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('ssh-preserve-unmanaged-blank-lines-cache'),
+        BOXDOWN_DATA_HOME: tempDir('ssh-preserve-unmanaged-blank-lines-data')
+      },
+      assetsDevcontainerDir
+    })
+    const alias = defaultSshAlias(context.workspaceBasename)
+    const existing = `\n\nHost github.com\n  User git\n`
+
+    const replaced = replaceSshConfigBlock(existing, alias, buildSshConfigBlock(context, alias))
+
+    assert.strictEqual(replaced.startsWith(existing), true)
+  })
+
   test('replaces legacy managed block when installing current SSH config', () => {
     const workspace = tempDir('ssh-replace-legacy-workspace')
     const context = createWorkspaceContext({

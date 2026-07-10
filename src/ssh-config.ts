@@ -121,6 +121,14 @@ function trimTrailingBlankLines (lines: string[]): void {
   }
 }
 
+function trimLeadingBlankLinesBeforeManagedBlock (lines: string[]): void {
+  const firstContentIndex = lines.findIndex((line) => line !== '')
+
+  if (firstContentIndex > 0 && isManagedSshConfigMarker(lines[firstContentIndex] ?? '')) {
+    lines.splice(0, firstContentIndex)
+  }
+}
+
 function writeFileAtomic (path: string, contents: string, mode: number): void {
   const destinationPath = existsSync(path) ? realpathSync(path) : path
   const tmpPath = `${destinationPath}.tmp-${process.pid}-${Date.now()}`
@@ -134,6 +142,7 @@ export function replaceSshConfigBlock (existingConfig: string, alias: string, bl
   const { lines: nextLines } = stripManagedSshConfigBlocks(existingConfig, alias)
 
   trimTrailingBlankLines(nextLines)
+  trimLeadingBlankLinesBeforeManagedBlock(nextLines)
 
   return `${nextLines.join('\n')}${nextLines.length > 0 ? '\n\n' : ''}${block}`
 }
@@ -146,6 +155,7 @@ export function removeSshConfigBlock (existingConfig: string, alias: string): st
   }
 
   trimTrailingBlankLines(nextLines)
+  trimLeadingBlankLinesBeforeManagedBlock(nextLines)
 
   return nextLines.length > 0 ? `${nextLines.join('\n')}\n` : ''
 }
