@@ -675,7 +675,7 @@ describe('CLI parsing', () => {
     assert.match(USAGE, /boxdown purge \[--workspace <path\|ssh-alias\|repo>\] \[--alias <name>\]/)
     assert.match(USAGE, /--workspace <path>\s+Target project directory[\s\S]*Repeatable with down\. With purge, also accepts PATH,/)
     assert.match(USAGE, /SSH ALIAS, or an unambiguous REPO from boxdown list\./)
-    assert.match(USAGE, /Without --workspace, purge only targets the current[\s\S]*interactive terminals prompt for tracked workspaces\./)
+    assert.match(USAGE, /Without --workspace, purge only targets the current[\s\S]*interactive[\s\S]*terminals prompt for tracked workspaces\./)
     assert.match(USAGE, /--json\s+Print JSON output\. Supported by status and list\./)
     assert.match(USAGE, /--format json\s+Print JSON output\. Equivalent to --json\./)
     assert.match(USAGE, /--details\s+Print detailed human list output\. Supported by list\./)
