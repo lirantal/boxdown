@@ -13,7 +13,6 @@ export async function ensureHostSshKey (context: WorkspaceContext, options: bool
   const quiet = typeof options === 'boolean' ? options : options.quiet ?? false
   const progress = typeof options === 'boolean' ? undefined : options.progress
   const checklistActive = progress?.isChecklistActive() ?? false
-  const sshIdentityStepId = progress?.hasStep('ssh-identity') === true ? 'ssh-identity' : undefined
 
   mkdirSync(context.sshKeyDir, { recursive: true, mode: 0o700 })
 
@@ -42,7 +41,6 @@ export async function ensureHostSshKey (context: WorkspaceContext, options: bool
       : await runProgressCommand('ssh-keygen create identity', 'ssh-keygen', args, {
           progress,
           spinnerLabel: checklistActive ? undefined : 'Generating Boxdown SSH identity',
-          stepId: sshIdentityStepId,
           verboseStdout: 'stderr',
           verboseStderr: 'stderr'
         })
@@ -70,7 +68,6 @@ export async function ensureHostSshKey (context: WorkspaceContext, options: bool
       : await runProgressCommand('ssh-keygen derive public key', 'ssh-keygen', args, {
           progress,
           spinnerLabel: checklistActive ? undefined : 'Writing Boxdown SSH public key',
-          stepId: sshIdentityStepId,
           verboseStdout: false,
           verboseStderr: 'stderr'
         })

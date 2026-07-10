@@ -2921,6 +2921,7 @@ describe('progress output', () => {
 
     try {
       await ensureHostSshKey(context, { progress })
+      progress.completeStep('ssh-identity')
     } finally {
       process.stderr.write = originalStderrWrite
       progress.end()
@@ -2935,6 +2936,27 @@ describe('progress output', () => {
     ])
     assert.ok(!raw.join('').includes('Generating Boxdown SSH identity'))
     assert.ok(!raw.join('').includes('Writing Boxdown SSH public key'))
+    assert.deepStrictEqual(raw
+      .filter((entry) => entry.includes('Preparing SSH identity'))
+      .map((entry) => {
+        if (entry.includes(color('□', 'dim'))) {
+          return 'pending'
+        }
+
+        if (entry.includes(color('◒', 'cyan'))) {
+          return 'running'
+        }
+
+        if (entry.includes(color('✔', 'green'))) {
+          return 'complete'
+        }
+
+        return 'unexpected'
+      }), [
+      'pending',
+      'running',
+      'complete'
+    ])
   })
 
   test('verbose progress mode suppresses styled progress but keeps warnings visible', () => {
