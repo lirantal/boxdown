@@ -4,7 +4,7 @@ import { claudeSshConfigEntryForWorkspace, uninstallClaudeSshConfigHost } from '
 import { codexProjectEntryForWorkspace, legacyCodexRemotePathForWorkspace, uninstallCodexAppConfigProject, uninstallCodexGlobalStateProject } from './codex-app-config.ts'
 import { codingAgentBinary, codingAgentFromCommand, type CodingAgentCli } from './coding-agents.ts'
 import { buildGeneratedDevcontainerConfig, publishContainerPortFromConfig } from './config.ts'
-import { doctorHasFailures, formatDoctorText, runDoctorChecks } from './doctor.ts'
+import { doctorHasFailures, formatDoctorText, runDoctorChecks, type DoctorCheck } from './doctor.ts'
 import { startDevcontainer, printPortHint, openShell, openCodingAgentCli, ensureContainerSshRuntime, runSshdProxy, refreshContainerGhAuth, refreshContainerCodingAgentClis, ensureContainerCodingAgentCli, findRunningContainerId, findWorkspaceContainer, stopWorkspaceContainer, removeWorkspaceContainer, listWorkspaceContainers, openSshTunnel, type TunnelPortForward } from './devcontainer.ts'
 import { canPromptInteractively, promptConfirm, promptMultiSelect, promptText, type PromptInput, type PromptOutput } from './interactive-prompts.ts'
 import { createWorkspaceListEntries, formatWorkspaceListDetailsText, formatWorkspaceListText } from './list.ts'
@@ -57,6 +57,8 @@ export interface RunCliOptions {
   promptInput?: PromptInput
   promptOutput?: PromptOutput
   env?: NodeJS.ProcessEnv
+  runDoctorChecks?: typeof runDoctorChecks
+  setupWorkspace?: typeof setupWorkspace
 }
 
 export const USAGE = `Usage:
@@ -1078,6 +1080,48 @@ function setupProgressSteps (targets: readonly SshConfigInstallTarget[]): Progre
   ]
 }
 
+function setupPreflightProgressSteps (): ProgressStepDefinition[] {
+  return [{ id: 'setup-preflight', label: 'Checking host readiness' }]
+}
+
+function setupPreflightFailureMessage (checks: DoctorCheck[]): string {
+  const failures = checks
+    .filter((check) => check.level === 'fail')
+    .map((check) => `- ${check.name}: ${check.message}`)
+
+  return `Setup preflight failed:\n${failures.join('\n')}`
+}
+
+async function runSetupPreflight (
+  context: WorkspaceContext,
+  alias: string,
+  parsed: ParsedCli,
+  options: RunCliOptions
+): Promise<void> {
+  const progress = createCliProgress(parsed, 'stdout', { env: options.env })
+  const doctor = options.runDoctorChecks ?? runDoctorChecks
+
+  await withProgressSection(progress, 'Boxdown setup', [
+    `Workspace: ${context.workspaceFolder}`,
+    `SSH alias: ${alias}`
+  ], async () => {
+    progress.setSteps(setupPreflightProgressSteps())
+    progress.startStep('setup-preflight')
+    const checks = await doctor(context, { includeOptional: false })
+
+    for (const check of checks.filter((item) => item.level === 'warn')) {
+      progress.warn(`${check.name}: ${check.message}`)
+    }
+
+    if (doctorHasFailures(checks)) {
+      progress.failStep('setup-preflight')
+      throw new Error(setupPreflightFailureMessage(checks))
+    }
+
+    progress.completeStep('setup-preflight')
+  })
+}
+
 function sshAliasProgressStep (label: string): ProgressStepDefinition {
   return { id: 'ssh-alias', label }
 }
@@ -1269,16 +1313,13 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
     }
 
     if (parsed.command === 'doctor') {
-      const checks = await runDoctorChecks(context)
+      const checks = await (options.runDoctorChecks ?? runDoctorChecks)(context)
       process.stdout.write(formatDoctorText(checks))
       return doctorHasFailures(checks) ? 1 : 0
     }
 
-    if (!existsSync(context.assetsDevcontainerDir)) {
-      throw new Error(`Missing Boxdown devcontainer assets: ${context.assetsDevcontainerDir}`)
-    }
-
     if (parsed.command === 'setup') {
+      await runSetupPreflight(context, alias, parsed, options)
       const resolvedTargets = await resolveSshInstallTargets(parsed, options)
 
       if (resolvedTargets.cancelled) {
@@ -1294,7 +1335,7 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
           `SSH alias: ${alias}`
         ], async () => {
           progress.setSteps(setupProgressSteps(resolvedTargets.targets))
-          await setupWorkspace(context, alias, {
+          await (options.setupWorkspace ?? setupWorkspace)(context, alias, {
             recreate: parsed.recreate,
             targets: resolvedTargets.targets,
             progress,
@@ -1308,6 +1349,10 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
       }
 
       return 0
+    }
+
+    if (!existsSync(context.assetsDevcontainerDir)) {
+      throw new Error(`Missing Boxdown devcontainer assets: ${context.assetsDevcontainerDir}`)
     }
 
     if (parsed.command === 'ssh-proxy') {

@@ -1070,6 +1070,71 @@ describe('interactive install target prompt', () => {
 })
 
 describe('CLI execution', () => {
+  test('setup stops before prompts or state writes when the readiness preflight fails', async () => {
+    const workspace = tempDir('setup-preflight-failure-workspace')
+    const dataHome = tempDir('setup-preflight-failure-data')
+    const cacheHome = tempDir('setup-preflight-failure-cache')
+    const calls: string[] = []
+
+    const code = await withProcessEnv({
+      BOXDOWN_DATA_HOME: dataHome,
+      BOXDOWN_CACHE_HOME: cacheHome,
+      CI: '1'
+    }, async () => runCli(['setup', '--workspace', workspace], {
+      env: { CI: '1', BOXDOWN_DATA_HOME: dataHome, BOXDOWN_CACHE_HOME: cacheHome },
+      runDoctorChecks: async () => {
+        calls.push('doctor')
+        return [{
+          name: 'docker-daemon',
+          level: 'fail',
+          message: 'Docker daemon is required but was not reachable'
+        }]
+      },
+      setupWorkspace: async () => {
+        calls.push('setup')
+      }
+    }))
+
+    const context = createWorkspaceContext({
+      workspace,
+      env: { BOXDOWN_DATA_HOME: dataHome, BOXDOWN_CACHE_HOME: cacheHome }
+    })
+    assert.strictEqual(code, 1)
+    assert.deepStrictEqual(calls, ['doctor'])
+    assert.strictEqual(existsSync(context.workspaceDataDir), false)
+    assert.strictEqual(existsSync(context.sshKeyPath), false)
+    assert.strictEqual(existsSync(context.generatedConfigPath), false)
+  })
+
+  test('setup continues after a non-blocking readiness warning', async () => {
+    const workspace = tempDir('setup-preflight-warning-workspace')
+    const dataHome = tempDir('setup-preflight-warning-data')
+    const cacheHome = tempDir('setup-preflight-warning-cache')
+    const calls: string[] = []
+
+    const code = await withProcessEnv({
+      BOXDOWN_DATA_HOME: dataHome,
+      BOXDOWN_CACHE_HOME: cacheHome,
+      CI: '1'
+    }, async () => runCli(['setup', '--workspace', workspace], {
+      env: { CI: '1', BOXDOWN_DATA_HOME: dataHome, BOXDOWN_CACHE_HOME: cacheHome },
+      runDoctorChecks: async () => {
+        calls.push('doctor')
+        return [{
+          name: 'docker-bind-mounts',
+          level: 'warn',
+          message: 'Docker bind-mount readiness was not checked because no local Docker image is available'
+        }]
+      },
+      setupWorkspace: async () => {
+        calls.push('setup')
+      }
+    }))
+
+    assert.strictEqual(code, 0)
+    assert.deepStrictEqual(calls, ['doctor', 'setup'])
+  })
+
   test('setup workflow starts devcontainer and installs SSH without opening a shell', async () => {
     const workspace = tempDir('setup-workspace')
     const context = createWorkspaceContext({
