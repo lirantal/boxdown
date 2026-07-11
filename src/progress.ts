@@ -147,6 +147,8 @@ export class ProgressReporter {
   end (): void {
     this.stopSpinner()
     this.#stopStepTimer()
+    this.#steps = []
+    this.#renderedStepLineCount = 0
 
     if (this.mode !== 'interactive') {
       return
@@ -158,8 +160,6 @@ export class ProgressReporter {
 
     this.#write(this.target, formatPromptEnd())
     this.#sectionOpen = false
-    this.#steps = []
-    this.#renderedStepLineCount = 0
   }
 
   item (message: string): void {
