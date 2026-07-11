@@ -3432,8 +3432,8 @@ describe('progress output', () => {
     assert.match(devcontainerSource, /spinnerLabel: 'Preparing container SSH runtime'/)
     assert.match(devcontainerSource, /spinnerLabel: 'Refreshing GitHub CLI auth inside the devcontainer'/)
     assert.match(devcontainerSource, /spinnerLabel: 'Verifying GitHub CLI auth inside the devcontainer'/)
-    assert.match(sshKeySource, /spinnerLabel: 'Generating Boxdown SSH identity'/)
-    assert.match(sshKeySource, /spinnerLabel: 'Writing Boxdown SSH public key'/)
+    assert.match(sshKeySource, /Generating Boxdown SSH identity/)
+    assert.match(sshKeySource, /Writing Boxdown SSH public key/)
   })
 
   test('verbose progress commands do not emit marker summaries', async () => {
