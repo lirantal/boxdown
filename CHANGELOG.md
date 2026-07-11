@@ -1,5 +1,14 @@
 # boxdown
 
+## 1.2.0
+
+### Minor Changes
+
+- [`b28ce5e`](https://github.com/lirantal/boxdown/commit/b28ce5ed0ed9c382c62601afbd98873ce7632d10) Thanks [@lirantal](https://github.com/lirantal)! - Run blocking host-readiness checks before setup and report Docker bind-mount
+  configuration problems before starting a devcontainer.
+
+- [#10](https://github.com/lirantal/boxdown/pull/10) [`5800ee0`](https://github.com/lirantal/boxdown/commit/5800ee0fb8cfe19cc7ff2f3d472f304e29386287) Thanks [@lirantal](https://github.com/lirantal)! - Enable best-effort SSH commit signing in new Boxdown environments.
+
 ## 1.1.1
 
 ### Patch Changes
