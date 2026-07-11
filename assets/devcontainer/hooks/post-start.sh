@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # post-start: runs after each container start (postStartCommand in devcontainer.json).
-# Naming matches post-create.sh; extend with more steps as needed (e.g. source scripts from .devcontainer/utils/).
+set -euo pipefail
+
+DEVCONTAINER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+bash "${DEVCONTAINER_DIR}/utils/git-signing-bootstrap.sh"
 
 set -euo pipefail
 

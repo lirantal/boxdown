@@ -30,6 +30,8 @@ export interface WorkspaceContext {
   hostGitconfigPath: string
   hostGitconfigSnapshotDir: string
   hostGitconfigSnapshotPath: string
+  gitSigningStateDir: string
+  gitSigningPublicKeyPath: string
   sshKeyDir: string
   sshKeyPath: string
   sshPublicKeyPath: string
@@ -133,6 +135,8 @@ export function createWorkspaceContextFromIdentity (
     hostGitconfigPath: defaultHostGitconfigPath(env),
     hostGitconfigSnapshotDir,
     hostGitconfigSnapshotPath: join(hostGitconfigSnapshotDir, '.gitconfig'),
+    gitSigningStateDir: join(workspaceDataDir, 'git-signing'),
+    gitSigningPublicKeyPath: join(workspaceDataDir, 'git-signing', 'signing-key.pub'),
     sshKeyDir: join(workspaceDataDir, 'ssh'),
     sshKeyPath: join(workspaceDataDir, 'ssh', 'id_ed25519'),
     sshPublicKeyPath: join(workspaceDataDir, 'ssh', 'id_ed25519.pub'),

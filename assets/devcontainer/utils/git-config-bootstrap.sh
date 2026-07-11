@@ -17,7 +17,6 @@ main() {
   sanitize_host_credential_helpers credential.helper
   sanitize_host_credential_helpers credential.https://github.com.helper
   configure_container_github_auth
-  disable_container_git_signing
 }
 
 progress() {
@@ -124,11 +123,6 @@ configure_container_github_auth() {
   git_global --unset-all credential.https://github.com.helper >/dev/null 2>&1 || true
   git_global --add credential.https://github.com.helper ''
   git_global --add credential.https://github.com.helper '!gh auth git-credential'
-}
-
-disable_container_git_signing() {
-  git_global --replace-all commit.gpgsign false
-  git_global --replace-all tag.gpgsign false
 }
 
 main "$@"

@@ -16,6 +16,7 @@ import { BOXDOWN_CONTAINER_AGENTS_DIR, BOXDOWN_CONTAINER_CODEX_AUTH_PATH, BOXDOW
 import { codingAgentDevcontainerExecArgs, sshTunnelArgs } from '../src/devcontainer.ts'
 import { resolveDevcontainerCli } from '../src/devcontainer-cli.ts'
 import { doctorHasFailures, formatDoctorText, runDoctorChecks } from '../src/doctor.ts'
+import { parseSshPublicKey, selectGitSigningKey, type GitSigningPlan } from '../src/git-signing.ts'
 import { canonicalGithubRemoteUrl, configureWorkspaceGithubGitAuth } from '../src/github-git-auth.ts'
 import { parseJsonc } from '../src/jsonc.ts'
 import { createWorkspaceListEntries, formatWorkspaceListDetailsText, formatWorkspaceListText } from '../src/list.ts'
@@ -2839,12 +2840,21 @@ describe('doctor output', () => {
       includeDockerMountProbe: false,
       runCommand: async (command, args) => {
         calls.push(`${command} ${args.join(' ')}`)
-        return { code: 0, stdout: '', stderr: '' }
+        return command === 'ssh-add'
+          ? { code: 0, stdout: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest doctor\n', stderr: '' }
+          : command === 'gh' && args.includes('user/ssh_signing_keys')
+            ? { code: 0, stdout: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest\n', stderr: '' }
+            : command === 'gh' && args.includes('user')
+              ? { code: 0, stdout: 'example\n', stderr: '' }
+              : command === 'gh' && args.includes('users/example/ssh_signing_keys')
+                ? { code: 0, stdout: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAITest\n', stderr: '' }
+          : { code: 0, stdout: '', stderr: '' }
       }
     })
 
     assert.ok(checks.every((item) => item.name !== 'gh' && item.name !== 'gh-auth'))
     assert.ok(calls.every((call) => !call.startsWith('gh ')))
+    assert.ok(checks.some((item) => item.name === 'git-signing-agent'))
     assert.ok(checks.every((item) => item.level === 'ok'))
   })
 
@@ -3561,6 +3571,24 @@ describe('progress output', () => {
 })
 
 describe('devcontainer config generation', () => {
+  test('adds an SSH-agent and public-key mount for an enabled signing plan', () => {
+    const context = createWorkspaceContext({
+      workspace: tempDir('git-signing-config-workspace'),
+      env: { BOXDOWN_CACHE_HOME: tempDir('git-signing-config-cache'), BOXDOWN_DATA_HOME: tempDir('git-signing-config-data') },
+      assetsDevcontainerDir
+    })
+    const signing: GitSigningPlan = {
+      enabled: true,
+      publicKey: 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFakeKey comment',
+      agentSocketSource: '/run/host-services/ssh-auth.sock'
+    }
+
+    const config = buildGeneratedDevcontainerConfig(context, signing)
+
+    assert.ok(config.mounts?.includes(`type=bind,source=${signing.agentSocketSource},target=/run/boxdown/ssh-agent.sock`))
+    assert.ok(config.mounts?.includes(`type=bind,source=${context.gitSigningStateDir},target=/opt/boxdown/state/git-signing,readonly`))
+    assert.strictEqual(config.containerEnv?.SSH_AUTH_SOCK, '/run/boxdown/ssh-agent.sock')
+  })
   test('rewrites lifecycle paths to Boxdown assets and mounted runtime', () => {
     const workspace = tempDir('config-workspace')
     const context = createWorkspaceContext({
@@ -3675,6 +3703,24 @@ describe('devcontainer config generation', () => {
   })
 })
 
+describe('git signing selection', () => {
+  const first = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFirstKey first@example.com'
+  const second = 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAISecondKey second@example.com'
+
+  test('normalizes public keys without comments', () => {
+    assert.strictEqual(parseSshPublicKey(first), 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIFirstKey')
+  })
+
+  test('selects a configured loaded key', () => {
+    assert.deepStrictEqual(selectGitSigningKey([first, second], second), { key: parseSshPublicKey(second) })
+  })
+
+  test('selects one GitHub identity but does not guess between ambiguous keys', () => {
+    assert.deepStrictEqual(selectGitSigningKey([first, second], undefined, [second]), { key: parseSshPublicKey(second) })
+    assert.deepStrictEqual(selectGitSigningKey([first, second]), { reason: 'ambiguous-identities' })
+  })
+})
+
 describe('devcontainer git config hooks', () => {
   test('initialize snapshots host gitconfig and removes stale snapshot when host file is absent', () => {
     const initializePath = join(assetsDevcontainerDir, 'hooks', 'initialize.sh')
@@ -3743,8 +3789,8 @@ describe('devcontainer git config hooks', () => {
     assert.strictEqual(readGitConfig(targetPath, 'url.ssh://git@github.com/.insteadOf'), undefined)
     assert.deepStrictEqual(readGitConfigAll(targetPath, 'credential.helper'), ['cache'])
     assert.deepStrictEqual(readGitConfigAll(targetPath, 'credential.https://github.com.helper'), ['', '!gh auth git-credential'])
-    assert.strictEqual(readGitConfig(targetPath, 'commit.gpgsign'), 'false')
-    assert.strictEqual(readGitConfig(targetPath, 'tag.gpgsign'), 'false')
+    assert.strictEqual(readGitConfig(targetPath, 'commit.gpgsign'), 'true')
+    assert.strictEqual(readGitConfig(targetPath, 'tag.gpgsign'), 'true')
   })
 
   test('git config bootstrap succeeds without a host snapshot', () => {
@@ -3779,8 +3825,21 @@ describe('devcontainer git config hooks', () => {
       .split(/\r?\n/)
 
     assert.deepStrictEqual(helpers, ['', '!gh auth git-credential'])
-    assert.strictEqual(execFileSync('git', ['config', '--local', '--get', 'commit.gpgsign'], { cwd: workspace }).toString('utf8').trim(), 'false')
+    assert.strictEqual(readGitConfig(join(workspace, '.git', 'config'), 'commit.gpgsign'), undefined)
     assert.strictEqual(execFileSync('git', ['config', '--local', '--get', 'core.pager'], { cwd: workspace }).toString('utf8').trim(), 'less -R')
+  })
+
+  test('git signing bootstrap falls back to unsigned commits without an agent', () => {
+    const bootstrapPath = join(assetsDevcontainerDir, 'utils', 'git-signing-bootstrap.sh')
+    const targetPath = join(tempDir('git-signing-target'), '.gitconfig')
+    writeFileSync(targetPath, '[gpg]\n\tprogram = /opt/homebrew/bin/gpg\n[commit]\n\tgpgsign = true\n')
+
+    execFileSync('bash', [bootstrapPath], {
+      env: { ...process.env, BOXDOWN_GITCONFIG_TARGET_PATH: targetPath, BOXDOWN_GIT_SIGNING_ENABLED: '0' }
+    })
+
+    assert.strictEqual(readGitConfig(targetPath, 'commit.gpgsign'), 'false')
+    assert.strictEqual(readGitConfig(targetPath, 'gpg.program'), undefined)
   })
 })
 

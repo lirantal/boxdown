@@ -69,6 +69,22 @@ export async function runDoctorChecks (context: WorkspaceContext, options: RunDo
     `Node ${nodeVersion}; expected >=24.0.0`
   ))
 
+  const sshAgent = await runCommand('ssh-add', ['-L'])
+  const identities = sshAgent.code === 0
+    ? sshAgent.stdout.split(/\r?\n/).filter((line) => line.trim().startsWith('ssh-')).length
+    : 0
+  checks.push({
+    name: 'git-signing-agent',
+    level: sshAgent.code === 0 && identities === 1 ? 'ok' : 'warn',
+    message: sshAgent.code !== 0
+      ? 'SSH agent is unavailable; Boxdown commits will remain unsigned'
+      : identities === 0
+        ? 'SSH agent has no identities; Boxdown commits will remain unsigned'
+        : identities > 1
+          ? 'SSH agent has multiple identities; Boxdown will not guess a signing key and commits will remain unsigned'
+          : 'One SSH agent identity is available for Boxdown commit signing'
+  })
+
   checks.push(check(
     'devcontainers-cli',
     await packagedDevcontainerCliWorks(context, runCommand),
@@ -125,6 +141,22 @@ export async function runDoctorChecks (context: WorkspaceContext, options: RunDo
         level: ghAuth ? 'ok' : 'warn',
         message: ghAuth ? 'GitHub CLI auth is available' : 'GitHub CLI is available but not authenticated'
       })
+      if (ghAuth && identities === 1) {
+        const user = await runCommand('gh', ['api', 'user', '--jq', '.login'])
+        const signing = user.code === 0 && user.stdout.trim().length > 0
+          ? await runCommand('gh', ['api', `users/${user.stdout.trim()}/ssh_signing_keys`, '--paginate', '--jq', '.[].key'])
+          : { code: 1, stdout: '', stderr: '' }
+        const identity = sshAgent.stdout.split(/\r?\n/).find((line) => line.trim().startsWith('ssh-'))?.trim()
+        checks.push({
+          name: 'git-signing-github',
+          level: signing.code === 0 && identity !== undefined && signing.stdout.includes(identity.split(/\s+/, 3).slice(0, 2).join(' ')) ? 'ok' : 'warn',
+          message: signing.code !== 0
+            ? 'GitHub SSH signing-key registration could not be checked'
+            : signing.stdout.includes(identity?.split(/\s+/, 3).slice(0, 2).join(' ') ?? '')
+              ? 'Selected SSH key is registered with GitHub for commit signing'
+              : 'Register the selected public key with GitHub as a signing key to receive Verified badges'
+        })
+      }
     } else {
       checks.push({
         name: 'gh',
