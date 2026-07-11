@@ -91,3 +91,6 @@ typings/
 
 # Snyk
 .dccache
+
+# Local git worktrees
+.worktrees/

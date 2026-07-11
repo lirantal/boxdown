@@ -6,6 +6,7 @@ DEVCONTAINER_DIR="$(cd "${HOOKS_DIR}/.." && pwd)"
 
 main() {
   run_step "Configuring global Git" configure_global_git
+  run_step "Configuring Git commit signing" configure_git_signing
   run_step "Configuring workspace Git" configure_local_git
   run_step "Installing OpenSSH server" install_openssh_server
   run_step "Installing Python runtime" install_python_runtime
@@ -34,10 +35,13 @@ configure_global_git() {
   bash "${DEVCONTAINER_DIR}/utils/git-config-bootstrap.sh"
 }
 
+configure_git_signing() {
+  bash "${DEVCONTAINER_DIR}/utils/git-signing-bootstrap.sh"
+}
+
 configure_local_git() {
   # Local git prefs only apply inside a repository; skip when there is no .git (avoids postCreate failure).
   if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    git config --local --replace-all commit.gpgsign false
     git config --local --replace-all core.pager 'less -R'
     git config --local --unset-all credential.https://github.com.helper >/dev/null 2>&1 || true
     git config --local --add credential.https://github.com.helper ''

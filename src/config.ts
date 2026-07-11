@@ -13,6 +13,7 @@ import {
 } from './constants.ts'
 import { parseJsonc } from './jsonc.ts'
 import type { WorkspaceContext } from './paths.ts'
+import type { GitSigningPlan } from './git-signing.ts'
 import { shellQuote } from './shell.ts'
 
 export interface DevcontainerConfig {
@@ -55,7 +56,7 @@ function hasMountTarget (mounts: string[], target: string): boolean {
   return mounts.some((mount) => mountHasTarget(mount, target))
 }
 
-export function buildGeneratedDevcontainerConfig (context: WorkspaceContext): DevcontainerConfig {
+export function buildGeneratedDevcontainerConfig (context: WorkspaceContext, signing?: GitSigningPlan): DevcontainerConfig {
   const baseConfig = readBaseDevcontainerConfig(context.assetsDevcontainerDir)
   const mounts = Array.isArray(baseConfig.mounts)
     ? baseConfig.mounts
@@ -74,6 +75,11 @@ export function buildGeneratedDevcontainerConfig (context: WorkspaceContext): De
     !hasMountTarget(mounts, BOXDOWN_CONTAINER_AGENTS_DIR)
   ) {
     boxdownMounts.push(`type=bind,source=${context.hostAgentsDir},target=${BOXDOWN_CONTAINER_AGENTS_DIR},readonly`)
+  }
+
+  if (signing?.enabled === true && signing.agentSocketSource !== undefined) {
+    boxdownMounts.push(`type=bind,source=${signing.agentSocketSource},target=/run/boxdown/ssh-agent.sock`)
+    boxdownMounts.push(`type=bind,source=${context.gitSigningStateDir},target=/opt/boxdown/state/git-signing,readonly`)
   }
 
   if (
@@ -113,13 +119,16 @@ export function buildGeneratedDevcontainerConfig (context: WorkspaceContext): De
       ...(baseConfig.containerEnv ?? {}),
       BOXDOWN_CONTAINER_WORKSPACE_FOLDER: '/workspaces/${localWorkspaceFolderBasename}',
       BOXDOWN_WORKSPACE_BASENAME: '${localWorkspaceFolderBasename}',
-      DEVCONTAINER_SSH_PUBLIC_KEY_FILE: BOXDOWN_CONTAINER_SSH_PUBLIC_KEY_PATH
+      DEVCONTAINER_SSH_PUBLIC_KEY_FILE: BOXDOWN_CONTAINER_SSH_PUBLIC_KEY_PATH,
+      BOXDOWN_GIT_SIGNING_ENABLED: signing?.enabled === true ? '1' : '0',
+      BOXDOWN_GIT_SIGNING_KEY_PATH: '/opt/boxdown/state/git-signing/signing-key.pub',
+      ...(signing?.enabled === true ? { SSH_AUTH_SOCK: '/run/boxdown/ssh-agent.sock' } : {})
     }
   }
 }
 
-export function writeGeneratedDevcontainerConfig (context: WorkspaceContext): DevcontainerConfig {
-  const config = buildGeneratedDevcontainerConfig(context)
+export function writeGeneratedDevcontainerConfig (context: WorkspaceContext, signing?: GitSigningPlan): DevcontainerConfig {
+  const config = buildGeneratedDevcontainerConfig(context, signing)
   mkdirSync(context.workspaceCacheDir, { recursive: true })
   writeFileSync(context.generatedConfigPath, `${JSON.stringify(config, null, 2)}\n`)
   return config
