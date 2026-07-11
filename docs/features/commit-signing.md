@@ -21,3 +21,34 @@ gh ssh-key add /path/to/signing-key.pub --type signing --title "Boxdown commit s
 
 The same key may already be registered for GitHub SSH authentication; GitHub
 requires a second registration with type `signing`.
+
+## Optional: configure SSH signing on the host
+
+Boxdown can sign commits without changing the host Git configuration. The
+container uses the selected identity from the host SSH agent directly. Configure
+the host as well when you also make commits outside Boxdown, or when you want
+to make the selected Boxdown identity explicit.
+
+First, verify the intended identity is loaded in the SSH agent. `ssh-add -l`
+prints loaded key fingerprints:
+
+```bash
+ssh-add -l
+```
+
+Then configure Git to use that public key for SSH signing:
+
+```bash
+git config --global gpg.format ssh
+git config --global user.signingkey ~/.ssh/id_ed25519.pub
+git config --global --unset-all gpg.program || true
+git config --global commit.gpgsign true
+```
+
+Replace `~/.ssh/id_ed25519.pub` with the selected public key when you use a
+different identity. The public key must also be registered with GitHub as a
+Signing key for pushed commits to display the Verified badge.
+
+Git can require `gpg.ssh.allowedSignersFile` for trust-aware local verification
+such as `git log --show-signature`. It is not required to create SSH signatures
+or for GitHub to verify a commit.
