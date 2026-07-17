@@ -72,5 +72,6 @@ signing programs that are unavailable inside Linux.
 If host `gh` is missing, logged out, or cannot return a token, the refresh is a
 no-op.
 
-`OP_SERVICE_ACCOUNT_TOKEN`, when present, is a 1Password service account token.
-It is not a GitHub token and is not used by `gh` or GitHub Git operations.
+`OP_SERVICE_ACCOUNT_TOKEN`, when available through Boxdown's runtime secret
+mount, is a 1Password service account token. It is not a GitHub token and is
+not used by `gh` or GitHub Git operations.

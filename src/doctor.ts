@@ -1,7 +1,9 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 
 import { resolveDevcontainerCli } from './devcontainer-cli.ts'
+import { buildGeneratedDevcontainerConfig, type DevcontainerConfig } from './config.ts'
+import { BOXDOWN_SECRET_ENV_NAMES } from './constants.ts'
 import { resolveConfiguredSshSigningKey, selectGitSigningKey, type GitSigningReason } from './git-signing.ts'
 import type { WorkspaceContext } from './paths.ts'
 import { runBuffered } from './process.ts'
@@ -38,6 +40,36 @@ function check (name: string, pass: boolean, okMessage: string, failMessage: str
     name,
     level: pass ? 'ok' : 'fail',
     message: pass ? okMessage : failMessage
+  }
+}
+
+function secretEnvironmentConfigCheck (context: WorkspaceContext): DoctorCheck {
+  let config: DevcontainerConfig
+
+  try {
+    config = existsSync(context.generatedConfigPath)
+      ? JSON.parse(readFileSync(context.generatedConfigPath, 'utf8')) as DevcontainerConfig
+      : buildGeneratedDevcontainerConfig(context)
+  } catch {
+    return {
+      name: 'secret-environment-config',
+      level: 'warn',
+      message: 'Generated config could not be checked for secret-safe environment handling'
+    }
+  }
+
+  const runArgs = Array.isArray(config.runArgs) ? config.runArgs : []
+  const containerEnv = config.containerEnv ?? {}
+  const unsafe = runArgs.includes('--env-file') ||
+    runArgs.some((arg) => arg.includes('.env.development')) ||
+    BOXDOWN_SECRET_ENV_NAMES.some((name) => Object.hasOwn(containerEnv, name))
+
+  return {
+    name: 'secret-environment-config',
+    level: unsafe ? 'warn' : 'ok',
+    message: unsafe
+      ? 'Generated config still exposes Boxdown secrets through Docker environment settings; recreate after upgrading Boxdown'
+      : 'Generated config uses runtime-mounted secrets without Docker environment values'
   }
 }
 
@@ -192,6 +224,8 @@ export async function runDoctorChecks (context: WorkspaceContext, options: RunDo
     `Missing Boxdown devcontainer assets: ${context.assetsDevcontainerDir}`
   ))
 
+  checks.push(secretEnvironmentConfigCheck(context))
+
   if (includeOptional) {
     if (ghAvailable) {
       checks.push({
@@ -275,10 +309,13 @@ async function checkDockerBindMounts (
 
   mkdirSync(context.workspaceDataDir, { recursive: true })
   const runtimeProbeDir = mkdtempSync(join(context.workspaceDataDir, 'doctor-mount-probe-'))
+  mkdirSync(context.workspaceSecretEnvDir, { recursive: true, mode: 0o700 })
+  chmodSync(context.workspaceSecretEnvDir, 0o700)
   const sources: DockerMountSource[] = [
     { label: 'workspace', path: context.workspaceFolder },
     { label: 'Boxdown devcontainer assets', path: context.assetsDevcontainerDir },
-    { label: 'Boxdown runtime state', path: runtimeProbeDir }
+    { label: 'Boxdown runtime state', path: runtimeProbeDir },
+    { label: 'Boxdown runtime secret state', path: context.workspaceSecretEnvDir }
   ]
 
   try {

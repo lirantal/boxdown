@@ -62,6 +62,19 @@ entries with best-effort Docker state.
 Metadata may also record the last inspected Docker image ID for the workspace so
 `boxdown purge` can remove that exact image even after the container is gone.
 
+## Runtime Secret State
+
+`ANTHROPIC_API_KEY`, `SNYK_TOKEN`, and the optional 1Password service-account
+token are written to owner-only files in a per-workspace runtime directory,
+separate from persistent workspace data. Boxdown mounts that directory
+read-only at `/run/boxdown/secrets`; only non-secret mount and Bash-bootstrap
+paths appear in generated Docker configuration.
+
+Bash sessions load available files as ordinary environment variables. Missing
+host values and failed 1Password lookup are non-blocking. `boxdown down` and
+`boxdown purge` remove the workspace runtime directory after container removal.
+Boxdown does not use or modify project `.env.development` files.
+
 ## External App Config
 
 External app integration config is not Boxdown workspace state. Boxdown writes
@@ -104,14 +117,16 @@ Boxdown starts from `assets/devcontainer/devcontainer.json` and rewrites:
 - `postCreateCommand`, to call mounted container assets.
 - `postStartCommand`, to call mounted container assets.
 - `mounts`, to add the read-only asset mount, public-key mount, host Git config
-  snapshot mount, host `~/.agents` mount when that directory exists, and host
-  `~/.codex/auth.json` read-only mount when that file exists.
+  snapshot mount, runtime secret mount, host `~/.agents` mount when that
+  directory exists, and host `~/.codex/auth.json` read-only mount when that
+  file exists.
 - `containerEnv`, to point SSH bootstrap at the mounted public key and actual
   container workspace.
 
 The target repository is still the Dev Container workspace via
 `--workspace-folder`.
 
-Mounts are create-time container settings. Use `boxdown start --recreate` after
-creating or removing host `~/.agents` or `~/.codex/auth.json` so Docker
+Mounts are create-time container settings. Existing containers created before
+runtime-mounted secrets require `boxdown start --recreate`. The same applies
+after creating or removing host `~/.agents` or `~/.codex/auth.json` so Docker
 receives the updated mount set.

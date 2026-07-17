@@ -2887,6 +2887,37 @@ describe('doctor output', () => {
     assert.ok(checks.every((item) => item.level === 'ok'))
   })
 
+  test('warns when generated config still injects secrets through Docker environment settings', async () => {
+    const context = createWorkspaceContext({
+      workspace: tempDir('doctor-secret-config-workspace'),
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('doctor-secret-config-cache'),
+        BOXDOWN_DATA_HOME: tempDir('doctor-secret-config-data'),
+        BOXDOWN_RUNTIME_HOME: tempDir('doctor-secret-config-runtime')
+      },
+      assetsDevcontainerDir
+    })
+    mkdirSync(context.workspaceCacheDir, { recursive: true })
+    writeFileSync(context.generatedConfigPath, JSON.stringify({
+      runArgs: ['--env-file', `${context.workspaceFolder}/.env.development`],
+      containerEnv: { SNYK_TOKEN: 'unsafe-placeholder' }
+    }))
+
+    const checks = await runDoctorChecks(context, {
+      includeOptional: false,
+      includeDockerMountProbe: false,
+      runCommand: async (command) => command === 'ssh-add'
+        ? { code: 0, stdout: 'ssh-ed25519 AAAAC3NzaDoctorSecretConfig test\n', stderr: '' }
+        : { code: 0, stdout: '', stderr: '' }
+    })
+
+    assert.deepStrictEqual(checks.find((item) => item.name === 'secret-environment-config'), {
+      name: 'secret-environment-config',
+      level: 'warn',
+      message: 'Generated config still exposes Boxdown secrets through Docker environment settings; recreate after upgrading Boxdown'
+    })
+  })
+
   test('reports a Docker bind-mount failure and removes successful disposable probes', async () => {
     const workspace = tempDir('doctor-mount-workspace')
     const context = createWorkspaceContext({
@@ -2963,11 +2994,13 @@ describe('doctor output', () => {
     assert.deepStrictEqual(calls.filter((call) => call.startsWith('docker rm -f ')), [
       'docker rm -f probe-1',
       'docker rm -f probe-2',
-      'docker rm -f probe-3'
+      'docker rm -f probe-3',
+      'docker rm -f probe-4'
     ])
     const runtimeProbeSource = probeSources[2]?.match(/source=([^,]+)/)?.[1]
     assert.ok(runtimeProbeSource !== undefined)
     assert.strictEqual(existsSync(runtimeProbeSource ?? ''), false)
+    assert.ok(probeSources.some((source) => source.includes(`source=${context.workspaceSecretEnvDir},`)))
   })
 
   test('warns when Docker bind-mount readiness cannot be probed without a local image', async () => {

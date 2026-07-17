@@ -98,6 +98,11 @@ BOXDOWN_TTY_NORMALIZE=0 boxdown start
 Use it when changing create-time settings such as image, features, mounts, or
 Docker `runArgs`.
 
+Existing containers created before Boxdown adopted runtime-mounted secrets
+must be recreated once. After recreation, Boxdown-provided secrets remain
+ordinary Bash-session environment variables but are absent from Docker
+container configuration and `docker inspect`.
+
 ## Port Hint
 
 The v1 asset config publishes container port `3000` with a dynamic host port.

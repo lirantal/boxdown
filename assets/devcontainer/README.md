@@ -17,7 +17,7 @@ Run this project in a **consistent Node.js 24 + TypeScript** environment without
 | `devcontainer.json` | Slim Node base image, pinned feature set/order, Boxdown state mounts, lifecycle commands, env forwarding. |
 | `start.sh` | Brings the dev container up with the Dev Containers CLI, then opens a shell **inside** the container or acts as an SSH `ProxyCommand`. |
 | `ssh-config-install.sh` | Installs/updates a host SSH config alias for Cursor, Claude, or plain `ssh`. |
-| `hooks/initialize.sh` | Runs on the host before container create/start; prepares the env file and optional secrets. |
+| `hooks/initialize.sh` | Runs on the host before container create/start; refreshes private runtime secret files and host Git state. |
 | `hooks/post-create.sh` | Runs once after the container is created — e.g. installs OpenSSH server, Debian Python, [APM](https://github.com/microsoft/apm) (Agent Package Manager), and default coding-agent CLIs. |
 | `hooks/post-start.sh` | Runs on each container start; refreshes runtime state such as SSH host keys and authorized keys. |
 | `utils/git-config-bootstrap.sh` | Container-side Git config copy/sanitization helper used by lifecycle scripts. |
@@ -175,10 +175,22 @@ export ANTHROPIC_API_KEY=sk-...
 export SNYK_TOKEN=...
 ```
 
-They are wired in `devcontainer.json` under `containerEnv` via `localEnv`.
+Boxdown writes available values to owner-only files in per-workspace runtime
+state outside the repository, then mounts that directory read-only. Bash
+sessions export the values as ordinary environment variables, but Docker
+container configuration and `docker inspect` do not contain their values.
 
-If `OP_SERVICE_ACCOUNT_TOKEN` is present, it authenticates the 1Password CLI.
-It is not a GitHub token and does not authenticate `gh` or GitHub Git remotes.
+When the host `op` CLI can read Boxdown's configured service-account item,
+Boxdown provides `OP_SERVICE_ACCOUNT_TOKEN` through the same runtime mount. A
+missing host value or failed 1Password lookup is non-blocking; the variable is
+simply absent. This token is not a GitHub token and does not authenticate `gh`
+or GitHub Git remotes.
+
+Boxdown never creates, modifies, reads, or deletes a project
+`.env.development` file. Existing containers created by an older Boxdown need
+`boxdown start --recreate` to stop receiving legacy Docker environment values.
+If an older version left a service-account token in `.env.development` or
+`boxdown.log`, remove it manually and rotate the token.
 
 ## Optional customization
 
