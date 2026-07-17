@@ -43,10 +43,6 @@ export interface DockerImageInfo {
   name?: string
 }
 
-interface DockerInspectContainer {
-  Image?: unknown
-  Config?: unknown
-}
 
 function devcontainerWorkspaceArgs (context: WorkspaceContext): string[] {
   return [
@@ -142,36 +138,28 @@ export async function findRunningContainerId (context: WorkspaceContext, options
   return result.stdout.split(/\r?\n/).find((line) => line.length > 0)
 }
 
-function isRecord (value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
-}
+export function parseDockerInspectImage (output: string, containerId: string): DockerImageInfo | undefined {
+  const [rawId, rawName] = output.trim().split(/\r?\n/)
 
-function parseDockerInspectImage (output: string, containerId: string): DockerImageInfo | undefined {
-  const trimmed = output.trim()
-
-  if (trimmed.length === 0) {
+  if (rawId === undefined || rawId.length === 0) {
     return undefined
   }
 
-  let parsed: DockerInspectContainer
+  let id: unknown
+  let name: unknown
 
   try {
-    parsed = JSON.parse(trimmed) as DockerInspectContainer
+    id = JSON.parse(rawId)
+    name = rawName === undefined || rawName.length === 0 ? undefined : JSON.parse(rawName)
   } catch (error) {
     throw new Error(`Could not parse docker inspect output for ${containerId}`, { cause: error })
   }
 
-  if (typeof parsed.Image !== 'string' || parsed.Image.length === 0) {
-    return undefined
-  }
-
-  const configImage = isRecord(parsed.Config) && typeof parsed.Config.Image === 'string' && parsed.Config.Image.length > 0
-    ? parsed.Config.Image
-    : undefined
+  if (typeof id !== 'string' || id.length === 0) return undefined
 
   return {
-    id: parsed.Image,
-    ...(configImage === undefined ? {} : { name: configImage })
+    id,
+    ...(typeof name === 'string' && name.length > 0 ? { name } : {})
   }
 }
 
@@ -179,7 +167,7 @@ export async function inspectContainerImage (containerId: string, options: { log
   const result = await runBuffered('docker', [
     'inspect',
     '--format',
-    '{{json .}}',
+    '{{json .Image}}\n{{json .Config.Image}}',
     containerId
   ], {
     logger: options.logger,

@@ -1,6 +1,7 @@
 import { appendFileSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 
+import { BOXDOWN_SECRET_ENV_NAMES } from './constants.ts'
 import type { WorkspaceContext } from './paths.ts'
 
 export type LogStreamName = 'stdout' | 'stderr' | 'boxdown'
@@ -22,6 +23,17 @@ function errorMessage (error: unknown): string {
 
 function argvText (command: string, args: string[]): string {
   return JSON.stringify([command, ...args])
+}
+
+function escapeRegExp (value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')
+}
+
+export function redactKnownSecretEnvironmentAssignments (value: string): string {
+  return BOXDOWN_SECRET_ENV_NAMES.reduce((current, name) => current.replace(
+    new RegExp(`${escapeRegExp(name)}=[^\\s,"\\]}]+`, 'gu'),
+    `${name}=[redacted]`
+  ), value)
 }
 
 export class WorkspaceCommandLogger {
@@ -89,7 +101,10 @@ export class WorkspaceCommandLogger {
   }
 
   #redact (value: string): string {
-    return this.#redactions.reduce((current, redaction) => current.replaceAll(redaction, '[redacted]'), value)
+    return this.#redactions.reduce(
+      (current, redaction) => current.replaceAll(redaction, '[redacted]'),
+      redactKnownSecretEnvironmentAssignments(value)
+    )
   }
 
   #stream (stream: LogStreamName, chunk: Buffer | string): void {

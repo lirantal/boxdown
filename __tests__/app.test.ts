@@ -15,14 +15,14 @@ import { codingAgentBinary, codingAgentFromCommand } from '../src/coding-agents.
 import { color, formatPromptEnd, formatPromptTitle, promptRail, selectedMark } from '../src/cli-style.ts'
 import { buildGeneratedDevcontainerConfig, publishContainerPortFromConfig } from '../src/config.ts'
 import { BOXDOWN_CONTAINER_AGENTS_DIR, BOXDOWN_CONTAINER_CODEX_AUTH_PATH, BOXDOWN_CONTAINER_CODEX_DIR, BOXDOWN_CONTAINER_GITCONFIG_PATH, BOXDOWN_CONTAINER_HOST_GITCONFIG_DIR, BOXDOWN_CONTAINER_SECRET_ENV_BOOTSTRAP, BOXDOWN_CONTAINER_SECRET_ENV_DIR, DEVCONTAINER_CLI_VERSION } from '../src/constants.ts'
-import { codingAgentDevcontainerExecArgs, sshTunnelArgs } from '../src/devcontainer.ts'
+import { codingAgentDevcontainerExecArgs, parseDockerInspectImage, sshTunnelArgs } from '../src/devcontainer.ts'
 import { resolveDevcontainerCli } from '../src/devcontainer-cli.ts'
 import { doctorHasFailures, formatDoctorText, runDoctorChecks } from '../src/doctor.ts'
 import { parseSshPublicKey, reportGitSigningPlan, resolveConfiguredSshSigningKey, resolveGitSigningPlan, selectGitSigningKey, type GitSigningPlan, type GitSigningReason } from '../src/git-signing.ts'
 import { canonicalGithubRemoteUrl, configureWorkspaceGithubGitAuth } from '../src/github-git-auth.ts'
 import { parseJsonc } from '../src/jsonc.ts'
 import { createWorkspaceListEntries, formatWorkspaceListDetailsText, formatWorkspaceListText } from '../src/list.ts'
-import { createWorkspaceCommandLogger, withLoggedProcessOutput } from '../src/logging.ts'
+import { createWorkspaceCommandLogger, redactKnownSecretEnvironmentAssignments, withLoggedProcessOutput } from '../src/logging.ts'
 import { commandWritesWorkspaceMetadata, parseCliArgs, parseTunnelPort, parseTunnelPortList, runCli, setupWorkspace, USAGE } from '../src/main.ts'
 import { listWorkspaceMetadata, readWorkspaceMetadata, recordWorkspaceDockerImage, writeWorkspaceMetadata } from '../src/metadata.ts'
 import { readPackageVersion } from '../src/package-info.ts'
@@ -3061,6 +3061,12 @@ describe('doctor output', () => {
 })
 
 describe('progress output', () => {
+  test('redacts known Boxdown secret environment assignments structurally', () => {
+    const output = redactKnownSecretEnvironmentAssignments('ANTHROPIC_API_KEY=alpha SNYK_TOKEN=beta "OP_SERVICE_ACCOUNT_TOKEN=gamma"')
+
+    assert.strictEqual(output, 'ANTHROPIC_API_KEY=[redacted] SNYK_TOKEN=[redacted] "OP_SERVICE_ACCOUNT_TOKEN=[redacted]"')
+  })
+
   test('workspace logger appends sections and Boxdown output', async () => {
     const workspace = tempDir('logger-workspace')
     const context = createWorkspaceContext({
@@ -3813,6 +3819,15 @@ describe('devcontainer config generation', () => {
   test('parses JSONC without stripping URLs inside strings', () => {
     const parsed = parseJsonc<{ url: string }>('{ "url": "https://example.com/path" // keep string URL\n }')
     assert.strictEqual(parsed.url, 'https://example.com/path')
+  })
+})
+
+describe('docker image inspection', () => {
+  test('parses the narrow image-only Docker inspect projection', () => {
+    assert.deepStrictEqual(parseDockerInspectImage('"sha256:abc"\n"node:24"\n', 'container-1'), {
+      id: 'sha256:abc',
+      name: 'node:24'
+    })
   })
 })
 
