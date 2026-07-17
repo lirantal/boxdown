@@ -148,3 +148,9 @@ starts Docker. Required failures stop setup; warnings remain non-blocking.
 
 GitHub CLI auth is optional. Missing or unauthenticated `gh` is reported as a
 warning rather than a failure.
+
+Doctor uses the same SSH signing identity precedence as environment creation.
+It honors an explicit `user.signingkey` public-key value or path, can select a
+single GitHub authentication-key match from multiple loaded identities, and
+checks the selected key's GitHub signing registration when available. Signing
+readiness warnings never fail setup.

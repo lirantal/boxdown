@@ -115,6 +115,12 @@ Boxdown resolves a signing identity in this order:
 4. With zero or multiple unresolved identities, produce a disabled signing
    plan and a warning reason. Do not guess.
 
+`user.signingKey` accepts an inline SSH public key, Git's `key::` public-key
+form, an absolute path, a `~/` path, or a path relative to the workspace.
+Boxdown reads public-key files only. An explicitly configured key is
+authoritative: unreadable, malformed, or unloaded configured keys disable
+signing and never fall through to GitHub or single-identity selection.
+
 Failure to execute `ssh-add`, query GitHub, parse a public key, or resolve a
 single identity is non-fatal.
 
@@ -321,7 +327,10 @@ testable. At minimum, reasons distinguish:
 - host agent unavailable;
 - no loaded identities;
 - ambiguous loaded identities;
+- configured host SSH signing key unreadable or malformed;
 - configured host SSH signing key not loaded;
+- host agent socket unavailable;
+- no local Docker image available for the agent mount probe;
 - Docker agent bridge unavailable;
 - public-key snapshot failure;
 - selected identity missing in the container;
@@ -332,6 +341,12 @@ testable. At minimum, reasons distinguish:
 Human-readable warnings state that commits will remain unsigned but are not
 blocked. A missing GitHub registration warning instead states that commits are
 signed locally but will not appear Verified on GitHub.
+
+User-facing lifecycle commands print the concise warning. The workspace
+command log additionally records the stable reason code and sanitized detail,
+without public-key material or secrets. Internal SSH proxy startup remains
+log-only. Generated configuration passes the stable host reason into container
+bootstrap so later lifecycle warnings preserve the original diagnosis.
 
 ## Testing Strategy
 

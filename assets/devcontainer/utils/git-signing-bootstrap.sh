@@ -6,22 +6,37 @@ set -euo pipefail
 TARGET_PATH="${BOXDOWN_GITCONFIG_TARGET_PATH:-/home/node/.gitconfig}"
 KEY_PATH="${BOXDOWN_GIT_SIGNING_KEY_PATH:-/opt/boxdown/state/git-signing/signing-key.pub}"
 ENABLED="${BOXDOWN_GIT_SIGNING_ENABLED:-0}"
+HOST_REASON="${BOXDOWN_GIT_SIGNING_REASON:-host-preflight-unavailable}"
 
 git_global() {
   GIT_CONFIG_GLOBAL="${TARGET_PATH}" git config --global "$@"
 }
 
 disable_signing() {
+  local reason="${1:-unknown}"
   git_global --unset-all gpg.format >/dev/null 2>&1 || true
   git_global --unset-all user.signingkey >/dev/null 2>&1 || true
   git_global --unset-all gpg.program >/dev/null 2>&1 || true
   git_global --replace-all commit.gpgsign false
-  printf '%s\n' 'boxdown: commit signing unavailable; commits will remain unsigned.' >&2
+  printf 'boxdown: commit signing unavailable (reason: %s); commits will remain unsigned.\n' "${reason}" >&2
 }
 
 enable_signing() {
-  if [[ ! -r "${KEY_PATH}" ]] || ! ssh-add -L | grep -qF "$(awk 'NR == 1 { print $1 " " $2 }' "${KEY_PATH}")"; then
-    disable_signing
+  if [[ ! -r "${KEY_PATH}" ]]; then
+    disable_signing 'container-key-unavailable'
+    return 0
+  fi
+
+  local agent_identities
+  if ! agent_identities="$(ssh-add -L 2>/dev/null)"; then
+    disable_signing 'container-agent-unavailable'
+    return 0
+  fi
+
+  local selected_key
+  selected_key="$(awk 'NR == 1 { print $1 " " $2 }' "${KEY_PATH}")"
+  if ! grep -qF -- "${selected_key}" <<<"${agent_identities}"; then
+    disable_signing 'container-key-not-loaded'
     return 0
   fi
 
@@ -43,7 +58,7 @@ enable_signing() {
     git commit --allow-empty -m 'boxdown signing probe' >/dev/null
   ); then
     rm -rf "${probe_dir}"
-    disable_signing
+    disable_signing 'container-signing-probe-failed'
     return 0
   fi
   rm -rf "${probe_dir}"
@@ -52,5 +67,5 @@ enable_signing() {
 if [[ "${ENABLED}" == "1" ]]; then
   enable_signing
 else
-  disable_signing
+  disable_signing "${HOST_REASON}"
 fi

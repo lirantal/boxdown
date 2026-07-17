@@ -16,7 +16,7 @@ import { BOXDOWN_CONTAINER_AGENTS_DIR, BOXDOWN_CONTAINER_CODEX_AUTH_PATH, BOXDOW
 import { codingAgentDevcontainerExecArgs, sshTunnelArgs } from '../src/devcontainer.ts'
 import { resolveDevcontainerCli } from '../src/devcontainer-cli.ts'
 import { doctorHasFailures, formatDoctorText, runDoctorChecks } from '../src/doctor.ts'
-import { parseSshPublicKey, selectGitSigningKey, type GitSigningPlan } from '../src/git-signing.ts'
+import { parseSshPublicKey, reportGitSigningPlan, resolveConfiguredSshSigningKey, resolveGitSigningPlan, selectGitSigningKey, type GitSigningPlan, type GitSigningReason } from '../src/git-signing.ts'
 import { canonicalGithubRemoteUrl, configureWorkspaceGithubGitAuth } from '../src/github-git-auth.ts'
 import { parseJsonc } from '../src/jsonc.ts'
 import { createWorkspaceListEntries, formatWorkspaceListDetailsText, formatWorkspaceListText } from '../src/list.ts'
@@ -2970,6 +2970,76 @@ describe('doctor output', () => {
     assert.strictEqual(existsSync(context.workspaceDataDir), false)
   })
 
+  test('doctor selects a configured public-key path from multiple agent identities', async () => {
+    const workspace = tempDir('doctor-configured-signing-workspace')
+    const home = tempDir('doctor-configured-signing-home')
+    const signingKeyPath = join(home, 'signing.pub')
+    const first = 'ssh-ed25519 AAAAC3NzaDoctorFirst first'
+    const second = 'ssh-ed25519 AAAAC3NzaDoctorSecond second'
+    writeFileSync(signingKeyPath, `${second}\n`)
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        HOME: home,
+        BOXDOWN_CACHE_HOME: tempDir('doctor-configured-signing-cache'),
+        BOXDOWN_DATA_HOME: tempDir('doctor-configured-signing-data')
+      },
+      assetsDevcontainerDir
+    })
+
+    const checks = await runDoctorChecks(context, {
+      includeOptional: false,
+      includeDockerMountProbe: false,
+      runCommand: async (command, args) => {
+        if (command === 'ssh-add') return { code: 0, stdout: `${first}\n${second}\n`, stderr: '' }
+        if (command === 'git' && args.includes('gpg.format')) return { code: 0, stdout: 'ssh\n', stderr: '' }
+        if (command === 'git' && args.includes('user.signingkey')) return { code: 0, stdout: `${signingKeyPath}\n`, stderr: '' }
+        return { code: 0, stdout: '', stderr: '' }
+      }
+    })
+
+    assert.deepStrictEqual(checks.find((item) => item.name === 'git-signing-agent'), {
+      name: 'git-signing-agent',
+      level: 'ok',
+      message: 'Configured SSH signing key is loaded in the agent'
+    })
+  })
+
+  test('doctor uses GitHub matching for multiple identities and verifies the selected signing key', async () => {
+    const workspace = tempDir('doctor-github-signing-workspace')
+    const first = 'ssh-ed25519 AAAAC3NzaDoctorGithubFirst first'
+    const second = 'ssh-ed25519 AAAAC3NzaDoctorGithubSecond second'
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('doctor-github-signing-cache'),
+        BOXDOWN_DATA_HOME: tempDir('doctor-github-signing-data')
+      },
+      assetsDevcontainerDir
+    })
+
+    const checks = await runDoctorChecks(context, {
+      includeDockerMountProbe: false,
+      runCommand: async (command, args) => {
+        if (command === 'ssh-add') return { code: 0, stdout: `${first}\n${second}\n`, stderr: '' }
+        if (command === 'git') return { code: 1, stdout: '', stderr: '' }
+        if (command === 'gh' && args[0] === '--version') return { code: 0, stdout: 'gh version test\n', stderr: '' }
+        if (command === 'gh' && args[0] === 'auth') return { code: 0, stdout: '', stderr: '' }
+        if (command === 'gh' && args.includes('users/example/keys')) return { code: 0, stdout: `${second}\n`, stderr: '' }
+        if (command === 'gh' && args.includes('users/example/ssh_signing_keys')) return { code: 0, stdout: `${second}\n`, stderr: '' }
+        if (command === 'gh' && args.includes('user')) return { code: 0, stdout: 'example\n', stderr: '' }
+        return { code: 0, stdout: '', stderr: '' }
+      }
+    })
+
+    assert.strictEqual(checks.find((item) => item.name === 'git-signing-agent')?.level, 'ok')
+    assert.deepStrictEqual(checks.find((item) => item.name === 'git-signing-github'), {
+      name: 'git-signing-github',
+      level: 'ok',
+      message: 'Selected SSH key is registered with GitHub for commit signing'
+    })
+  })
+
   test('formats doctor checks and detects failures', () => {
     const passing = [
       { name: 'node', level: 'ok' as const, message: 'Node 24.15.0' },
@@ -3442,6 +3512,7 @@ describe('progress output', () => {
     assert.match(devcontainerSource, /spinnerLabel: 'Preparing container SSH runtime'/)
     assert.match(devcontainerSource, /spinnerLabel: 'Refreshing GitHub CLI auth inside the devcontainer'/)
     assert.match(devcontainerSource, /spinnerLabel: 'Verifying GitHub CLI auth inside the devcontainer'/)
+    assert.strictEqual(devcontainerSource.match(/reportGitSigningPlan\(signingPlan/g)?.length, 2)
     assert.match(sshKeySource, /Generating Boxdown SSH identity/)
     assert.match(sshKeySource, /Writing Boxdown SSH public key/)
   })
@@ -3589,6 +3660,23 @@ describe('devcontainer config generation', () => {
     assert.ok(config.mounts?.includes(`type=bind,source=${context.gitSigningStateDir},target=/opt/boxdown/state/git-signing,readonly`))
     assert.strictEqual(config.containerEnv?.SSH_AUTH_SOCK, '/run/boxdown/ssh-agent.sock')
   })
+
+  test('propagates a disabled signing reason without diagnostic detail', () => {
+    const context = createWorkspaceContext({
+      workspace: tempDir('git-signing-disabled-config-workspace'),
+      env: { BOXDOWN_CACHE_HOME: tempDir('git-signing-disabled-config-cache'), BOXDOWN_DATA_HOME: tempDir('git-signing-disabled-config-data') },
+      assetsDevcontainerDir
+    })
+    const config = buildGeneratedDevcontainerConfig(context, {
+      enabled: false,
+      reason: 'agent-unavailable',
+      detail: 'secret diagnostic detail'
+    })
+
+    assert.strictEqual(config.containerEnv?.BOXDOWN_GIT_SIGNING_ENABLED, '0')
+    assert.strictEqual(config.containerEnv?.BOXDOWN_GIT_SIGNING_REASON, 'agent-unavailable')
+    assert.doesNotMatch(JSON.stringify(config), /secret diagnostic detail/)
+  })
   test('rewrites lifecycle paths to Boxdown assets and mounted runtime', () => {
     const workspace = tempDir('config-workspace')
     const context = createWorkspaceContext({
@@ -3715,9 +3803,252 @@ describe('git signing selection', () => {
     assert.deepStrictEqual(selectGitSigningKey([first, second], second), { key: parseSshPublicKey(second) })
   })
 
+  test('does not fall back when an explicit configured key is invalid or not loaded', () => {
+    assert.deepStrictEqual(selectGitSigningKey([first], 'not-a-public-key', [first]), { reason: 'configured-key-invalid' })
+    assert.deepStrictEqual(selectGitSigningKey([first], second, [first]), { reason: 'configured-key-not-loaded' })
+  })
+
   test('selects one GitHub identity but does not guess between ambiguous keys', () => {
     assert.deepStrictEqual(selectGitSigningKey([first, second], undefined, [second]), { key: parseSshPublicKey(second) })
     assert.deepStrictEqual(selectGitSigningKey([first, second]), { reason: 'ambiguous-identities' })
+  })
+
+  test('resolves inline and key-prefixed configured SSH public keys', () => {
+    const workspace = tempDir('git-signing-inline-workspace')
+
+    assert.deepStrictEqual(resolveConfiguredSshSigningKey(second, { workspaceFolder: workspace }), {
+      key: parseSshPublicKey(second)
+    })
+    assert.deepStrictEqual(resolveConfiguredSshSigningKey(`key::${second}`, { workspaceFolder: workspace }), {
+      key: parseSshPublicKey(second)
+    })
+  })
+
+  test('resolves absolute, home-relative, and workspace-relative configured public-key paths', () => {
+    const workspace = tempDir('git-signing-path-workspace')
+    const home = tempDir('git-signing-path-home')
+    const absolutePath = join(tempDir('git-signing-absolute-key'), 'signing.pub')
+    const homePath = join(home, 'home-signing.pub')
+    const relativePath = join(workspace, 'relative-signing.pub')
+    writeFileSync(absolutePath, `${first}\n`)
+    writeFileSync(homePath, `${second}\n`)
+    writeFileSync(relativePath, `${first}\n`)
+
+    assert.deepStrictEqual(resolveConfiguredSshSigningKey(absolutePath, { homeDir: home, workspaceFolder: workspace }), {
+      key: parseSshPublicKey(first)
+    })
+    assert.deepStrictEqual(resolveConfiguredSshSigningKey('~/home-signing.pub', { homeDir: home, workspaceFolder: workspace }), {
+      key: parseSshPublicKey(second)
+    })
+    assert.deepStrictEqual(resolveConfiguredSshSigningKey('relative-signing.pub', { homeDir: home, workspaceFolder: workspace }), {
+      key: parseSshPublicKey(first)
+    })
+  })
+
+  test('rejects unreadable, malformed, and private configured key files', () => {
+    const workspace = tempDir('git-signing-invalid-workspace')
+    const malformedPath = join(workspace, 'malformed.pub')
+    const privatePath = join(workspace, 'private-key')
+    writeFileSync(malformedPath, 'not an SSH public key\n')
+    writeFileSync(privatePath, '-----BEGIN OPENSSH PRIVATE KEY-----\nprivate material\n')
+
+    assert.deepStrictEqual(resolveConfiguredSshSigningKey('key::not-an-ssh-public-key', { workspaceFolder: workspace }), {
+      reason: 'configured-key-invalid',
+      detail: 'configured inline value is not a valid SSH public key'
+    })
+    assert.deepStrictEqual(resolveConfiguredSshSigningKey('missing.pub', { workspaceFolder: workspace }), {
+      reason: 'configured-key-unreadable',
+      detail: 'configured public-key file could not be read'
+    })
+    assert.deepStrictEqual(resolveConfiguredSshSigningKey('malformed.pub', { workspaceFolder: workspace }), {
+      reason: 'configured-key-invalid',
+      detail: 'configured public-key file does not contain a valid SSH public key'
+    })
+    assert.deepStrictEqual(resolveConfiguredSshSigningKey('private-key', { workspaceFolder: workspace }), {
+      reason: 'configured-key-invalid',
+      detail: 'configured public-key file does not contain a valid SSH public key'
+    })
+  })
+
+  test('reports every disabled signing reason concisely and logs structured detail', () => {
+    const workspace = tempDir('git-signing-report-workspace')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('git-signing-report-cache'),
+        BOXDOWN_DATA_HOME: tempDir('git-signing-report-data')
+      },
+      assetsDevcontainerDir
+    })
+    const logger = createWorkspaceCommandLogger(context)
+    const warnings: string[] = []
+    const reasons: GitSigningReason[] = [
+      'agent-unavailable',
+      'no-identities',
+      'ambiguous-identities',
+      'configured-key-unreadable',
+      'configured-key-invalid',
+      'configured-key-not-loaded',
+      'agent-socket-unavailable',
+      'docker-probe-image-unavailable',
+      'agent-mount-unavailable'
+    ]
+
+    for (const reason of reasons) {
+      reportGitSigningPlan({
+        enabled: false,
+        reason,
+        detail: 'sanitized diagnostic'
+      }, {
+        logger,
+        writeWarning: (message) => warnings.push(message)
+      })
+    }
+
+    const log = readFileSync(context.workspaceLogPath, 'utf8')
+    assert.strictEqual(warnings.length, reasons.length)
+    assert.ok(warnings.every((warning) => warning.startsWith('boxdown: commit signing disabled: ')))
+    assert.ok(warnings.every((warning) => warning.endsWith('; commits will remain unsigned.\n')))
+    for (const reason of reasons) {
+      assert.ok(log.includes(`reason=${reason}`))
+    }
+    assert.match(log, /detail=sanitized diagnostic/)
+  })
+
+  test('redacts SSH key and token-shaped values from signing diagnostic logs', () => {
+    const workspace = tempDir('git-signing-redacted-report-workspace')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('git-signing-redacted-report-cache'),
+        BOXDOWN_DATA_HOME: tempDir('git-signing-redacted-report-data')
+      },
+      assetsDevcontainerDir
+    })
+    const logger = createWorkspaceCommandLogger(context)
+    const keyMaterial = 'AAAAC3NzaC1lZDI1NTE5AAAAISensitiveDiagnosticKey'
+    const token = 'github_pat_sensitiveDiagnosticToken'
+
+    reportGitSigningPlan({
+      enabled: false,
+      reason: 'agent-mount-unavailable',
+      detail: `probe failed for ssh-ed25519 ${keyMaterial} using ${token}`
+    }, { logger, quiet: true })
+
+    const log = readFileSync(context.workspaceLogPath, 'utf8')
+    assert.ok(!log.includes(keyMaterial))
+    assert.ok(!log.includes(token))
+    assert.match(log, /\[redacted-ssh-key\]/)
+    assert.match(log, /\[redacted-token\]/)
+  })
+
+  test('keeps internal signing diagnostics log-only when quiet', () => {
+    const workspace = tempDir('git-signing-quiet-report-workspace')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('git-signing-quiet-report-cache'),
+        BOXDOWN_DATA_HOME: tempDir('git-signing-quiet-report-data')
+      },
+      assetsDevcontainerDir
+    })
+    const logger = createWorkspaceCommandLogger(context)
+    const warnings: string[] = []
+
+    reportGitSigningPlan({ enabled: false, reason: 'agent-unavailable' }, {
+      logger,
+      quiet: true,
+      writeWarning: (message) => warnings.push(message)
+    })
+
+    assert.deepStrictEqual(warnings, [])
+    assert.match(readFileSync(context.workspaceLogPath, 'utf8'), /reason=agent-unavailable/)
+  })
+
+  test('full preflight resolves an explicit public-key path without GitHub fallback', async () => {
+    const workspace = tempDir('git-signing-preflight-workspace')
+    const home = tempDir('git-signing-preflight-home')
+    const signingKeyPath = join(home, 'signing.pub')
+    writeFileSync(signingKeyPath, `${second}\n`)
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        HOME: home,
+        BOXDOWN_CACHE_HOME: tempDir('git-signing-preflight-cache'),
+        BOXDOWN_DATA_HOME: tempDir('git-signing-preflight-data')
+      },
+      assetsDevcontainerDir
+    })
+    const calls: string[] = []
+
+    const plan = await resolveGitSigningPlan(context, {
+      env: { HOME: home },
+      platform: 'darwin',
+      runCommand: async (command, args) => {
+        calls.push(`${command} ${args.join(' ')}`)
+        if (command === 'ssh-add') return { code: 0, stdout: `${first}\n${second}\n`, stderr: '' }
+        if (command === 'git' && args.includes('gpg.format')) return { code: 0, stdout: 'ssh\n', stderr: '' }
+        if (command === 'git' && args.includes('user.signingkey')) return { code: 0, stdout: `${signingKeyPath}\n`, stderr: '' }
+        if (command === 'docker' && args[0] === 'image') return { code: 0, stdout: 'example:latest\n', stderr: '' }
+        if (command === 'docker' && args[0] === 'create') return { code: 0, stdout: 'probe-container\n', stderr: '' }
+        if (command === 'docker' && args[0] === 'rm') return { code: 0, stdout: '', stderr: '' }
+        throw new Error(`unexpected command: ${command} ${args.join(' ')}`)
+      }
+    })
+
+    assert.deepStrictEqual(plan, {
+      enabled: true,
+      publicKey: parseSshPublicKey(second),
+      agentSocketSource: '/run/host-services/ssh-auth.sock'
+    })
+    assert.ok(calls.every((call) => !call.startsWith('gh ')))
+    assert.strictEqual(readFileSync(context.gitSigningPublicKeyPath, 'utf8'), `${parseSshPublicKey(second)}\n`)
+  })
+
+  test('full preflight preserves configured-key and Docker probe failure reasons', async () => {
+    const workspace = tempDir('git-signing-preflight-failure-workspace')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('git-signing-preflight-failure-cache'),
+        BOXDOWN_DATA_HOME: tempDir('git-signing-preflight-failure-data')
+      },
+      assetsDevcontainerDir
+    })
+    const unreadableCalls: string[] = []
+    const unreadable = await resolveGitSigningPlan(context, {
+      platform: 'darwin',
+      runCommand: async (command, args) => {
+        unreadableCalls.push(`${command} ${args.join(' ')}`)
+        if (command === 'ssh-add') return { code: 0, stdout: `${first}\n`, stderr: '' }
+        if (command === 'git' && args.includes('gpg.format')) return { code: 0, stdout: 'ssh\n', stderr: '' }
+        if (command === 'git' && args.includes('user.signingkey')) return { code: 0, stdout: 'missing.pub\n', stderr: '' }
+        throw new Error(`unexpected command: ${command} ${args.join(' ')}`)
+      }
+    })
+
+    assert.deepStrictEqual(unreadable, {
+      enabled: false,
+      reason: 'configured-key-unreadable',
+      detail: 'configured public-key file could not be read'
+    })
+    assert.ok(unreadableCalls.every((call) => !call.startsWith('gh ') && !call.startsWith('docker ')))
+
+    const noImage = await resolveGitSigningPlan(context, {
+      platform: 'darwin',
+      runCommand: async (command, args) => {
+        if (command === 'ssh-add') return { code: 0, stdout: `${first}\n`, stderr: '' }
+        if (command === 'git') return { code: 1, stdout: '', stderr: '' }
+        if (command === 'docker' && args[0] === 'image') return { code: 0, stdout: '', stderr: '' }
+        throw new Error(`unexpected command: ${command} ${args.join(' ')}`)
+      }
+    })
+
+    assert.deepStrictEqual(noImage, {
+      enabled: false,
+      reason: 'docker-probe-image-unavailable',
+      detail: 'no tagged local Docker image was found'
+    })
   })
 })
 
@@ -3840,6 +4171,134 @@ describe('devcontainer git config hooks', () => {
 
     assert.strictEqual(readGitConfig(targetPath, 'commit.gpgsign'), 'false')
     assert.strictEqual(readGitConfig(targetPath, 'gpg.program'), undefined)
+  })
+
+  test('git signing bootstrap reports the host preflight reason', () => {
+    const bootstrapPath = join(assetsDevcontainerDir, 'utils', 'git-signing-bootstrap.sh')
+    const targetPath = join(tempDir('git-signing-host-reason-target'), '.gitconfig')
+    const result = spawnSync('bash', [bootstrapPath], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        BOXDOWN_GITCONFIG_TARGET_PATH: targetPath,
+        BOXDOWN_GIT_SIGNING_ENABLED: '0',
+        BOXDOWN_GIT_SIGNING_REASON: 'agent-socket-unavailable'
+      }
+    })
+
+    assert.strictEqual(result.status, 0)
+    assert.match(result.stderr, /reason: agent-socket-unavailable/)
+    assert.strictEqual(readGitConfig(targetPath, 'commit.gpgsign'), 'false')
+  })
+
+  test('git signing bootstrap distinguishes missing keys and unavailable agent identities', () => {
+    const bootstrapPath = join(assetsDevcontainerDir, 'utils', 'git-signing-bootstrap.sh')
+    const testRoot = tempDir('git-signing-container-inputs')
+    const targetPath = join(testRoot, '.gitconfig')
+    const missingKey = spawnSync('bash', [bootstrapPath], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        BOXDOWN_GITCONFIG_TARGET_PATH: targetPath,
+        BOXDOWN_GIT_SIGNING_ENABLED: '1',
+        BOXDOWN_GIT_SIGNING_KEY_PATH: join(testRoot, 'missing.pub')
+      }
+    })
+    assert.strictEqual(missingKey.status, 0)
+    assert.match(missingKey.stderr, /reason: container-key-unavailable/)
+
+    const binDir = join(testRoot, 'bin')
+    mkdirSync(binDir)
+    const sshAddPath = join(binDir, 'ssh-add')
+    writeFileSync(sshAddPath, '#!/usr/bin/env bash\nexit 2\n')
+    chmodSync(sshAddPath, 0o755)
+    const keyPath = join(testRoot, 'signing.pub')
+    writeFileSync(keyPath, 'ssh-ed25519 AAAAC3NzaContainerSigningKey test\n')
+    const unavailableAgent = spawnSync('bash', [bootstrapPath], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${binDir}${delimiter}${process.env.PATH ?? ''}`,
+        BOXDOWN_GITCONFIG_TARGET_PATH: targetPath,
+        BOXDOWN_GIT_SIGNING_ENABLED: '1',
+        BOXDOWN_GIT_SIGNING_KEY_PATH: keyPath
+      }
+    })
+    assert.strictEqual(unavailableAgent.status, 0)
+    assert.match(unavailableAgent.stderr, /reason: container-agent-unavailable/)
+
+    writeFileSync(sshAddPath, '#!/usr/bin/env bash\nprintf "%s\\n" "ssh-ed25519 AAAAC3NzaDifferentKey other"\n')
+    chmodSync(sshAddPath, 0o755)
+    const unloadedKey = spawnSync('bash', [bootstrapPath], {
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        PATH: `${binDir}${delimiter}${process.env.PATH ?? ''}`,
+        BOXDOWN_GITCONFIG_TARGET_PATH: targetPath,
+        BOXDOWN_GIT_SIGNING_ENABLED: '1',
+        BOXDOWN_GIT_SIGNING_KEY_PATH: keyPath
+      }
+    })
+    assert.strictEqual(unloadedKey.status, 0)
+    assert.match(unloadedKey.stderr, /reason: container-key-not-loaded/)
+  })
+
+  test('git signing bootstrap distinguishes failed and successful signing probes', () => {
+    const bootstrapPath = join(assetsDevcontainerDir, 'utils', 'git-signing-bootstrap.sh')
+    const testRoot = tempDir('git-signing-container-probe')
+    const binDir = join(testRoot, 'bin')
+    mkdirSync(binDir)
+    const publicKey = 'ssh-ed25519 AAAAC3NzaContainerSigningKey test'
+    const keyPath = join(testRoot, 'signing.pub')
+    writeFileSync(keyPath, `${publicKey}\n`)
+    const sshAddPath = join(binDir, 'ssh-add')
+    writeFileSync(sshAddPath, `#!/usr/bin/env bash\nprintf '%s\\n' '${publicKey}'\n`)
+    chmodSync(sshAddPath, 0o755)
+    const gitPath = join(binDir, 'git')
+    writeFileSync(gitPath, [
+      '#!/usr/bin/env bash',
+      'if [[ "${1:-}" == "commit" ]]; then',
+      '  exit "${BOXDOWN_TEST_GIT_COMMIT_EXIT:-0}"',
+      'fi',
+      'exec "${BOXDOWN_TEST_REAL_GIT}" "$@"',
+      ''
+    ].join('\n'))
+    chmodSync(gitPath, 0o755)
+    const commonEnv = {
+      ...process.env,
+      PATH: `${binDir}${delimiter}${process.env.PATH ?? ''}`,
+      BOXDOWN_TEST_REAL_GIT: execFileSync('which', ['git']).toString('utf8').trim(),
+      BOXDOWN_GIT_SIGNING_ENABLED: '1',
+      BOXDOWN_GIT_SIGNING_KEY_PATH: keyPath
+    }
+
+    const failedTarget = join(testRoot, 'failed.gitconfig')
+    const failed = spawnSync('bash', [bootstrapPath], {
+      encoding: 'utf8',
+      env: {
+        ...commonEnv,
+        BOXDOWN_TEST_GIT_COMMIT_EXIT: '1',
+        BOXDOWN_GITCONFIG_TARGET_PATH: failedTarget
+      }
+    })
+    assert.strictEqual(failed.status, 0)
+    assert.match(failed.stderr, /reason: container-signing-probe-failed/)
+    assert.strictEqual(readGitConfig(failedTarget, 'commit.gpgsign'), 'false')
+
+    const successfulTarget = join(testRoot, 'successful.gitconfig')
+    const successful = spawnSync('bash', [bootstrapPath], {
+      encoding: 'utf8',
+      env: {
+        ...commonEnv,
+        BOXDOWN_TEST_GIT_COMMIT_EXIT: '0',
+        BOXDOWN_GITCONFIG_TARGET_PATH: successfulTarget
+      }
+    })
+    assert.strictEqual(successful.status, 0)
+    assert.doesNotMatch(successful.stderr, /commit signing unavailable/)
+    assert.strictEqual(readGitConfig(successfulTarget, 'commit.gpgsign'), 'true')
+    assert.strictEqual(readGitConfig(successfulTarget, 'gpg.format'), 'ssh')
+    assert.strictEqual(readGitConfig(successfulTarget, 'user.signingkey'), keyPath)
   })
 })
 

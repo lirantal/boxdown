@@ -1,7 +1,8 @@
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 
 import { resolveDevcontainerCli } from './devcontainer-cli.ts'
+import { resolveConfiguredSshSigningKey, selectGitSigningKey, type GitSigningReason } from './git-signing.ts'
 import type { WorkspaceContext } from './paths.ts'
 import { runBuffered } from './process.ts'
 
@@ -70,19 +71,77 @@ export async function runDoctorChecks (context: WorkspaceContext, options: RunDo
   ))
 
   const sshAgent = await runCommand('ssh-add', ['-L'])
-  const identities = sshAgent.code === 0
-    ? sshAgent.stdout.split(/\r?\n/).filter((line) => line.trim().startsWith('ssh-')).length
-    : 0
+  const identityLines = sshAgent.code === 0
+    ? sshAgent.stdout.split(/\r?\n/).filter((line) => line.trim().startsWith('ssh-'))
+    : []
+  const identities = identityLines.length
+  let configuredKey: string | undefined
+  let configuredFailure: { reason: GitSigningReason, detail?: string } | undefined
+  const format = await runCommand('git', ['config', '--global', '--get', 'gpg.format'])
+  if (format.code === 0 && format.stdout.trim() === 'ssh') {
+    const signingKey = await runCommand('git', ['config', '--global', '--get', 'user.signingkey'])
+    if (signingKey.code === 0 && signingKey.stdout.trim().length > 0) {
+      const resolved = resolveConfiguredSshSigningKey(signingKey.stdout.trim(), {
+        homeDir: dirname(context.hostGitconfigPath),
+        workspaceFolder: context.workspaceFolder
+      })
+      if (resolved.key === undefined) {
+        configuredFailure = {
+          reason: resolved.reason ?? 'configured-key-invalid',
+          detail: resolved.detail
+        }
+      } else {
+        configuredKey = resolved.key
+      }
+    }
+  }
+
+  const includeOptional = options.includeOptional ?? true
+  let ghAvailable = false
+  let ghAuth = false
+  let githubLogin: string | undefined
+  let githubAuthKeys: string[] | undefined
+  if (includeOptional) {
+    ghAvailable = await commandWorks(runCommand, 'gh', ['--version'])
+    if (ghAvailable) {
+      ghAuth = await commandWorks(runCommand, 'gh', ['auth', 'status', '--hostname', 'github.com'])
+      if (ghAuth && configuredKey === undefined && configuredFailure === undefined && identities > 1) {
+        const user = await runCommand('gh', ['api', 'user', '--jq', '.login'])
+        githubLogin = user.code === 0 && user.stdout.trim().length > 0 ? user.stdout.trim() : undefined
+        if (githubLogin !== undefined) {
+          const authentication = await runCommand('gh', ['api', `users/${githubLogin}/keys`, '--paginate', '--jq', '.[].key'])
+          if (authentication.code === 0) githubAuthKeys = authentication.stdout.split(/\r?\n/)
+        }
+      }
+    }
+  }
+
+  const selected: { key?: string, reason?: GitSigningReason } = configuredFailure ?? selectGitSigningKey(identityLines, configuredKey, githubAuthKeys)
+  const selectedByConfiguration = selected.key !== undefined && configuredKey !== undefined
+  const selectedByGithub = selected.key !== undefined && configuredKey === undefined && identities > 1
+  const signingMessages: Record<GitSigningReason, string> = {
+    'agent-unavailable': 'SSH agent is unavailable; Boxdown commits will remain unsigned',
+    'no-identities': 'SSH agent has no identities; Boxdown commits will remain unsigned',
+    'ambiguous-identities': 'SSH agent has multiple identities; Boxdown will not guess a signing key and commits will remain unsigned',
+    'configured-key-unreadable': 'Configured SSH signing-key file could not be read; Boxdown commits will remain unsigned',
+    'configured-key-invalid': 'Configured SSH signing key is not a valid public key; Boxdown commits will remain unsigned',
+    'configured-key-not-loaded': 'Configured SSH signing key is not loaded in the agent; Boxdown commits will remain unsigned',
+    'agent-socket-unavailable': 'Host SSH-agent socket is unavailable; Boxdown commits will remain unsigned',
+    'docker-probe-image-unavailable': 'No local Docker image is available to probe commit-signing agent forwarding',
+    'agent-mount-unavailable': 'Docker could not mount the host SSH-agent socket; Boxdown commits will remain unsigned'
+  }
   checks.push({
     name: 'git-signing-agent',
-    level: sshAgent.code === 0 && identities === 1 ? 'ok' : 'warn',
+    level: sshAgent.code === 0 && selected.key !== undefined ? 'ok' : 'warn',
     message: sshAgent.code !== 0
-      ? 'SSH agent is unavailable; Boxdown commits will remain unsigned'
-      : identities === 0
-        ? 'SSH agent has no identities; Boxdown commits will remain unsigned'
-        : identities > 1
-          ? 'SSH agent has multiple identities; Boxdown will not guess a signing key and commits will remain unsigned'
-          : 'One SSH agent identity is available for Boxdown commit signing'
+      ? signingMessages['agent-unavailable']
+      : selected.key === undefined
+        ? signingMessages[selected.reason ?? 'ambiguous-identities']
+        : selectedByConfiguration
+          ? 'Configured SSH signing key is loaded in the agent'
+          : selectedByGithub
+            ? 'GitHub authentication keys identify one SSH agent identity for Boxdown commit signing'
+            : 'One SSH agent identity is available for Boxdown commit signing'
   })
 
   checks.push(check(
@@ -133,26 +192,27 @@ export async function runDoctorChecks (context: WorkspaceContext, options: RunDo
     `Missing Boxdown devcontainer assets: ${context.assetsDevcontainerDir}`
   ))
 
-  if (options.includeOptional ?? true) {
-    if (await commandWorks(runCommand, 'gh', ['--version'])) {
-      const ghAuth = await commandWorks(runCommand, 'gh', ['auth', 'status', '--hostname', 'github.com'])
+  if (includeOptional) {
+    if (ghAvailable) {
       checks.push({
         name: 'gh-auth',
         level: ghAuth ? 'ok' : 'warn',
         message: ghAuth ? 'GitHub CLI auth is available' : 'GitHub CLI is available but not authenticated'
       })
-      if (ghAuth && identities === 1) {
-        const user = await runCommand('gh', ['api', 'user', '--jq', '.login'])
-        const signing = user.code === 0 && user.stdout.trim().length > 0
-          ? await runCommand('gh', ['api', `users/${user.stdout.trim()}/ssh_signing_keys`, '--paginate', '--jq', '.[].key'])
+      if (ghAuth && selected.key !== undefined) {
+        if (githubLogin === undefined) {
+          const user = await runCommand('gh', ['api', 'user', '--jq', '.login'])
+          githubLogin = user.code === 0 && user.stdout.trim().length > 0 ? user.stdout.trim() : undefined
+        }
+        const signing = githubLogin !== undefined
+          ? await runCommand('gh', ['api', `users/${githubLogin}/ssh_signing_keys`, '--paginate', '--jq', '.[].key'])
           : { code: 1, stdout: '', stderr: '' }
-        const identity = sshAgent.stdout.split(/\r?\n/).find((line) => line.trim().startsWith('ssh-'))?.trim()
         checks.push({
           name: 'git-signing-github',
-          level: signing.code === 0 && identity !== undefined && signing.stdout.includes(identity.split(/\s+/, 3).slice(0, 2).join(' ')) ? 'ok' : 'warn',
+          level: signing.code === 0 && signing.stdout.includes(selected.key) ? 'ok' : 'warn',
           message: signing.code !== 0
             ? 'GitHub SSH signing-key registration could not be checked'
-            : signing.stdout.includes(identity?.split(/\s+/, 3).slice(0, 2).join(' ') ?? '')
+            : signing.stdout.includes(selected.key)
               ? 'Selected SSH key is registered with GitHub for commit signing'
               : 'Register the selected public key with GitHub as a signing key to receive Verified badges'
         })

@@ -122,6 +122,7 @@ export function buildGeneratedDevcontainerConfig (context: WorkspaceContext, sig
       DEVCONTAINER_SSH_PUBLIC_KEY_FILE: BOXDOWN_CONTAINER_SSH_PUBLIC_KEY_PATH,
       BOXDOWN_GIT_SIGNING_ENABLED: signing?.enabled === true ? '1' : '0',
       BOXDOWN_GIT_SIGNING_KEY_PATH: '/opt/boxdown/state/git-signing/signing-key.pub',
+      ...(signing?.enabled === false && signing.reason !== undefined ? { BOXDOWN_GIT_SIGNING_REASON: signing.reason } : {}),
       ...(signing?.enabled === true ? { SSH_AUTH_SOCK: '/run/boxdown/ssh-agent.sock' } : {})
     }
   }

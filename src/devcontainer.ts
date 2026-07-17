@@ -5,7 +5,7 @@ import { buildGeneratedDevcontainerConfig, publishContainerPortFromConfig, write
 import { codingAgentBinary, type CodingAgentCli } from './coding-agents.ts'
 import { resolveDevcontainerCli } from './devcontainer-cli.ts'
 import { configureWorkspaceGithubGitAuth } from './github-git-auth.ts'
-import { resolveGitSigningPlan } from './git-signing.ts'
+import { reportGitSigningPlan, resolveGitSigningPlan } from './git-signing.ts'
 import type { WorkspaceCommandLogger } from './logging.ts'
 import { recordWorkspaceDockerImage } from './metadata.ts'
 import type { WorkspaceContext } from './paths.ts'
@@ -320,7 +320,19 @@ export async function startDevcontainer (context: WorkspaceContext, options: Sta
     progress.detail(context.generatedConfigPath)
   }
   try {
-    writeGeneratedDevcontainerConfig(context, await resolveGitSigningPlan(context))
+    const signingPlan = await resolveGitSigningPlan(context)
+    reportGitSigningPlan(signingPlan, {
+      logger: options.logger,
+      quiet: proxyMode,
+      ...(progress === undefined
+        ? {}
+        : {
+            writeWarning: (message: string) => {
+              progress.warn(message.trimEnd())
+            }
+          })
+    })
+    writeGeneratedDevcontainerConfig(context, signingPlan)
     if (hasConfigStep) {
       progress?.completeStep('devcontainer-config')
     }
@@ -669,7 +681,18 @@ export async function refreshContainerGhAuth (context: WorkspaceContext, options
       quiet: true,
       progress
     })
-    writeGeneratedDevcontainerConfig(context, await resolveGitSigningPlan(context))
+    const signingPlan = await resolveGitSigningPlan(context)
+    reportGitSigningPlan(signingPlan, {
+      logger: options.logger,
+      ...(progress === undefined
+        ? {}
+        : {
+            writeWarning: (message: string) => {
+              progress.warn(message.trimEnd())
+            }
+          })
+    })
+    writeGeneratedDevcontainerConfig(context, signingPlan)
     if (hasConfigStep) {
       progress?.completeStep('gh-auth-config')
     }
