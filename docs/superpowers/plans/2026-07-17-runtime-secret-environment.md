@@ -35,6 +35,7 @@
 ### Task 1: Define runtime secret state and remove workspace injection
 
 **Files:**
+
 - Modify: `src/constants.ts`, `src/paths.ts`, `src/config.ts`, `assets/devcontainer/devcontainer.json`, `assets/devcontainer/hooks/initialize.sh`, `assets/devcontainer/hooks/post-start.sh`, `__tests__/app.test.ts`
 
 **Interfaces:**
@@ -70,6 +71,7 @@ Run `pnpm test -- --test-name-pattern "runtime secret|generated config|devcontai
 ### Task 2: Export secret files in supported Bash sessions and clean runtime state
 
 **Files:**
+
 - Create: `assets/devcontainer/utils/secret-env-bootstrap.sh`
 - Modify: `assets/devcontainer/hooks/post-create.sh`, `src/shell.ts`, `src/main.ts`, `src/purge.ts`, `__tests__/app.test.ts`
 
@@ -102,6 +104,7 @@ Run `pnpm test -- --test-name-pattern "secret bootstrap|runtime secret cleanup|i
 ### Task 3: Replace full Docker inspection and harden logging
 
 **Files:**
+
 - Modify: `src/devcontainer.ts`, `src/logging.ts`, `__tests__/app.test.ts`
 
 **Interfaces:**
@@ -130,6 +133,7 @@ Run `pnpm test -- --test-name-pattern "docker inspect|known secret|workspace log
 ### Task 4: Doctor coverage and documentation
 
 **Files:**
+
 - Modify: `src/doctor.ts`, `__tests__/app.test.ts`, `assets/devcontainer/README.md`, `docs/features/generated-config-and-state.md`, `docs/features/start-and-shell.md`
 
 - [ ] **Step 1: Write failing tests**

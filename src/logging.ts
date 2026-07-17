@@ -1,7 +1,6 @@
 import { appendFileSync, mkdirSync } from 'node:fs'
 import { dirname } from 'node:path'
 
-import { BOXDOWN_SECRET_ENV_NAMES } from './constants.ts'
 import type { WorkspaceContext } from './paths.ts'
 
 export type LogStreamName = 'stdout' | 'stderr' | 'boxdown'
@@ -25,15 +24,11 @@ function argvText (command: string, args: string[]): string {
   return JSON.stringify([command, ...args])
 }
 
-function escapeRegExp (value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')
-}
-
 export function redactKnownSecretEnvironmentAssignments (value: string): string {
-  return BOXDOWN_SECRET_ENV_NAMES.reduce((current, name) => current.replace(
-    new RegExp(`${escapeRegExp(name)}=[^\\s,"\\]}]+`, 'gu'),
-    `${name}=[redacted]`
-  ), value)
+  return value
+    .replace(/ANTHROPIC_API_KEY=[^\s,"\]}]+/gu, 'ANTHROPIC_API_KEY=[redacted]')
+    .replace(/SNYK_TOKEN=[^\s,"\]}]+/gu, 'SNYK_TOKEN=[redacted]')
+    .replace(/OP_SERVICE_ACCOUNT_TOKEN=[^\s,"\]}]+/gu, 'OP_SERVICE_ACCOUNT_TOKEN=[redacted]')
 }
 
 export class WorkspaceCommandLogger {
