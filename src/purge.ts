@@ -85,6 +85,10 @@ function removeWorkspaceStateDir (
   process.stdout.write(`Removed ${label}: ${path}\n`)
 }
 
+export function removeWorkspaceRuntimeState (context: WorkspaceContext): void {
+  removeWorkspaceStateDir(context, 'workspace runtime directory', context.workspaceRuntimeDir, context.runtimeRoot)
+}
+
 async function purgeAliasIntegrations (context: WorkspaceContext, alias: string): Promise<boolean> {
   let failed = false
 
@@ -193,6 +197,10 @@ export async function purgeWorkspace (context: WorkspaceContext, options: PurgeO
       await removeDockerImage(removedImageId, { logger: options.logger })
     }) || failed
   }
+
+  failed = await runPurgeStep('workspace runtime directory', () => {
+    removeWorkspaceRuntimeState(context)
+  }) || failed
 
   failed = await runPurgeStep('workspace cache directory', () => {
     removeWorkspaceStateDir(context, 'workspace cache', context.workspaceCacheDir, context.cacheRoot)

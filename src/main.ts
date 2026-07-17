@@ -13,7 +13,7 @@ import { listWorkspaceMetadata, readWorkspaceMetadata, writeWorkspaceMetadata, t
 import { readPackageVersion } from './package-info.ts'
 import { createWorkspaceContext, createWorkspaceContextFromIdentity, defaultDataRoot, type WorkspaceContext } from './paths.ts'
 import { createProgress, resolveProgressMode, type ProgressReporter, type ProgressOutputTarget, type ProgressStepDefinition } from './progress.ts'
-import { purgeWorkspace } from './purge.ts'
+import { purgeWorkspace, removeWorkspaceRuntimeState } from './purge.ts'
 import { defaultSshAlias, installSshConfig, uninstallSshConfig } from './ssh-config.ts'
 import { dedupeSshInstallTargets, installSshInstallTarget, isSshConfigInstallTarget, SSH_INSTALL_TARGETS, sshInstallTargetFlagHintsText, supportedSshInstallTargetsText, type SshConfigInstallTarget } from './ssh-install-targets.ts'
 import { createStatusInfo, formatStatusText, statusIsHealthy } from './status.ts'
@@ -831,6 +831,7 @@ async function runDownCommand (workspaces: string[] | undefined, options: RunCli
       const context = createWorkspaceContext({ workspace })
       await runLoggedLifecycle(context, 'down', ['down', ...(workspace === undefined ? [] : ['--workspace', workspace])], async (logger) => {
         await removeWorkspaceContainer(context, { logger })
+        removeWorkspaceRuntimeState(context)
       })
     } catch (error) {
       failed = true

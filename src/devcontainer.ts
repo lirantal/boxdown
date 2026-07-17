@@ -139,7 +139,7 @@ export async function findRunningContainerId (context: WorkspaceContext, options
 }
 
 export function parseDockerInspectImage (output: string, containerId: string): DockerImageInfo | undefined {
-  const [rawId, rawName] = output.trim().split(/\r?\n/)
+  const [rawId, rawName] = output.trim().split('|')
 
   if (rawId === undefined || rawId.length === 0) {
     return undefined
@@ -167,7 +167,7 @@ export async function inspectContainerImage (containerId: string, options: { log
   const result = await runBuffered('docker', [
     'inspect',
     '--format',
-    '{{json .Image}}\n{{json .Config.Image}}',
+    '{{json .Image}}|{{json .Config.Image}}',
     containerId
   ], {
     logger: options.logger,

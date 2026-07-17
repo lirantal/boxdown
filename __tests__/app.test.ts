@@ -144,7 +144,7 @@ async function withFakeDocker<T> (workspaces: FakeDockerWorkspace[], run: (logPa
     '      if [ "${inspect_exit_code:-0}" != "0" ]; then',
     '        exit "$inspect_exit_code"',
     '      fi',
-    '      printf \'{"Image":"%s","Config":{"Image":"%s"}}\\n\' "${image_id:-sha256:${container_id}-image}" "${image_name:-boxdown-test:${container_id}}"',
+    '      printf \'"%s"|"%s"\\n\' "${image_id:-sha256:${container_id}-image}" "${image_name:-boxdown-test:${container_id}}"',
     '      exit 0',
     '    fi',
     '  done < "${BOXDOWN_FAKE_DOCKER_STATE}"',
@@ -1271,6 +1271,29 @@ describe('CLI execution', () => {
     })
   })
 
+  test('down removes workspace runtime secret state after removing the container', async () => {
+    const workspace = tempDir('down-runtime-secret-workspace')
+    const env = {
+      HOME: tempDir('down-runtime-secret-home'),
+      BOXDOWN_CACHE_HOME: tempDir('down-runtime-secret-cache'),
+      BOXDOWN_DATA_HOME: tempDir('down-runtime-secret-data'),
+      BOXDOWN_RUNTIME_HOME: tempDir('down-runtime-secret-runtime')
+    }
+    const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+    mkdirSync(context.workspaceSecretEnvDir, { recursive: true })
+    writeFileSync(join(context.workspaceSecretEnvDir, 'SNYK_TOKEN'), 'runtime-secret-sentinel')
+
+    await withFakeDocker([
+      { workspace, id: 'down-runtime-secret-container' }
+    ], async (_logPath, dockerEnv) => {
+      const result = runCliProcess(['down', '--workspace', workspace], { ...dockerEnv, ...env })
+
+      assert.strictEqual(result.code, 0)
+      assert.strictEqual(existsSync(context.workspaceRuntimeDir), false)
+      assert.strictEqual(existsSync(context.workspaceFolder), true)
+    })
+  })
+
   test('continues batch down after a removal failure', async () => {
     const alpha = tempDir('down-fail-alpha-workspace')
     const beta = tempDir('down-fail-beta-workspace')
@@ -1662,6 +1685,7 @@ describe('CLI execution', () => {
       HOME: tempDir('purge-home'),
       BOXDOWN_CACHE_HOME: tempDir('purge-cache'),
       BOXDOWN_DATA_HOME: tempDir('purge-data'),
+      BOXDOWN_RUNTIME_HOME: tempDir('purge-runtime'),
       BOXDOWN_SSH_CONFIG: join(tempDir('purge-ssh'), 'config'),
       BOXDOWN_CODEX_APP_CONFIG: join(tempDir('purge-codex-app'), 'config.json'),
       BOXDOWN_CODEX_GLOBAL_STATE: join(tempDir('purge-codex-state'), '.codex-global-state.json'),
@@ -1674,6 +1698,8 @@ describe('CLI execution', () => {
     const otherAlias = 'other-devcontainer'
 
     mkdirSync(context.workspaceCacheDir, { recursive: true })
+    mkdirSync(context.workspaceSecretEnvDir, { recursive: true })
+    writeFileSync(join(context.workspaceSecretEnvDir, 'SNYK_TOKEN'), 'runtime-secret-sentinel')
     writeFileSync(context.generatedConfigPath, '{}\n')
     writeWorkspaceMetadata(context, recordedAlias)
     writeFileSync(env.BOXDOWN_SSH_CONFIG, 'Host github.com\n  User git\n')
@@ -1734,12 +1760,13 @@ describe('CLI execution', () => {
       const calls = fakeDockerCalls(logPath)
 
       assert.strictEqual(result.code, 0)
-      assert.ok(calls.includes('inspect --format {{json .}} purge-container'))
+      assert.ok(calls.includes('inspect --format {{json .Image}}|{{json .Config.Image}} purge-container'))
       assert.ok(calls.includes('rm -f -v purge-container'))
       assert.ok(calls.includes('image rm -f sha256:purge-image'))
       assert.strictEqual(existsSync(context.workspaceFolder), true)
       assert.strictEqual(existsSync(context.workspaceCacheDir), false)
       assert.strictEqual(existsSync(context.workspaceDataDir), false)
+      assert.strictEqual(existsSync(context.workspaceRuntimeDir), false)
       assert.strictEqual(existsSync(context.workspaceLogPath), false)
       assert.strictEqual(readFileSync(env.BOXDOWN_SSH_CONFIG, 'utf8'), 'Host github.com\n  User git\n')
 
@@ -3824,7 +3851,7 @@ describe('devcontainer config generation', () => {
 
 describe('docker image inspection', () => {
   test('parses the narrow image-only Docker inspect projection', () => {
-    assert.deepStrictEqual(parseDockerInspectImage('"sha256:abc"\n"node:24"\n', 'container-1'), {
+    assert.deepStrictEqual(parseDockerInspectImage('"sha256:abc"|"node:24"\n', 'container-1'), {
       id: 'sha256:abc',
       name: 'node:24'
     })
