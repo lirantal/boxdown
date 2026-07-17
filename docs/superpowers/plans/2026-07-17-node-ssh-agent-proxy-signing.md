@@ -20,6 +20,7 @@
 ### Task 1: Add the node-accessible SSH-agent proxy
 
 **Files:**
+
 - Create: `assets/devcontainer/utils/ssh-agent-proxy.mjs`
 - Modify: `assets/devcontainer/hooks/post-create.sh`
 - Test: `__tests__/app.test.ts`
@@ -50,6 +51,7 @@ Run the Task 1 command. Expected: PASS.
 ### Task 2: Route generated configuration and diagnostics through the proxy
 
 **Files:**
+
 - Modify: `src/config.ts`
 - Modify: `assets/devcontainer/utils/git-signing-bootstrap.sh`
 - Test: `__tests__/app.test.ts`
@@ -79,6 +81,7 @@ Run the Task 2 command. Expected: PASS.
 ### Task 3: Preserve explicit user signing configuration
 
 **Files:**
+
 - Modify: `assets/devcontainer/utils/git-signing-bootstrap.sh`
 - Modify: `docs/features/commit-signing.md`
 - Modify: `docs/superpowers/specs/2026-07-11-default-commit-signing-design.md`
@@ -111,6 +114,7 @@ Run the Task 3 command. Expected: PASS.
 ### Task 4: Document and verify
 
 **Files:**
+
 - Modify: `docs/features/commit-signing.md`
 - Modify: `docs/superpowers/specs/2026-07-11-default-commit-signing-design.md`
 - Create: `.changeset/<generated-name>.md`

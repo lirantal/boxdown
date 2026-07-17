@@ -123,7 +123,12 @@ export function buildGeneratedDevcontainerConfig (context: WorkspaceContext, sig
       BOXDOWN_GIT_SIGNING_ENABLED: signing?.enabled === true ? '1' : '0',
       BOXDOWN_GIT_SIGNING_KEY_PATH: '/opt/boxdown/state/git-signing/signing-key.pub',
       ...(signing?.enabled === false && signing.reason !== undefined ? { BOXDOWN_GIT_SIGNING_REASON: signing.reason } : {}),
-      ...(signing?.enabled === true ? { SSH_AUTH_SOCK: '/run/boxdown/ssh-agent.sock' } : {})
+      ...(signing?.enabled === true
+        ? {
+            BOXDOWN_GIT_SIGNING_SOURCE_SOCKET: '/run/boxdown/ssh-agent.sock',
+            SSH_AUTH_SOCK: '/run/boxdown/ssh-agent-node.sock'
+          }
+        : {})
     }
   }
 }

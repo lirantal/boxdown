@@ -12,8 +12,36 @@ git_global() {
   GIT_CONFIG_GLOBAL="${TARGET_PATH}" git config --global "$@"
 }
 
+git_local_value() {
+  git config --local --get "$1" 2>/dev/null || true
+}
+
+git_global_value() {
+  git_global --get "$1" 2>/dev/null || true
+}
+
+preserve_user_signing_preference() {
+  local local_commit global_commit local_format global_format local_program global_program
+  local_commit="$(git_local_value commit.gpgsign)"
+  global_commit="$(git_global_value commit.gpgsign)"
+  local_format="$(git_local_value gpg.format)"
+  global_format="$(git_global_value gpg.format)"
+  local_program="$(git_local_value gpg.program)"
+  global_program="$(git_global_value gpg.program)"
+
+  [[ "${local_commit}" == "false" || "${global_commit}" == "false" ]] && return 0
+  [[ -n "${local_program}" || -n "${global_program}" ]] && return 0
+  [[ -n "${local_format}" && "${local_format}" != "ssh" ]] && return 0
+  [[ -n "${global_format}" && "${global_format}" != "ssh" ]] && return 0
+  return 1
+}
+
 disable_signing() {
   local reason="${1:-unknown}"
+  if preserve_user_signing_preference; then
+    printf 'boxdown: commit signing configuration preserved (reason: %s).\n' "${reason}" >&2
+    return 0
+  fi
   git_global --unset-all gpg.format >/dev/null 2>&1 || true
   git_global --unset-all user.signingkey >/dev/null 2>&1 || true
   git_global --unset-all gpg.program >/dev/null 2>&1 || true
@@ -22,8 +50,18 @@ disable_signing() {
 }
 
 enable_signing() {
+  if preserve_user_signing_preference; then
+    printf '%s\n' 'boxdown: preserving explicit user Git signing configuration.' >&2
+    return 0
+  fi
+
   if [[ ! -r "${KEY_PATH}" ]]; then
     disable_signing 'container-key-unavailable'
+    return 0
+  fi
+
+  if ! bash "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ssh-agent-proxy-bootstrap.sh"; then
+    disable_signing 'container-agent-proxy-unavailable'
     return 0
   fi
 

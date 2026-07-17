@@ -20,6 +20,11 @@ The container can request operations from identities exposed by the forwarded
 agent. Use a dedicated signing identity or an agent that confirms sensitive
 operations when that exposure is unacceptable.
 
+On Docker Desktop, Boxdown places a small root-owned relay between the
+host-facing agent socket and the non-root container user. The relay exposes no
+private-key material and lets normal `node`-user Git commits reach the host
+agent.
+
 GitHub verification is separate from signing. Upload the selected public key as
 a GitHub SSH signing key once to receive the Verified badge:
 
@@ -62,6 +67,15 @@ key, an absolute path, a `~/` path, or a path relative to the workspace. Only
 public-key files are read. An explicitly configured key is authoritative: if
 it is unreadable, invalid, or absent from the SSH agent, Boxdown disables
 signing instead of selecting another identity.
+
+## User configuration precedence
+
+Boxdown defaults to SSH signing only when Git has no explicit signing
+preference. A repository-local `commit.gpgsign=false`, a non-SSH `gpg.format`,
+or an explicit `gpg.program` is preserved. Explicit SSH signing remains
+supported; Boxdown maps an inaccessible host public-key path to the selected
+public-key snapshot inside the container. This policy is intentional and may
+be revisited in a future release if Boxdown becomes authoritative.
 
 Git can require `gpg.ssh.allowedSignersFile` for trust-aware local verification
 such as `git log --show-signature`. It is not required to create SSH signatures

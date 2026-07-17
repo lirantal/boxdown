@@ -1,6 +1,8 @@
 import assert from 'node:assert'
-import { execFileSync, spawnSync } from 'node:child_process'
+import { execFileSync, spawn, spawnSync } from 'node:child_process'
+import { once } from 'node:events'
 import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readlinkSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { createConnection, createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
 import { PassThrough } from 'node:stream'
@@ -3658,7 +3660,8 @@ describe('devcontainer config generation', () => {
 
     assert.ok(config.mounts?.includes(`type=bind,source=${signing.agentSocketSource},target=/run/boxdown/ssh-agent.sock`))
     assert.ok(config.mounts?.includes(`type=bind,source=${context.gitSigningStateDir},target=/opt/boxdown/state/git-signing,readonly`))
-    assert.strictEqual(config.containerEnv?.SSH_AUTH_SOCK, '/run/boxdown/ssh-agent.sock')
+    assert.strictEqual(config.containerEnv?.SSH_AUTH_SOCK, '/run/boxdown/ssh-agent-node.sock')
+    assert.strictEqual(config.containerEnv?.BOXDOWN_GIT_SIGNING_SOURCE_SOCKET, '/run/boxdown/ssh-agent.sock')
   })
 
   test('propagates a disabled signing reason without diagnostic detail', () => {
@@ -4052,6 +4055,39 @@ describe('git signing selection', () => {
   })
 })
 
+describe('SSH-agent proxy asset', () => {
+  test('forwards node SSH-agent connections', async () => {
+    const root = mkdtempSync(join(process.cwd(), '.ssh-agent-proxy-'))
+    const sourcePath = join(root, 'source.sock')
+    const targetPath = join(root, 'target.sock')
+    const proxyPath = join(assetsDevcontainerDir, 'utils', 'ssh-agent-proxy.mjs')
+    const sourceServer = createServer((socket) => {
+      socket.on('data', (chunk) => socket.write(chunk))
+    })
+    sourceServer.listen(sourcePath)
+    await once(sourceServer, 'listening')
+    const proxy = spawn(process.execPath, [proxyPath, '--source', sourcePath, '--target', targetPath, '--uid', String(process.getuid?.() ?? 0), '--gid', String(process.getgid?.() ?? 0)])
+
+    try {
+      for (let attempt = 0; attempt < 20 && !existsSync(targetPath); attempt++) {
+        await new Promise((resolve) => setTimeout(resolve, 25))
+      }
+      assert.strictEqual(existsSync(targetPath), true)
+
+      const client = createConnection(targetPath)
+      await once(client, 'connect')
+      client.write('agent-request')
+      const [response] = await once(client, 'data')
+      assert.strictEqual(response.toString(), 'agent-request')
+      client.destroy()
+    } finally {
+      proxy.kill()
+      sourceServer.close()
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+})
+
 describe('devcontainer git config hooks', () => {
   test('initialize snapshots host gitconfig and removes stale snapshot when host file is absent', () => {
     const initializePath = join(assetsDevcontainerDir, 'hooks', 'initialize.sh')
@@ -4160,7 +4196,7 @@ describe('devcontainer git config hooks', () => {
     assert.strictEqual(execFileSync('git', ['config', '--local', '--get', 'core.pager'], { cwd: workspace }).toString('utf8').trim(), 'less -R')
   })
 
-  test('git signing bootstrap falls back to unsigned commits without an agent', () => {
+  test('git signing bootstrap preserves an explicit user signing configuration without an agent', () => {
     const bootstrapPath = join(assetsDevcontainerDir, 'utils', 'git-signing-bootstrap.sh')
     const targetPath = join(tempDir('git-signing-target'), '.gitconfig')
     writeFileSync(targetPath, '[gpg]\n\tprogram = /opt/homebrew/bin/gpg\n[commit]\n\tgpgsign = true\n')
@@ -4169,8 +4205,8 @@ describe('devcontainer git config hooks', () => {
       env: { ...process.env, BOXDOWN_GITCONFIG_TARGET_PATH: targetPath, BOXDOWN_GIT_SIGNING_ENABLED: '0' }
     })
 
-    assert.strictEqual(readGitConfig(targetPath, 'commit.gpgsign'), 'false')
-    assert.strictEqual(readGitConfig(targetPath, 'gpg.program'), undefined)
+    assert.strictEqual(readGitConfig(targetPath, 'commit.gpgsign'), 'true')
+    assert.strictEqual(readGitConfig(targetPath, 'gpg.program'), '/opt/homebrew/bin/gpg')
   })
 
   test('git signing bootstrap reports the host preflight reason', () => {
@@ -4219,13 +4255,13 @@ describe('devcontainer git config hooks', () => {
       env: {
         ...process.env,
         PATH: `${binDir}${delimiter}${process.env.PATH ?? ''}`,
-        BOXDOWN_GITCONFIG_TARGET_PATH: targetPath,
+        BOXDOWN_GITCONFIG_TARGET_PATH: join(testRoot, 'unavailable.gitconfig'),
         BOXDOWN_GIT_SIGNING_ENABLED: '1',
         BOXDOWN_GIT_SIGNING_KEY_PATH: keyPath
       }
     })
     assert.strictEqual(unavailableAgent.status, 0)
-    assert.match(unavailableAgent.stderr, /reason: container-agent-unavailable/)
+    assert.match(unavailableAgent.stderr, /reason: container-agent-proxy-unavailable/)
 
     writeFileSync(sshAddPath, '#!/usr/bin/env bash\nprintf "%s\\n" "ssh-ed25519 AAAAC3NzaDifferentKey other"\n')
     chmodSync(sshAddPath, 0o755)
@@ -4234,7 +4270,7 @@ describe('devcontainer git config hooks', () => {
       env: {
         ...process.env,
         PATH: `${binDir}${delimiter}${process.env.PATH ?? ''}`,
-        BOXDOWN_GITCONFIG_TARGET_PATH: targetPath,
+        BOXDOWN_GITCONFIG_TARGET_PATH: join(testRoot, 'unloaded.gitconfig'),
         BOXDOWN_GIT_SIGNING_ENABLED: '1',
         BOXDOWN_GIT_SIGNING_KEY_PATH: keyPath
       }

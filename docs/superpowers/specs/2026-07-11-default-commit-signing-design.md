@@ -348,6 +348,11 @@ without public-key material or secrets. Internal SSH proxy startup remains
 log-only. Generated configuration passes the stable host reason into container
 bootstrap so later lifecycle warnings preserve the original diagnosis.
 
+Docker Desktop may expose the mounted host-agent socket only to root. Boxdown
+therefore relays it through a root-owned Unix-socket proxy to a node-owned
+socket. Explicit user Git-signing preferences remain authoritative; Boxdown
+uses SSH signing only as the default when no preference exists.
+
 ## Testing Strategy
 
 ### Unit tests
