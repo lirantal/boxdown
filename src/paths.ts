@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { existsSync, realpathSync, statSync } from 'node:fs'
-import { homedir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -22,8 +22,11 @@ export interface WorkspaceContext {
   assetsDevcontainerDir: string
   cacheRoot: string
   dataRoot: string
+  runtimeRoot: string
   workspaceCacheDir: string
   workspaceDataDir: string
+  workspaceRuntimeDir: string
+  workspaceSecretEnvDir: string
   generatedConfigPath: string
   hostAgentsDir: string
   hostCodexAuthPath: string
@@ -92,6 +95,18 @@ export function defaultDataRoot (env: NodeJS.ProcessEnv = process.env): string {
   return join(homedir(), '.local', 'share', PACKAGE_NAME)
 }
 
+export function defaultRuntimeRoot (env: NodeJS.ProcessEnv = process.env): string {
+  if (env.BOXDOWN_RUNTIME_HOME) {
+    return env.BOXDOWN_RUNTIME_HOME
+  }
+
+  if (env.XDG_RUNTIME_DIR) {
+    return join(env.XDG_RUNTIME_DIR, PACKAGE_NAME)
+  }
+
+  return join(tmpdir(), `${PACKAGE_NAME}-${process.getuid?.() ?? 'user'}`)
+}
+
 export function defaultHostAgentsDir (env: NodeJS.ProcessEnv = process.env): string {
   return join(env.HOME ?? homedir(), '.agents')
 }
@@ -113,10 +128,12 @@ export function createWorkspaceContextFromIdentity (
   const assetsDevcontainerDir = options.assetsDevcontainerDir ?? env.BOXDOWN_DEVCONTAINER_ASSETS_DIR ?? join(packageRoot, 'assets', 'devcontainer')
   const cacheRoot = defaultCacheRoot(env)
   const dataRoot = defaultDataRoot(env)
+  const runtimeRoot = defaultRuntimeRoot(env)
   const hostAgentsDir = defaultHostAgentsDir(env)
   const hostCodexAuthPath = defaultHostCodexAuthPath(env)
   const workspaceCacheDir = join(cacheRoot, 'workspaces', identity.workspaceId)
   const workspaceDataDir = join(dataRoot, 'workspaces', identity.workspaceId)
+  const workspaceRuntimeDir = join(runtimeRoot, 'workspaces', identity.workspaceId)
   const hostGitconfigSnapshotDir = join(workspaceDataDir, 'gitconfig')
 
   return {
@@ -127,8 +144,11 @@ export function createWorkspaceContextFromIdentity (
     assetsDevcontainerDir,
     cacheRoot,
     dataRoot,
+    runtimeRoot,
     workspaceCacheDir,
     workspaceDataDir,
+    workspaceRuntimeDir,
+    workspaceSecretEnvDir: join(workspaceRuntimeDir, 'secrets'),
     generatedConfigPath: join(workspaceCacheDir, 'devcontainer.json'),
     hostAgentsDir,
     hostCodexAuthPath,

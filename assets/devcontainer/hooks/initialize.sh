@@ -1,34 +1,24 @@
 #!/usr/bin/env bash
 # initialize: runs on host before container create/start (initializeCommand).
-# Prepares .env.development and, when possible, injects OP_SERVICE_ACCOUNT_TOKEN from 1Password.
+# Refreshes private runtime secret files and snapshots host Git config.
 
 set -euo pipefail
 
-HOOKS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-WORKSPACE_DIR="${BOXDOWN_WORKSPACE_FOLDER:-$(cd "${HOOKS_DIR}/../.." && pwd)}"
-ENV_FILE="${WORKSPACE_DIR}/.env.development"
 HOST_GITCONFIG_PATH="${BOXDOWN_HOST_GITCONFIG_PATH:-${HOME:-}/.gitconfig}"
 HOST_GITCONFIG_SNAPSHOT_PATH="${BOXDOWN_HOST_GITCONFIG_SNAPSHOT_PATH:-}"
+SECRET_ENV_DIR="${BOXDOWN_SECRET_ENV_DIR:-}"
 OP_TOKEN_REFERENCE="op://Private/1Password op CLI Service Account for DevContainers/password"
 
 main() {
-  progress "Preparing workspace environment file"
-  ensure_env_file_exists
   progress "Snapshotting host Git config"
   snapshot_host_gitconfig
-  progress "Checking 1Password service account token"
-  maybe_inject_1password_service_account_token
+  progress "Refreshing runtime secret environment"
+  refresh_runtime_secret_environment
 }
 
 progress() {
   if [[ "${BOXDOWN_PROGRESS:-0}" == "1" ]]; then
     printf 'BOXDOWN_PROGRESS: %s\n' "$*"
-  fi
-}
-
-ensure_env_file_exists() {
-  if [[ ! -f "${ENV_FILE}" ]]; then
-    : > "${ENV_FILE}"
   fi
 }
 
@@ -52,36 +42,68 @@ snapshot_host_gitconfig() {
   rm -f "${HOST_GITCONFIG_SNAPSHOT_PATH}"
 }
 
-maybe_inject_1password_service_account_token() {
+prepare_secret_env_dir() {
+  if [[ -z "${SECRET_ENV_DIR}" ]]; then
+    echo "initialize.sh: runtime secret directory is not configured; skipping optional secrets." >&2
+    return 1
+  fi
+
+  umask 077
+  mkdir -p "${SECRET_ENV_DIR}"
+  chmod 0700 "${SECRET_ENV_DIR}"
+}
+
+write_secret_file() {
+  local name="$1"
+  local value="$2"
+  local temporary_path
+
+  temporary_path="$(mktemp "${SECRET_ENV_DIR}/.${name}.XXXXXX")"
+  printf '%s' "${value}" > "${temporary_path}"
+  chmod 0600 "${temporary_path}"
+  mv -f "${temporary_path}" "${SECRET_ENV_DIR}/${name}"
+}
+
+refresh_host_environment_secret() {
+  local name="$1"
+  local value="${!name:-}"
+
+  if [[ -n "${value}" ]]; then
+    write_secret_file "${name}" "${value}"
+  else
+    rm -f "${SECRET_ENV_DIR}/${name}"
+  fi
+}
+
+refresh_1password_service_account_token() {
   local token
 
   if ! command -v op >/dev/null 2>&1; then
-    echo "initialize.sh: op CLI not found; leaving ${ENV_FILE} unchanged."
+    rm -f "${SECRET_ENV_DIR}/OP_SERVICE_ACCOUNT_TOKEN"
     return 0
   fi
 
   if ! token="$(op read "${OP_TOKEN_REFERENCE}" 2>/dev/null)"; then
-    echo "initialize.sh: could not read OP service token from 1Password; leaving ${ENV_FILE} unchanged."
+    rm -f "${SECRET_ENV_DIR}/OP_SERVICE_ACCOUNT_TOKEN"
     return 0
   fi
 
   if [[ -z "${token}" ]]; then
-    echo "initialize.sh: OP service token is empty; leaving ${ENV_FILE} unchanged."
+    rm -f "${SECRET_ENV_DIR}/OP_SERVICE_ACCOUNT_TOKEN"
     return 0
   fi
 
-  upsert_env_var "OP_SERVICE_ACCOUNT_TOKEN" "${token}"
+  write_secret_file "OP_SERVICE_ACCOUNT_TOKEN" "${token}"
 }
 
-upsert_env_var() {
-  local key="$1"
-  local value="$2"
-  local tmp_file
+refresh_runtime_secret_environment() {
+  if ! prepare_secret_env_dir; then
+    return 0
+  fi
 
-  tmp_file="$(mktemp)"
-  awk -F= -v k="${key}" '$1 != k' "${ENV_FILE}" > "${tmp_file}"
-  printf '%s=%s\n' "${key}" "${value}" >> "${tmp_file}"
-  mv "${tmp_file}" "${ENV_FILE}"
+  refresh_host_environment_secret "ANTHROPIC_API_KEY"
+  refresh_host_environment_secret "SNYK_TOKEN"
+  refresh_1password_service_account_token
 }
 
 main "$@"

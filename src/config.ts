@@ -8,6 +8,8 @@ import {
   BOXDOWN_CONTAINER_DEVCONTAINER_DIR,
   BOXDOWN_CONTAINER_GITCONFIG_PATH,
   BOXDOWN_CONTAINER_HOST_GITCONFIG_DIR,
+  BOXDOWN_CONTAINER_SECRET_ENV_BOOTSTRAP,
+  BOXDOWN_CONTAINER_SECRET_ENV_DIR,
   BOXDOWN_CONTAINER_SSH_DIR,
   BOXDOWN_CONTAINER_SSH_PUBLIC_KEY_PATH
 } from './constants.ts'
@@ -67,7 +69,8 @@ export function buildGeneratedDevcontainerConfig (context: WorkspaceContext, sig
   const boxdownMounts = [
     `type=bind,source=${context.assetsDevcontainerDir},target=${BOXDOWN_CONTAINER_DEVCONTAINER_DIR},readonly`,
     `type=bind,source=${context.sshPublicKeyRuntimeDir},target=${BOXDOWN_CONTAINER_SSH_DIR},readonly`,
-    `type=bind,source=${context.hostGitconfigSnapshotDir},target=${BOXDOWN_CONTAINER_HOST_GITCONFIG_DIR},readonly`
+    `type=bind,source=${context.hostGitconfigSnapshotDir},target=${BOXDOWN_CONTAINER_HOST_GITCONFIG_DIR},readonly`,
+    `type=bind,source=${context.workspaceSecretEnvDir},target=${BOXDOWN_CONTAINER_SECRET_ENV_DIR},readonly`
   ]
 
   if (
@@ -98,6 +101,7 @@ export function buildGeneratedDevcontainerConfig (context: WorkspaceContext, sig
       `BOXDOWN_WORKSPACE_FOLDER=${shellQuote(context.workspaceFolder)}`,
       `BOXDOWN_HOST_GITCONFIG_PATH=${shellQuote(context.hostGitconfigPath)}`,
       `BOXDOWN_HOST_GITCONFIG_SNAPSHOT_PATH=${shellQuote(context.hostGitconfigSnapshotPath)}`,
+      `BOXDOWN_SECRET_ENV_DIR=${shellQuote(context.workspaceSecretEnvDir)}`,
       `BOXDOWN_PROGRESS=${shellQuote('${localEnv:BOXDOWN_PROGRESS}')}`,
       `BOXDOWN_VERBOSE=${shellQuote('${localEnv:BOXDOWN_VERBOSE}')}`,
       'bash',
@@ -119,6 +123,8 @@ export function buildGeneratedDevcontainerConfig (context: WorkspaceContext, sig
       ...(baseConfig.containerEnv ?? {}),
       BOXDOWN_CONTAINER_WORKSPACE_FOLDER: '/workspaces/${localWorkspaceFolderBasename}',
       BOXDOWN_WORKSPACE_BASENAME: '${localWorkspaceFolderBasename}',
+      BOXDOWN_SECRET_ENV_DIR: BOXDOWN_CONTAINER_SECRET_ENV_DIR,
+      BASH_ENV: BOXDOWN_CONTAINER_SECRET_ENV_BOOTSTRAP,
       DEVCONTAINER_SSH_PUBLIC_KEY_FILE: BOXDOWN_CONTAINER_SSH_PUBLIC_KEY_PATH,
       BOXDOWN_GIT_SIGNING_ENABLED: signing?.enabled === true ? '1' : '0',
       BOXDOWN_GIT_SIGNING_KEY_PATH: '/opt/boxdown/state/git-signing/signing-key.pub',

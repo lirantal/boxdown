@@ -8,6 +8,7 @@ main() {
   run_step "Configuring global Git" configure_global_git
   run_step "Configuring Git commit signing" configure_git_signing
   run_step "Configuring workspace Git" configure_local_git
+  run_step "Configuring runtime secret environment" configure_runtime_secret_environment
   run_step "Installing OpenSSH server" install_openssh_server
   run_step "Installing Python runtime" install_python_runtime
   run_step "Installing Agent Package Manager" install_apm
@@ -46,6 +47,16 @@ configure_local_git() {
     git config --local --unset-all credential.https://github.com.helper >/dev/null 2>&1 || true
     git config --local --add credential.https://github.com.helper ''
     git config --local --add credential.https://github.com.helper '!gh auth git-credential'
+  fi
+}
+
+configure_runtime_secret_environment() {
+  local bashrc="${HOME}/.bashrc"
+  local source_line='source /opt/boxdown/devcontainer/utils/secret-env-bootstrap.sh'
+
+  touch "${bashrc}"
+  if ! grep -Fqx "${source_line}" "${bashrc}"; then
+    printf '%s\n' "${source_line}" >> "${bashrc}"
   fi
 }
 

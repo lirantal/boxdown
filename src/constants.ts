@@ -10,5 +10,12 @@ export const BOXDOWN_CONTAINER_AGENTS_DIR = '/home/node/.agents'
 export const BOXDOWN_CONTAINER_GITCONFIG_PATH = '/home/node/.gitconfig'
 export const BOXDOWN_CONTAINER_CODEX_DIR = '/home/node/.codex'
 export const BOXDOWN_CONTAINER_CODEX_AUTH_PATH = `${BOXDOWN_CONTAINER_CODEX_DIR}/auth.json`
+export const BOXDOWN_CONTAINER_SECRET_ENV_DIR = '/run/boxdown/secrets'
+export const BOXDOWN_CONTAINER_SECRET_ENV_BOOTSTRAP = `${BOXDOWN_CONTAINER_DEVCONTAINER_DIR}/utils/secret-env-bootstrap.sh`
+export const BOXDOWN_SECRET_ENV_NAMES = [
+  'ANTHROPIC_API_KEY',
+  'SNYK_TOKEN',
+  'OP_SERVICE_ACCOUNT_TOKEN'
+] as const
 
 export const PACKAGE_NAME = 'boxdown'

@@ -75,17 +75,14 @@
         // Codex auth.json is mounted automatically by Boxdown's generated config when present.
     ],
 
-    // Initialize optional host-side secrets before container create/start.
+    // Initialize host runtime state before container create/start.
     "initializeCommand": "bash .devcontainer/hooks/initialize.sh",
     // After up, discover the published host binding, e.g.:
     // docker port <container-name-or-id> 3000/tcp
     "runArgs": [
         // publish container port 3000 with dynamic host port (CLI / start.sh)
         "-p",
-        "127.0.0.1::3000",
-        // pass the development environment file to the container
-        "--env-file",
-        "${localWorkspaceFolder}/.env.development"
+        "127.0.0.1::3000"
     ],
     // --
     "postCreateCommand": "bash .devcontainer/hooks/post-create.sh",
@@ -93,8 +90,6 @@
     "remoteUser": "node",
     "workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
     "containerEnv": {
-        "NODE_ENV": "development",
-        "ANTHROPIC_API_KEY": "${localEnv:ANTHROPIC_API_KEY}",
-        "SNYK_TOKEN": "${localEnv:SNYK_TOKEN}"
+        "NODE_ENV": "development"
     }
 }

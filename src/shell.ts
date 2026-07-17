@@ -61,10 +61,15 @@ function interactiveAgentPathScript (): string {
   ].join('\n')
 }
 
+function runtimeSecretEnvironmentScript (): string {
+  return 'source "${BASH_ENV:-/opt/boxdown/devcontainer/utils/secret-env-bootstrap.sh}"'
+}
+
 export function interactiveShellScript (): string {
   return [
     interactiveTermSetupScript(),
     interactiveTtySetupScript(),
+    runtimeSecretEnvironmentScript(),
     'exec bash -i'
   ].join('\n')
 }
@@ -74,6 +79,7 @@ export function interactiveCommandScript (): string {
     interactiveTermSetupScript(),
     interactiveTtySetupScript(),
     interactiveAgentPathScript(),
+    runtimeSecretEnvironmentScript(),
     'exec "$@"'
   ].join('\n')
 }

@@ -1,7 +1,7 @@
 import assert from 'node:assert'
 import { execFileSync, spawn, spawnSync } from 'node:child_process'
 import { once } from 'node:events'
-import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readlinkSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readlinkSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { createConnection, createServer } from 'node:net'
 import { tmpdir } from 'node:os'
 import { delimiter, join } from 'node:path'
@@ -14,7 +14,7 @@ import { canonicalCodexRemotePathForWorkspace, codexDiscoveredRemoteHostId, code
 import { codingAgentBinary, codingAgentFromCommand } from '../src/coding-agents.ts'
 import { color, formatPromptEnd, formatPromptTitle, promptRail, selectedMark } from '../src/cli-style.ts'
 import { buildGeneratedDevcontainerConfig, publishContainerPortFromConfig } from '../src/config.ts'
-import { BOXDOWN_CONTAINER_AGENTS_DIR, BOXDOWN_CONTAINER_CODEX_AUTH_PATH, BOXDOWN_CONTAINER_CODEX_DIR, BOXDOWN_CONTAINER_GITCONFIG_PATH, BOXDOWN_CONTAINER_HOST_GITCONFIG_DIR, DEVCONTAINER_CLI_VERSION } from '../src/constants.ts'
+import { BOXDOWN_CONTAINER_AGENTS_DIR, BOXDOWN_CONTAINER_CODEX_AUTH_PATH, BOXDOWN_CONTAINER_CODEX_DIR, BOXDOWN_CONTAINER_GITCONFIG_PATH, BOXDOWN_CONTAINER_HOST_GITCONFIG_DIR, BOXDOWN_CONTAINER_SECRET_ENV_BOOTSTRAP, BOXDOWN_CONTAINER_SECRET_ENV_DIR, DEVCONTAINER_CLI_VERSION } from '../src/constants.ts'
 import { codingAgentDevcontainerExecArgs, sshTunnelArgs } from '../src/devcontainer.ts'
 import { resolveDevcontainerCli } from '../src/devcontainer-cli.ts'
 import { doctorHasFailures, formatDoctorText, runDoctorChecks } from '../src/doctor.ts'
@@ -3644,6 +3644,28 @@ describe('progress output', () => {
 })
 
 describe('devcontainer config generation', () => {
+  test('mounts runtime secret state without Docker environment secret injection', () => {
+    const context = createWorkspaceContext({
+      workspace: tempDir('runtime-secret-config-workspace'),
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('runtime-secret-config-cache'),
+        BOXDOWN_DATA_HOME: tempDir('runtime-secret-config-data'),
+        BOXDOWN_RUNTIME_HOME: tempDir('runtime-secret-config-runtime')
+      },
+      assetsDevcontainerDir
+    })
+
+    const config = buildGeneratedDevcontainerConfig(context)
+    const serialized = JSON.stringify(config)
+
+    assert.ok(context.workspaceSecretEnvDir.startsWith(context.runtimeRoot))
+    assert.ok(!context.workspaceSecretEnvDir.startsWith(context.workspaceDataDir))
+    assert.ok(config.mounts?.includes(`type=bind,source=${context.workspaceSecretEnvDir},target=${BOXDOWN_CONTAINER_SECRET_ENV_DIR},readonly`))
+    assert.strictEqual(config.containerEnv?.BASH_ENV, BOXDOWN_CONTAINER_SECRET_ENV_BOOTSTRAP)
+    assert.strictEqual(config.containerEnv?.NODE_ENV, 'development')
+    assert.doesNotMatch(serialized, /--env-file|\.env\.development|ANTHROPIC_API_KEY|SNYK_TOKEN|OP_SERVICE_ACCOUNT_TOKEN/)
+  })
+
   test('adds an SSH-agent and public-key mount for an enabled signing plan', () => {
     const context = createWorkspaceContext({
       workspace: tempDir('git-signing-config-workspace'),
@@ -4089,6 +4111,49 @@ describe('SSH-agent proxy asset', () => {
 })
 
 describe('devcontainer git config hooks', () => {
+  test('initialization writes private runtime secrets without changing project environment files', () => {
+    const initializePath = join(assetsDevcontainerDir, 'hooks', 'initialize.sh')
+    const workspace = tempDir('runtime-secret-initialize-workspace')
+    const secretDir = join(tempDir('runtime-secret-initialize-state'), 'secrets')
+    const projectEnv = join(workspace, '.env.development')
+    const binDir = join(tempDir('runtime-secret-initialize-bin'), 'bin')
+    mkdirSync(binDir)
+    writeFileSync(join(binDir, 'op'), '#!/usr/bin/env bash\nexit 1\n')
+    chmodSync(join(binDir, 'op'), 0o755)
+    writeFileSync(projectEnv, 'PROJECT_VALUE=unchanged\n')
+
+    execFileSync('bash', [initializePath], {
+      env: {
+        ...process.env,
+        PATH: `${binDir}${delimiter}${process.env.PATH ?? ''}`,
+        BOXDOWN_WORKSPACE_FOLDER: workspace,
+        BOXDOWN_SECRET_ENV_DIR: secretDir,
+        ANTHROPIC_API_KEY: 'anthropic-runtime-sentinel',
+        SNYK_TOKEN: 'snyk-runtime-sentinel'
+      }
+    })
+
+    assert.strictEqual(readFileSync(projectEnv, 'utf8'), 'PROJECT_VALUE=unchanged\n')
+    assert.strictEqual(readFileSync(join(secretDir, 'ANTHROPIC_API_KEY'), 'utf8'), 'anthropic-runtime-sentinel')
+    assert.strictEqual(readFileSync(join(secretDir, 'SNYK_TOKEN'), 'utf8'), 'snyk-runtime-sentinel')
+    assert.strictEqual(existsSync(join(secretDir, 'OP_SERVICE_ACCOUNT_TOKEN')), false)
+    assert.strictEqual(statSync(secretDir).mode & 0o777, 0o700)
+    assert.strictEqual(statSync(join(secretDir, 'ANTHROPIC_API_KEY')).mode & 0o777, 0o600)
+
+    execFileSync('bash', [initializePath], {
+      env: {
+        ...process.env,
+        PATH: `${binDir}${delimiter}${process.env.PATH ?? ''}`,
+        BOXDOWN_WORKSPACE_FOLDER: workspace,
+        BOXDOWN_SECRET_ENV_DIR: secretDir
+      }
+    })
+
+    assert.strictEqual(existsSync(join(secretDir, 'ANTHROPIC_API_KEY')), false)
+    assert.strictEqual(existsSync(join(secretDir, 'SNYK_TOKEN')), false)
+    assert.strictEqual(readFileSync(projectEnv, 'utf8'), 'PROJECT_VALUE=unchanged\n')
+  })
+
   test('initialize snapshots host gitconfig and removes stale snapshot when host file is absent', () => {
     const initializePath = join(assetsDevcontainerDir, 'hooks', 'initialize.sh')
     const workspace = tempDir('initialize-gitconfig-workspace')
@@ -4339,6 +4404,28 @@ describe('devcontainer git config hooks', () => {
 })
 
 describe('interactive shell setup', () => {
+  test('loads available runtime secrets without outputting their values', () => {
+    const bootstrapPath = join(assetsDevcontainerDir, 'utils', 'secret-env-bootstrap.sh')
+    const secretDir = tempDir('runtime-secret-bootstrap')
+    writeFileSync(join(secretDir, 'ANTHROPIC_API_KEY'), 'anthropic-bootstrap-sentinel')
+    writeFileSync(join(secretDir, 'SNYK_TOKEN'), 'snyk-bootstrap-sentinel')
+    const result = spawnSync('bash', [
+      '-c',
+      'source "$1"; [[ "${ANTHROPIC_API_KEY:-}" == "anthropic-bootstrap-sentinel" ]] && echo anthropic:yes; [[ "${SNYK_TOKEN:-}" == "snyk-bootstrap-sentinel" ]] && echo snyk:yes; [[ -z "${OP_SERVICE_ACCOUNT_TOKEN:-}" ]] && echo op:no',
+      'bash',
+      bootstrapPath
+    ], {
+      encoding: 'utf8',
+      env: { ...process.env, BOXDOWN_SECRET_ENV_DIR: secretDir }
+    })
+
+    assert.strictEqual(result.status, 0)
+    assert.match(result.stdout, /^anthropic:yes$/m)
+    assert.match(result.stdout, /^snyk:yes$/m)
+    assert.match(result.stdout, /^op:no$/m)
+    assert.doesNotMatch(`${result.stdout}\n${result.stderr}`, /bootstrap-sentinel/)
+  })
+
   test('defaults to conservative TTY width normalization', () => {
     assert.deepStrictEqual(interactiveShellEnvArgs({ TERM: 'xterm-kitty' }), [
       'TERM=xterm-kitty',
