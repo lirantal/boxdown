@@ -1,6 +1,6 @@
 {
     "name": "Project Devcontainer",
-    "image": "node:24-trixie-slim",
+    "image": "node:24-trixie-slim@sha256:ae91dcc111a68c9d2d81ff2a17bda61be126426176fde6fe7d08ab13b7f50573",
     "features": {
         "ghcr.io/devcontainers/features/common-utils@sha256:cb0c4d3c276f157eed17935747e364178d75fee17f55c4e129966f64633deb3a": {
             "username": "node"

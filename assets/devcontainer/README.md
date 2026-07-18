@@ -28,7 +28,18 @@ Run this project in a **consistent Node.js 24 + TypeScript** environment without
 
 ## Base image
 
-Boxdown uses `node:24-trixie-slim` as the base image to keep the shared image smaller than the full Dev Containers TypeScript/Node image. The devcontainer then installs the required operating-system tools through pinned Dev Container features. `common-utils` and `git` run first so later features and lifecycle hooks can rely on shell basics, `sudo`, package metadata, Git, and related utilities.
+Boxdown uses `node:24-trixie-slim` as the base-image update track to keep the
+shared image smaller than the full Dev Containers TypeScript/Node image. The
+template appends the upstream multi-platform OCI index digest, making rebuilds
+immutable while allowing AMD64 and ARM64 hosts to select the matching platform
+manifest from the same pinned release set. Renovate checks the packaged
+template monthly and opens a pull request when that tag's index digest changes,
+so base-image updates remain explicit and auditable.
+
+The devcontainer then installs the required operating-system tools through
+pinned Dev Container features. `common-utils` and `git` run first so later
+features and lifecycle hooks can rely on shell basics, `sudo`, package
+metadata, Git, and related utilities.
 
 Python is installed during `postCreateCommand` from Debian apt packages (`python3`, `python3-venv`, `python3-pip`, and `pipx`). On Debian trixie this currently provides Python 3.13. Boxdown intentionally avoids the Dev Containers Python feature because it added a large Python runtime/dev-tooling layer, including bundled environments for tools such as mypy, black, pylint, pytest, bandit, pipenv, and flake8.
 
