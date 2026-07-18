@@ -41,6 +41,35 @@ function tempDir (name: string): string {
   return mkdtempSync(join(tmpdir(), `boxdown-${name}-`))
 }
 
+function runOnePasswordInstallForArchitecture (arch: string): { status: number | null, stderr: string, downloads: string } {
+  const postCreatePath = join(assetsDevcontainerDir, 'hooks', 'post-create.sh')
+  const curlLogPath = join(tempDir('onepassword-curl-log'), 'calls.log')
+  const script = [
+    'source "$1"',
+    'uname() { printf "%s\\n" "$BOXDOWN_TEST_ARCH"; }',
+    'curl() { printf "%s\\n" "$*" >> "$BOXDOWN_TEST_CURL_LOG"; }',
+    'python3() { :; }',
+    'sudo() { :; }',
+    'chmod() { :; }',
+    'rm() { :; }',
+    'install_1password_cli'
+  ].join('\n')
+  const result = spawnSync('bash', ['-c', script, 'bash', postCreatePath], {
+    encoding: 'utf8',
+    env: {
+      ...process.env,
+      BOXDOWN_TEST_ARCH: arch,
+      BOXDOWN_TEST_CURL_LOG: curlLogPath
+    }
+  })
+
+  return {
+    status: result.status,
+    stderr: result.stderr,
+    downloads: existsSync(curlLogPath) ? readFileSync(curlLogPath, 'utf8') : ''
+  }
+}
+
 function readGitConfig (configPath: string, key: string): string | undefined {
   try {
     return execFileSync('git', ['config', '--file', configPath, '--get', key]).toString('utf8').trim()
@@ -4334,6 +4363,34 @@ describe('devcontainer git config hooks', () => {
     assert.deepStrictEqual(helpers, ['', '!gh auth git-credential'])
     assert.strictEqual(readGitConfig(join(workspace, '.git', 'config'), 'commit.gpgsign'), undefined)
     assert.strictEqual(execFileSync('git', ['config', '--local', '--get', 'core.pager'], { cwd: workspace }).toString('utf8').trim(), 'less -R')
+  })
+
+  for (const arch of ['x86_64', 'amd64']) {
+    test(`1Password installer selects the amd64 archive on ${arch}`, () => {
+      const result = runOnePasswordInstallForArchitecture(arch)
+
+      assert.strictEqual(result.status, 0)
+      assert.match(result.downloads, /op_linux_amd64_v2\.32\.1\.zip/)
+      assert.doesNotMatch(result.downloads, /op_linux_arm64/)
+    })
+  }
+
+  for (const arch of ['aarch64', 'arm64']) {
+    test(`1Password installer selects the arm64 archive on ${arch}`, () => {
+      const result = runOnePasswordInstallForArchitecture(arch)
+
+      assert.strictEqual(result.status, 0)
+      assert.match(result.downloads, /op_linux_arm64_v2\.32\.1\.zip/)
+      assert.doesNotMatch(result.downloads, /op_linux_amd64/)
+    })
+  }
+
+  test('1Password installer skips unsupported architectures', () => {
+    const result = runOnePasswordInstallForArchitecture('riscv64')
+
+    assert.strictEqual(result.status, 0)
+    assert.strictEqual(result.downloads, '')
+    assert.match(result.stderr, /skipping 1Password CLI \(unsupported arch: riscv64\)/)
   })
 
   test('git signing bootstrap preserves an explicit user signing configuration without an agent', () => {

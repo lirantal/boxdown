@@ -111,7 +111,18 @@ install_snyk_cli() {
 
 install_1password_cli() {
   local op_version="2.32.1"
-  curl -fsSL "https://cache.agilebits.com/dist/1P/op2/pkg/v${op_version}/op_linux_arm64_v${op_version}.zip" -o /tmp/op.zip
+  local op_arch
+
+  case "$(uname -m)" in
+    aarch64 | arm64) op_arch="arm64" ;;
+    x86_64 | amd64) op_arch="amd64" ;;
+    *)
+      echo "post-create: skipping 1Password CLI (unsupported arch: $(uname -m))" >&2
+      return 0
+      ;;
+  esac
+
+  curl -fsSL "https://cache.agilebits.com/dist/1P/op2/pkg/v${op_version}/op_linux_${op_arch}_v${op_version}.zip" -o /tmp/op.zip
   python3 -c "import zipfile; zipfile.ZipFile('/tmp/op.zip').extract('op', '/tmp')"
   sudo mv /tmp/op /usr/local/bin/op && chmod +x /usr/local/bin/op && rm /tmp/op.zip
 }
