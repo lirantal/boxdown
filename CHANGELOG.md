@@ -1,5 +1,15 @@
 # boxdown
 
+## 1.2.1
+
+### Patch Changes
+
+- [`b8a8700`](https://github.com/lirantal/boxdown/commit/b8a8700053995e7c03f910e2ba44f8219502851c) Thanks [@lirantal](https://github.com/lirantal)! - Resolve configured SSH signing-key paths and report actionable non-blocking commit-signing diagnostics.
+
+- [`3ed7745`](https://github.com/lirantal/boxdown/commit/3ed774502b29ed32503617b4d27dc5082db12b64) Thanks [@lirantal](https://github.com/lirantal)! - Keep Boxdown-provided secrets out of workspace files, Docker inspection, and lifecycle logs while preserving Bash-session environment variables.
+
+- [`b336e41`](https://github.com/lirantal/boxdown/commit/b336e41d55cc1d5dff15031250a31f540fda8b09) Thanks [@lirantal](https://github.com/lirantal)! - Fix SSH commit signing for non-root Boxdown container users by relaying the forwarded agent socket safely.
+
 ## 1.2.0
 
 ### Minor Changes
