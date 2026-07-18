@@ -4365,21 +4365,25 @@ describe('devcontainer git config hooks', () => {
     assert.strictEqual(execFileSync('git', ['config', '--local', '--get', 'core.pager'], { cwd: workspace }).toString('utf8').trim(), 'less -R')
   })
 
-  test('1Password installer selects the amd64 archive on x86_64', () => {
-    const result = runOnePasswordInstallForArchitecture('x86_64')
+  for (const arch of ['x86_64', 'amd64']) {
+    test(`1Password installer selects the amd64 archive on ${arch}`, () => {
+      const result = runOnePasswordInstallForArchitecture(arch)
 
-    assert.strictEqual(result.status, 0)
-    assert.match(result.downloads, /op_linux_amd64_v2\.32\.1\.zip/)
-    assert.doesNotMatch(result.downloads, /op_linux_arm64/)
-  })
+      assert.strictEqual(result.status, 0)
+      assert.match(result.downloads, /op_linux_amd64_v2\.32\.1\.zip/)
+      assert.doesNotMatch(result.downloads, /op_linux_arm64/)
+    })
+  }
 
-  test('1Password installer selects the arm64 archive on aarch64', () => {
-    const result = runOnePasswordInstallForArchitecture('aarch64')
+  for (const arch of ['aarch64', 'arm64']) {
+    test(`1Password installer selects the arm64 archive on ${arch}`, () => {
+      const result = runOnePasswordInstallForArchitecture(arch)
 
-    assert.strictEqual(result.status, 0)
-    assert.match(result.downloads, /op_linux_arm64_v2\.32\.1\.zip/)
-    assert.doesNotMatch(result.downloads, /op_linux_amd64/)
-  })
+      assert.strictEqual(result.status, 0)
+      assert.match(result.downloads, /op_linux_arm64_v2\.32\.1\.zip/)
+      assert.doesNotMatch(result.downloads, /op_linux_amd64/)
+    })
+  }
 
   test('1Password installer skips unsupported architectures', () => {
     const result = runOnePasswordInstallForArchitecture('riscv64')
