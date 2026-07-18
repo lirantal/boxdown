@@ -14,6 +14,7 @@ interface RenovatePackageRule {
   matchDepTypes?: string[]
   matchPackageNames?: string[]
   matchFileNames?: string[]
+  versioning?: string
   pinDigests?: boolean
   schedule?: string[]
   enabled?: boolean
@@ -50,6 +51,7 @@ test('scopes Renovate to monthly packaged Node image digest updates', () => {
   assert.deepEqual(imageRule?.matchManagers, ['devcontainer'])
   assert.deepEqual(imageRule?.matchPackageNames, ['node'])
   assert.deepEqual(imageRule?.matchFileNames, ['assets/devcontainer/devcontainer.json'])
+  assert.equal(imageRule?.versioning, 'exact')
   assert.equal(imageRule?.pinDigests, true)
   assert.deepEqual(imageRule?.schedule, ['* 0-3 1 * *'])
 })

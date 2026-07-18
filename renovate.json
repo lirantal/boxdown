@@ -33,6 +33,7 @@
       "matchFileNames": [
         "assets/devcontainer/devcontainer.json"
       ],
+      "versioning": "exact",
       "pinDigests": true,
       "schedule": [
         "* 0-3 1 * *"

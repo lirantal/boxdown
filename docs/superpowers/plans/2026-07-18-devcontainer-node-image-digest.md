@@ -14,6 +14,7 @@
 - The pinned digest is the multi-platform OCI index digest `sha256:ae91dcc111a68c9d2d81ff2a17bda61be126426176fde6fe7d08ab13b7f50573` resolved on 2026-07-18.
 - Renovate manages only the packaged devcontainer and does not overlap with Dependabot's npm or GitHub Actions responsibilities.
 - Dev Container Feature updates remain disabled in Renovate.
+- Renovate uses `exact` versioning for the Node image so only its digest can change; the `24-trixie-slim` tag cannot be upgraded.
 - Node image digest updates are eligible only on the first day of each month before 04:00 UTC.
 - The Renovate GitHub app is an external operational prerequisite; no repository token or scheduled workflow is added.
 
@@ -120,6 +121,7 @@ interface RenovatePackageRule {
   matchDepTypes?: string[]
   matchPackageNames?: string[]
   matchFileNames?: string[]
+  versioning?: string
   pinDigests?: boolean
   schedule?: string[]
   enabled?: boolean
@@ -150,6 +152,7 @@ test('scopes Renovate to monthly packaged Node image digest updates', () => {
   assert.deepEqual(imageRule?.matchManagers, ['devcontainer'])
   assert.deepEqual(imageRule?.matchPackageNames, ['node'])
   assert.deepEqual(imageRule?.matchFileNames, ['assets/devcontainer/devcontainer.json'])
+  assert.equal(imageRule?.versioning, 'exact')
   assert.equal(imageRule?.pinDigests, true)
   assert.deepEqual(imageRule?.schedule, ['* 0-3 1 * *'])
 })
@@ -205,6 +208,7 @@ Create `renovate.json` with:
       "matchFileNames": [
         "assets/devcontainer/devcontainer.json"
       ],
+      "versioning": "exact",
       "pinDigests": true,
       "schedule": [
         "* 0-3 1 * *"
