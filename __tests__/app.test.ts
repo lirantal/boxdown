@@ -15,7 +15,7 @@ import { codingAgentBinary, codingAgentFromCommand } from '../src/coding-agents.
 import { color, formatPromptEnd, formatPromptTitle, promptRail, selectedMark } from '../src/cli-style.ts'
 import { buildGeneratedDevcontainerConfig, publishContainerPortFromConfig } from '../src/config.ts'
 import { BOXDOWN_CONTAINER_AGENTS_DIR, BOXDOWN_CONTAINER_CODEX_AUTH_PATH, BOXDOWN_CONTAINER_CODEX_DIR, BOXDOWN_CONTAINER_GITCONFIG_PATH, BOXDOWN_CONTAINER_HOST_GITCONFIG_DIR, BOXDOWN_CONTAINER_SECRET_ENV_BOOTSTRAP, BOXDOWN_CONTAINER_SECRET_ENV_DIR, DEVCONTAINER_CLI_VERSION } from '../src/constants.ts'
-import { codingAgentDevcontainerExecArgs, parseDockerInspectImage, sshTunnelArgs } from '../src/devcontainer.ts'
+import { codingAgentDevcontainerExecArgs, parseDockerInspectImage, sshTunnelArgs, startDevcontainer } from '../src/devcontainer.ts'
 import { resolveDevcontainerCli } from '../src/devcontainer-cli.ts'
 import { doctorHasFailures, formatDoctorText, runDoctorChecks } from '../src/doctor.ts'
 import { parseSshPublicKey, reportGitSigningPlan, resolveConfiguredSshSigningKey, resolveGitSigningPlan, selectGitSigningKey, type GitSigningPlan, type GitSigningReason } from '../src/git-signing.ts'
@@ -4072,6 +4072,95 @@ describe('progress output', () => {
     assert.match(message, /stdout tail:/)
     assert.match(message, /stdout two/)
     assert.doesNotMatch(message, /hidden marker/)
+  })
+
+  test('zero failure-tail budget emits no output tails', () => {
+    const message = formatCommandFailure('demo', {
+      code: 1,
+      stdout: 'stdout detail\n',
+      stderr: 'stderr detail\n'
+    }, { tailLines: 0 })
+
+    assert.doesNotMatch(message, /stdout tail|stderr tail|stdout detail|stderr detail/)
+  })
+
+  test('specific stderr wins over a generic Dev Containers wrapper', () => {
+    const wrapper = JSON.stringify({
+      outcome: 'error',
+      message: 'Command failed: docker buildx build --load',
+      description: 'An error occurred setting up the container.'
+    })
+    const message = formatCommandFailure('devcontainer up', {
+      code: 1,
+      stdout: `${wrapper}\n`,
+      stderr: 'failed to solve: registry authentication failed\n'
+    }, { logPath: '/tmp/workspace/boxdown.log' })
+
+    assert.match(message, /registry authentication failed/)
+    assert.doesNotMatch(message, /docker buildx build --load/)
+    assert.match(message, /Command log: \/tmp\/workspace\/boxdown\.log/)
+  })
+
+  test('wrapper-only failures explain the missing nested diagnostic', () => {
+    const wrapper = JSON.stringify({
+      outcome: 'error',
+      message: 'Command failed: docker buildx build --load',
+      description: 'An error occurred setting up the container.'
+    })
+    const message = formatCommandFailure('devcontainer up', {
+      code: 1,
+      stdout: `${wrapper}\n`,
+      stderr: ''
+    })
+
+    assert.match(message, /nested command failure without diagnostic output/)
+    assert.doesNotMatch(message, /docker buildx build --load/)
+  })
+
+  test('devcontainer up remains a single-attempt operation after runtime readiness', async () => {
+    const workspace = tempDir('devcontainer-up-single-attempt-workspace')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('devcontainer-up-single-attempt-cache'),
+        BOXDOWN_DATA_HOME: tempDir('devcontainer-up-single-attempt-data')
+      },
+      assetsDevcontainerDir
+    })
+    const wrapper = JSON.stringify({
+      outcome: 'error',
+      message: 'Command failed: docker buildx build --load'
+    })
+    const calls: Array<{ label: string, command: string, args: string[] }> = []
+
+    mkdirSync(context.sshKeyDir, { recursive: true })
+    writeFileSync(context.sshKeyPath, 'test private key\n')
+    writeFileSync(context.sshPublicKeyPath, 'test public key\n')
+
+    await assert.rejects(
+      startDevcontainer(context, {
+        progress: createProgress({ mode: 'none' }),
+        runDevcontainerUp: async (label, command, args) => {
+          calls.push({ label, command, args })
+          return {
+            code: 1,
+            stdout: `${wrapper}\n`,
+            stderr: 'failed to solve: registry authentication failed\n'
+          }
+        }
+      }),
+      (error: unknown) => {
+        assert.ok(error instanceof Error)
+        assert.match(error.message, /registry authentication failed/)
+        assert.doesNotMatch(error.message, /docker buildx build --load/)
+        assert.match(error.message, new RegExp(`Command log: ${context.workspaceLogPath}`))
+        return true
+      }
+    )
+
+    assert.strictEqual(calls.length, 1)
+    assert.strictEqual(calls[0]?.label, 'devcontainer up')
+    assert.ok(calls[0]?.args.includes('up'))
   })
 })
 

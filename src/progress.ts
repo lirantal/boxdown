@@ -527,18 +527,41 @@ function outputWithoutProgressMarkers (output: string): string {
     .join('\n')
 }
 
-function tailLines (output: string, maxLines: number): string[] {
+export interface CommandFailureOptions {
+  tailLines?: number
+  logPath?: string
+}
+
+function outputLines (output: string): string[] {
   return output
     .split(/\r?\n/u)
     .map((line) => line.trimEnd())
     .filter((line) => line.trim().length > 0)
-    .slice(-maxLines)
 }
 
-export function formatCommandFailure (label: string, result: CommandResult, options: { tailLines?: number } = {}): string {
+function tailLines (output: string, maxLines: number): string[] {
+  if (maxLines <= 0) return []
+  return outputLines(output).slice(-maxLines)
+}
+
+function isDevcontainerErrorEnvelope (line: string): boolean {
+  try {
+    const value = JSON.parse(line) as { outcome?: unknown, message?: unknown }
+    return value !== null && typeof value === 'object' &&
+      value.outcome === 'error' && typeof value.message === 'string'
+  } catch {
+    return false
+  }
+}
+
+export function formatCommandFailure (label: string, result: CommandResult, options: CommandFailureOptions = {}): string {
   const maxLines = options.tailLines ?? DEFAULT_FAILURE_TAIL_LINES
   const stderrTail = tailLines(outputWithoutProgressMarkers(result.stderr), maxLines)
-  const stdoutTail = tailLines(outputWithoutProgressMarkers(result.stdout), Math.max(0, maxLines - stderrTail.length))
+  const stdoutLines = outputLines(outputWithoutProgressMarkers(result.stdout))
+  const wrapperPresent = stdoutLines.some(isDevcontainerErrorEnvelope)
+  const specificStdout = stdoutLines.filter((line) => !isDevcontainerErrorEnvelope(line))
+  const stdoutBudget = Math.max(0, maxLines - stderrTail.length)
+  const stdoutTail = stdoutBudget === 0 ? [] : specificStdout.slice(-stdoutBudget)
   const lines = [
     `${label} failed with exit code ${result.code}.`,
     'Rerun with --verbose to see full command output.'
@@ -550,6 +573,14 @@ export function formatCommandFailure (label: string, result: CommandResult, opti
 
   if (stdoutTail.length > 0) {
     lines.push('', 'stdout tail:', ...stdoutTail.map((line) => `  ${line}`))
+  }
+
+  if (wrapperPresent && stderrTail.length === 0 && stdoutTail.length === 0) {
+    lines.push('', 'The Dev Containers CLI reported a nested command failure without diagnostic output.')
+  }
+
+  if (options.logPath !== undefined) {
+    lines.push('', `Command log: ${options.logPath}`)
   }
 
   return lines.join('\n')
@@ -608,8 +639,13 @@ export async function runProgressCommand (
   }
 }
 
-export function assertProgressCommandSucceeded (label: string, result: CommandResult, message: string): void {
+export function assertProgressCommandSucceeded (
+  label: string,
+  result: CommandResult,
+  message: string,
+  options: CommandFailureOptions = {}
+): void {
   if (result.code !== 0) {
-    throw new Error(`${message}\n${formatCommandFailure(label, result)}`)
+    throw new Error(`${message}\n${formatCommandFailure(label, result, options)}`)
   }
 }

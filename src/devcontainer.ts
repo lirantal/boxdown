@@ -21,6 +21,7 @@ export interface StartOptions {
   progress?: ProgressReporter
   logger?: WorkspaceCommandLogger
   reuseRunning?: boolean
+  runDevcontainerUp?: typeof runProgressCommand
 }
 
 export interface ContainerCommandOptions {
@@ -374,7 +375,7 @@ export async function startDevcontainer (context: WorkspaceContext, options: Sta
         mirrorStderr: 'stderr',
         logger: options.logger
       })
-    : await runProgressCommand('devcontainer up', cli.command, [...cli.argsPrefix, ...args], {
+    : await (options.runDevcontainerUp ?? runProgressCommand)('devcontainer up', cli.command, [...cli.argsPrefix, ...args], {
         progress,
         spinnerLabel: 'Starting devcontainer',
         stepId: 'devcontainer-start',
@@ -388,7 +389,12 @@ export async function startDevcontainer (context: WorkspaceContext, options: Sta
   }
 
   if (progress !== undefined) {
-    assertProgressCommandSucceeded('devcontainer up', result, `devcontainer up failed for ${context.workspaceFolder}`)
+    assertProgressCommandSucceeded(
+      'devcontainer up',
+      result,
+      `devcontainer up failed for ${context.workspaceFolder}`,
+      { logPath: context.workspaceLogPath }
+    )
   }
 
   const containerId = parseContainerIdFromUpOutput(`${result.stdout}\n${result.stderr}`) ?? await findRunningContainerId(context, { logger: options.logger })
@@ -503,7 +509,12 @@ export async function ensureContainerSshRuntime (context: WorkspaceContext, opti
   }
 
   if (options.progress !== undefined) {
-    assertProgressCommandSucceeded('prepare SSH runtime', result, 'Failed to prepare devcontainer SSH runtime')
+    assertProgressCommandSucceeded(
+      'prepare SSH runtime',
+      result,
+      'Failed to prepare devcontainer SSH runtime',
+      { logPath: context.workspaceLogPath }
+    )
   }
 }
 
@@ -590,7 +601,12 @@ export async function ensureContainerCodingAgentCli (
   }
 
   if (options.progress !== undefined) {
-    assertProgressCommandSucceeded(`prepare ${codingAgentBinary(agent)}`, result, `Could not install or refresh ${codingAgentBinary(agent)} inside the devcontainer`)
+    assertProgressCommandSucceeded(
+      `prepare ${codingAgentBinary(agent)}`,
+      result,
+      `Could not install or refresh ${codingAgentBinary(agent)} inside the devcontainer`,
+      { logPath: context.workspaceLogPath }
+    )
   }
 }
 
