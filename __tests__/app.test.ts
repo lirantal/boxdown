@@ -2916,6 +2916,103 @@ describe('doctor output', () => {
     assert.ok(checks.every((item) => item.level === 'ok'))
   })
 
+  test('doctor reports Buildx readiness from the shared runtime probe', async () => {
+    const context = createWorkspaceContext({
+      workspace: tempDir('doctor-buildx-ready-workspace'),
+      env: { BOXDOWN_CACHE_HOME: tempDir('doctor-buildx-ready-cache'), BOXDOWN_DATA_HOME: tempDir('doctor-buildx-ready-data') },
+      assetsDevcontainerDir
+    })
+    const calls: string[] = []
+    const checks = await runDoctorChecks(context, {
+      includeOptional: false,
+      includeDockerMountProbe: false,
+      runCommand: async (command, args) => {
+        calls.push([command, ...args].join(' '))
+        return { code: 0, stdout: '', stderr: '' }
+      }
+    })
+
+    assert.ok(calls.includes('docker buildx inspect --bootstrap'))
+    assert.deepStrictEqual(checks.find((check) => check.name === 'docker-buildx'), {
+      name: 'docker-buildx',
+      level: 'ok',
+      message: 'Docker Buildx builder is operational'
+    })
+  })
+
+  test('doctor warns when the Dev Containers fallback will be used', async () => {
+    const context = createWorkspaceContext({
+      workspace: tempDir('doctor-buildx-fallback-workspace'),
+      env: { BOXDOWN_CACHE_HOME: tempDir('doctor-buildx-fallback-cache'), BOXDOWN_DATA_HOME: tempDir('doctor-buildx-fallback-data') },
+      assetsDevcontainerDir
+    })
+    const checks = await runDoctorChecks(context, {
+      includeOptional: false,
+      includeDockerMountProbe: false,
+      runCommand: async (command, args) => ({
+        code: command === 'docker' && args.join(' ') === 'buildx version' ? 1 : 0,
+        stdout: '',
+        stderr: command === 'docker' && args.join(' ') === 'buildx version' ? 'unknown command: buildx' : ''
+      })
+    })
+
+    const buildx = checks.find((check) => check.name === 'docker-buildx')
+    assert.strictEqual(buildx?.level, 'warn')
+    assert.match(buildx?.message ?? '', /classic-build fallback/)
+  })
+
+  test('doctor fails a discoverable but unusable Buildx builder', async () => {
+    const context = createWorkspaceContext({
+      workspace: tempDir('doctor-buildx-failed-workspace'),
+      env: { BOXDOWN_CACHE_HOME: tempDir('doctor-buildx-failed-cache'), BOXDOWN_DATA_HOME: tempDir('doctor-buildx-failed-data') },
+      assetsDevcontainerDir
+    })
+    const checks = await runDoctorChecks(context, {
+      includeOptional: false,
+      includeDockerMountProbe: false,
+      runCommand: async (command, args) => ({
+        code: command === 'docker' && args.join(' ') === 'buildx inspect --bootstrap' ? 1 : 0,
+        stdout: '',
+        stderr: command === 'docker' && args.join(' ') === 'buildx inspect --bootstrap' ? 'builder is starting' : ''
+      })
+    })
+
+    assert.deepStrictEqual(checks.find((check) => check.name === 'docker-buildx'), {
+      name: 'docker-buildx',
+      level: 'fail',
+      message: 'Docker Buildx builder was not operational: builder is starting'
+    })
+  })
+
+  test('doctor accepts prevalidated runtime status and retains the bind-mount probe', async () => {
+    const context = createWorkspaceContext({
+      workspace: tempDir('doctor-prevalidated-runtime-workspace'),
+      env: { BOXDOWN_CACHE_HOME: tempDir('doctor-prevalidated-runtime-cache'), BOXDOWN_DATA_HOME: tempDir('doctor-prevalidated-runtime-data') },
+      assetsDevcontainerDir
+    })
+    const calls: string[] = []
+    let container = 0
+    const checks = await runDoctorChecks(context, {
+      includeOptional: false,
+      containerRuntimeReady: true,
+      runCommand: async (command, args) => {
+        calls.push([command, ...args].join(' '))
+        if (command === 'docker' && args[0] === 'image') return { code: 0, stdout: 'node:24\n', stderr: '' }
+        if (command === 'docker' && args[0] === 'create') {
+          container += 1
+          return { code: 0, stdout: `probe-${container}\n`, stderr: '' }
+        }
+        return { code: 0, stdout: '', stderr: '' }
+      }
+    })
+
+    assert.ok(!calls.includes('docker --version'))
+    assert.ok(!calls.includes('docker info'))
+    assert.ok(!calls.includes('docker buildx version'))
+    assert.ok(calls.includes('docker image ls --format {{.Repository}}:{{.Tag}}'))
+    assert.strictEqual(checks.find((check) => check.name === 'docker-bind-mounts')?.level, 'ok')
+  })
+
   test('warns when generated config still injects secrets through Docker environment settings', async () => {
     const context = createWorkspaceContext({
       workspace: tempDir('doctor-secret-config-workspace'),

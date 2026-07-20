@@ -1,6 +1,11 @@
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 
+import {
+  probeContainerRuntime,
+  type ContainerRuntimeCommandResult,
+  type ContainerRuntimeCommandRunner
+} from './container-runtime.ts'
 import { resolveDevcontainerCli } from './devcontainer-cli.ts'
 import { buildGeneratedDevcontainerConfig, type DevcontainerConfig } from './config.ts'
 import { BOXDOWN_SECRET_ENV_NAMES } from './constants.ts'
@@ -16,17 +21,13 @@ export interface DoctorCheck {
   message: string
 }
 
-export interface DoctorCommandResult {
-  code: number
-  stdout: string
-  stderr: string
-}
-
-export type DoctorCommandRunner = (command: string, args: string[]) => Promise<DoctorCommandResult>
+export type DoctorCommandResult = ContainerRuntimeCommandResult
+export type DoctorCommandRunner = ContainerRuntimeCommandRunner
 
 export interface RunDoctorChecksOptions {
   includeOptional?: boolean
   includeDockerMountProbe?: boolean
+  containerRuntimeReady?: boolean
   runCommand?: DoctorCommandRunner
 }
 
@@ -183,21 +184,46 @@ export async function runDoctorChecks (context: WorkspaceContext, options: RunDo
     'Packaged @devcontainers/cli is required but was not available'
   ))
 
-  const dockerCliWorks = await commandWorks(runCommand, 'docker', ['--version'])
-  checks.push(check(
-    'docker-cli',
-    dockerCliWorks,
-    'Docker CLI is available',
-    'Docker CLI is required but was not available'
-  ))
+  let dockerCliWorks = options.containerRuntimeReady === true
+  let dockerDaemonWorks = options.containerRuntimeReady === true
 
-  const dockerDaemonWorks = await commandWorks(runCommand, 'docker', ['info'])
-  checks.push(check(
-    'docker-daemon',
-    dockerDaemonWorks,
-    'Docker daemon is reachable',
-    'Docker daemon is required but was not reachable'
-  ))
+  if (options.containerRuntimeReady !== true) {
+    const runtime = await probeContainerRuntime(runCommand)
+    dockerCliWorks = runtime.state === 'ready' || runtime.failure.reason !== 'docker-cli-unavailable'
+    dockerDaemonWorks = runtime.state === 'ready' ||
+      (runtime.state === 'waiting' && runtime.failure.reason === 'buildx-builder-unavailable')
+
+    checks.push(check(
+      'docker-cli',
+      dockerCliWorks,
+      'Docker CLI is available',
+      'Docker CLI is required but was not available'
+    ))
+    checks.push(check(
+      'docker-daemon',
+      dockerDaemonWorks,
+      'Docker daemon is reachable',
+      'Docker daemon is required but was not reachable'
+    ))
+
+    if (!dockerCliWorks || !dockerDaemonWorks) {
+      checks.push({
+        name: 'docker-buildx',
+        level: 'warn',
+        message: 'Docker Buildx was not checked because the Docker runtime is unavailable'
+      })
+    } else if (runtime.state === 'ready' && runtime.mode === 'fallback') {
+      checks.push({ name: 'docker-buildx', level: 'warn', message: runtime.warnings[0] as string })
+    } else if (runtime.state === 'waiting') {
+      checks.push({
+        name: 'docker-buildx',
+        level: 'fail',
+        message: `Docker Buildx builder was not operational: ${runtime.failure.detail}`
+      })
+    } else {
+      checks.push({ name: 'docker-buildx', level: 'ok', message: 'Docker Buildx builder is operational' })
+    }
+  }
 
   checks.push(check(
     'ssh',
