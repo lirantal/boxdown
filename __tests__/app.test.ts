@@ -23,8 +23,8 @@ import { canonicalGithubRemoteUrl, configureWorkspaceGithubGitAuth } from '../sr
 import { parseJsonc } from '../src/jsonc.ts'
 import { createWorkspaceListEntries, formatWorkspaceListDetailsText, formatWorkspaceListText } from '../src/list.ts'
 import { createWorkspaceCommandLogger, redactKnownSecretEnvironmentAssignments, withLoggedProcessOutput } from '../src/logging.ts'
-import { commandWritesWorkspaceMetadata, parseCliArgs, parseTunnelPort, parseTunnelPortList, runCli, setupWorkspace, USAGE } from '../src/main.ts'
-import { listWorkspaceMetadata, readWorkspaceMetadata, recordWorkspaceDockerImage, writeWorkspaceMetadata } from '../src/metadata.ts'
+import { commandRequiresContainerRuntime, commandWritesWorkspaceMetadata, parseCliArgs, parseTunnelPort, parseTunnelPortList, prepareContainerLifecycle, runCli, setupWorkspace, USAGE, type BoxdownCommand } from '../src/main.ts'
+import { listWorkspaceMetadata, readWorkspaceMetadata, recordWorkspaceDockerImage, workspaceMetadataPath, writeWorkspaceMetadata } from '../src/metadata.ts'
 import { readPackageVersion } from '../src/package-info.ts'
 import { createWorkspaceContext } from '../src/paths.ts'
 import { promptConfirm, promptMultiSelect, promptText, type PromptInput, type PromptOutput } from '../src/interactive-prompts.ts'
@@ -1102,7 +1102,7 @@ describe('interactive install target prompt', () => {
 })
 
 describe('CLI execution', () => {
-  test('setup stops before prompts or state writes when the readiness preflight fails', async () => {
+  test('setup preflight stops before prompts or state writes when runtime readiness fails', async () => {
     const workspace = tempDir('setup-preflight-failure-workspace')
     const dataHome = tempDir('setup-preflight-failure-data')
     const cacheHome = tempDir('setup-preflight-failure-cache')
@@ -1114,13 +1114,22 @@ describe('CLI execution', () => {
       CI: '1'
     }, async () => runCli(['setup', '--workspace', workspace], {
       env: { CI: '1', BOXDOWN_DATA_HOME: dataHome, BOXDOWN_CACHE_HOME: cacheHome },
+      waitForContainerRuntime: async () => {
+        calls.push('runtime')
+        return {
+          state: 'failed',
+          failure: {
+            reason: 'docker-daemon-unavailable',
+            command: ['docker', 'info'],
+            detail: 'Cannot connect'
+          },
+          timedOut: true,
+          timeoutMs: 60_000
+        }
+      },
       runDoctorChecks: async () => {
         calls.push('doctor')
-        return [{
-          name: 'docker-daemon',
-          level: 'fail',
-          message: 'Docker daemon is required but was not reachable'
-        }]
+        return []
       },
       setupWorkspace: async () => {
         calls.push('setup')
@@ -1132,7 +1141,7 @@ describe('CLI execution', () => {
       env: { BOXDOWN_DATA_HOME: dataHome, BOXDOWN_CACHE_HOME: cacheHome }
     })
     assert.strictEqual(code, 1)
-    assert.deepStrictEqual(calls, ['doctor'])
+    assert.deepStrictEqual(calls, ['runtime'])
     assert.strictEqual(existsSync(context.workspaceDataDir), false)
     assert.strictEqual(existsSync(context.sshKeyPath), false)
     assert.strictEqual(existsSync(context.generatedConfigPath), false)
@@ -1150,6 +1159,7 @@ describe('CLI execution', () => {
       CI: '1'
     }, async () => runCli(['setup', '--workspace', workspace], {
       env: { CI: '1', BOXDOWN_DATA_HOME: dataHome, BOXDOWN_CACHE_HOME: cacheHome },
+      waitForContainerRuntime: async () => ({ state: 'ready', mode: 'buildx', warnings: [] }),
       runDoctorChecks: async () => {
         calls.push('doctor')
         return [{
@@ -1165,6 +1175,142 @@ describe('CLI execution', () => {
 
     assert.strictEqual(code, 0)
     assert.deepStrictEqual(calls, ['doctor', 'setup'])
+  })
+
+  test('gated lifecycle branches invoke readiness before metadata or downstream state', async () => {
+    const cases: Array<{ name: string, argv: string[] }> = [
+      { name: 'start', argv: ['start'] },
+      { name: 'shell alias', argv: ['shell'] },
+      { name: 'ssh proxy', argv: ['ssh-proxy'] },
+      { name: 'tunnel', argv: ['tunnel', '--port', '8080'] },
+      { name: 'GitHub token refresh', argv: ['refresh-gh-token'] },
+      { name: 'Codex', argv: ['codex'] },
+      { name: 'Claude', argv: ['claude'] },
+      { name: 'Claude alias', argv: ['cc'] },
+      { name: 'OpenCode', argv: ['opencode'] },
+      { name: 'Antigravity', argv: ['antigravity'] }
+    ]
+
+    for (const entry of cases) {
+      const workspace = tempDir(`lifecycle-gate-${entry.name.replaceAll(' ', '-')}-workspace`)
+      const dataHome = tempDir(`lifecycle-gate-${entry.name.replaceAll(' ', '-')}-data`)
+      const cacheHome = tempDir(`lifecycle-gate-${entry.name.replaceAll(' ', '-')}-cache`)
+      const env = { CI: '1', BOXDOWN_DATA_HOME: dataHome, BOXDOWN_CACHE_HOME: cacheHome }
+      const calls: string[] = []
+
+      const expectedError = `blocked at lifecycle gate: ${entry.name}`
+      await assert.rejects(withProcessEnv(env, async () => runCli([
+        ...entry.argv,
+        '--workspace',
+        workspace
+      ], {
+        env,
+        prepareContainerLifecycle: async (receivedContext, alias, _progress, _options, logger) => {
+          assert.strictEqual(receivedContext.workspaceFolder, realpathSync(workspace), entry.name)
+          assert.strictEqual(alias, defaultSshAlias(receivedContext.workspaceBasename), entry.name)
+          assert.notStrictEqual(logger, undefined, entry.name)
+          calls.push('gate')
+          throw new Error(expectedError)
+        }
+      })), (error: unknown) => {
+        assert.ok(error instanceof Error, entry.name)
+        assert.strictEqual(error.message, expectedError, entry.name)
+        return true
+      })
+
+      const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+      assert.deepStrictEqual(calls, ['gate'], entry.name)
+      assert.strictEqual(existsSync(workspaceMetadataPath(context)), false, entry.name)
+      assert.strictEqual(existsSync(context.generatedConfigPath), false, entry.name)
+      assert.strictEqual(existsSync(context.sshKeyPath), false, entry.name)
+    }
+  })
+
+  test('running-only GitHub token refresh does not invoke the lifecycle gate', async () => {
+    const workspace = tempDir('running-refresh-no-lifecycle-gate-workspace')
+    const dataHome = tempDir('running-refresh-no-lifecycle-gate-data')
+    const cacheHome = tempDir('running-refresh-no-lifecycle-gate-cache')
+    const env = { CI: '1', BOXDOWN_DATA_HOME: dataHome, BOXDOWN_CACHE_HOME: cacheHome }
+    const calls: string[] = []
+
+    await assert.rejects(withProcessEnv(env, async () => runCli([
+      'refresh-gh-token-running',
+      '--workspace',
+      workspace
+    ], {
+      env,
+      prepareContainerLifecycle: async () => {
+        calls.push('gate')
+      },
+      findRunningContainerId: async () => {
+        calls.push('find-running')
+        return undefined
+      }
+    })), /No running devcontainer found/)
+
+    const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+    assert.deepStrictEqual(calls, ['find-running'])
+    assert.strictEqual(existsSync(workspaceMetadataPath(context)), false)
+    assert.strictEqual(existsSync(context.generatedConfigPath), false)
+    assert.strictEqual(existsSync(context.sshKeyPath), false)
+  })
+
+  test('container lifecycle writes metadata only after readiness succeeds', async () => {
+    const context = createWorkspaceContext({
+      workspace: tempDir('container-lifecycle-order-workspace'),
+      env: { BOXDOWN_CACHE_HOME: tempDir('container-lifecycle-order-cache'), BOXDOWN_DATA_HOME: tempDir('container-lifecycle-order-data') },
+      assetsDevcontainerDir
+    })
+    const progress = createProgress({ mode: 'none' })
+    progress.setSteps([{ id: 'container-runtime', label: 'Checking container runtime' }])
+    const calls: string[] = []
+
+    await prepareContainerLifecycle(context, 'boxdown-order', progress, {
+      waitForContainerRuntime: async () => {
+        calls.push('runtime')
+        return { state: 'ready', mode: 'buildx', warnings: [] }
+      },
+      writeWorkspaceMetadata: () => { calls.push('metadata') }
+    })
+
+    assert.deepStrictEqual(calls, ['runtime', 'metadata'])
+  })
+
+  test('a readiness failure leaves no state and a later attempt decides afresh', async () => {
+    const context = createWorkspaceContext({
+      workspace: tempDir('container-lifecycle-recovery-workspace'),
+      env: { BOXDOWN_CACHE_HOME: tempDir('container-lifecycle-recovery-cache'), BOXDOWN_DATA_HOME: tempDir('container-lifecycle-recovery-data') },
+      assetsDevcontainerDir
+    })
+    const progress = createProgress({ mode: 'none' })
+    progress.setSteps([{ id: 'container-runtime', label: 'Checking container runtime' }])
+    const calls: string[] = []
+
+    await assert.rejects(prepareContainerLifecycle(context, 'boxdown-recovery', progress, {
+      waitForContainerRuntime: async () => ({
+        state: 'failed',
+        failure: { reason: 'docker-daemon-unavailable', command: ['docker', 'info'], detail: 'starting' },
+        timedOut: true,
+        timeoutMs: 60_000
+      }),
+      writeWorkspaceMetadata: () => { calls.push('unexpected metadata') }
+    }), /Docker daemon did not become ready/)
+
+    assert.deepStrictEqual(calls, [])
+    assert.strictEqual(existsSync(workspaceMetadataPath(context)), false)
+    assert.strictEqual(existsSync(context.generatedConfigPath), false)
+    assert.strictEqual(existsSync(context.sshKeyPath), false)
+
+    progress.setSteps([{ id: 'container-runtime', label: 'Checking container runtime' }])
+    await prepareContainerLifecycle(context, 'boxdown-recovery', progress, {
+      waitForContainerRuntime: async () => {
+        calls.push('fresh runtime')
+        return { state: 'ready', mode: 'buildx', warnings: [] }
+      },
+      writeWorkspaceMetadata: () => { calls.push('metadata') }
+    })
+
+    assert.deepStrictEqual(calls, ['fresh runtime', 'metadata'])
   })
 
   test('setup workflow starts devcontainer and installs SSH without opening a shell', async () => {
@@ -2615,8 +2761,34 @@ describe('workspace metadata', () => {
     assert.strictEqual(commandWritesWorkspaceMetadata('ssh-proxy'), true)
     assert.strictEqual(commandWritesWorkspaceMetadata('tunnel'), true)
     assert.strictEqual(commandWritesWorkspaceMetadata('refresh-gh-token'), true)
-    assert.strictEqual(commandWritesWorkspaceMetadata('refresh-gh-token-running'), true)
+    assert.strictEqual(commandWritesWorkspaceMetadata('refresh-gh-token-running'), false)
     assert.strictEqual(commandWritesWorkspaceMetadata('coding-agent'), true)
+  })
+
+  test('container runtime readiness scope is explicit for every command', () => {
+    const expected = new Map<BoxdownCommand, boolean>([
+      ['help', false],
+      ['version', false],
+      ['setup', true],
+      ['start', true],
+      ['list', false],
+      ['status', false],
+      ['stop', false],
+      ['down', false],
+      ['purge', false],
+      ['doctor', false],
+      ['ssh-install', false],
+      ['ssh-uninstall', false],
+      ['ssh-proxy', true],
+      ['tunnel', true],
+      ['refresh-gh-token', true],
+      ['refresh-gh-token-running', false],
+      ['coding-agent', true]
+    ])
+
+    for (const [command, waits] of expected) {
+      assert.strictEqual(commandRequiresContainerRuntime(command), waits, command)
+    }
   })
 })
 
@@ -3349,6 +3521,46 @@ describe('progress output', () => {
       BOXDOWN_VERBOSE: '0',
       BOXDOWN_PROGRESS: '0'
     })
+  })
+
+  test('progress status is visible once in interactive and verbose modes', () => {
+    const interactiveLines: string[] = []
+    const verboseLines: string[] = []
+    createProgress({ mode: 'interactive', write: (_target, message) => interactiveLines.push(message) })
+      .status('Waiting for Docker daemon')
+    createProgress({ mode: 'verbose', write: (_target, message) => verboseLines.push(message) })
+      .status('Waiting for Docker daemon')
+
+    assert.strictEqual(interactiveLines.length, 1)
+    assert.deepStrictEqual(verboseLines, ['Waiting for Docker daemon'])
+  })
+
+  test('interactive TTY status stays above an active checklist across redraws', () => {
+    const output: string[] = []
+    const progress = createProgress({
+      mode: 'interactive',
+      isTTY: true,
+      spinnerIntervalMs: 60_000,
+      write: (_target, message) => output.push(`line:${message}`),
+      writeRaw: (_target, message) => output.push(`raw:${message}`)
+    })
+    progress.setSteps([
+      { id: 'container-runtime', label: 'Checking container runtime' },
+      { id: 'devcontainer-start', label: 'Starting devcontainer' }
+    ])
+    progress.startStep('container-runtime')
+
+    const beforeStatus = output.length
+    progress.status('Waiting for Docker daemon')
+    const statusOutput = output.slice(beforeStatus)
+    assert.strictEqual(statusOutput[0], 'raw:\u001B[2A')
+    assert.match(statusOutput[1] ?? '', /Waiting for Docker daemon/)
+    assert.strictEqual(statusOutput.filter((entry) => entry.includes('Checking container runtime')).length, 1)
+    assert.strictEqual(statusOutput.filter((entry) => entry.includes('Starting devcontainer')).length, 1)
+
+    progress.completeStep('container-runtime')
+    progress.end()
+    assert.strictEqual(output.filter((entry) => entry.includes('Waiting for Docker daemon')).length, 1)
   })
 
   test('reports whether a checklist is active', () => {

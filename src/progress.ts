@@ -178,6 +178,25 @@ export class ProgressReporter {
     this.#writeLine(`${promptRail()}  ${color(message, 'dim')}`)
   }
 
+  status (message: string): void {
+    if (this.mode === 'none') return
+    if (this.mode === 'verbose') {
+      this.#write(this.target, message)
+      return
+    }
+
+    const line = `${promptRail()}  ${color(message, 'dim')}`
+    if (this.#isTTY && this.#renderedStepLineCount > 0) {
+      this.#writeRaw(this.target, `\u001B[${this.#renderedStepLineCount}A`)
+      this.#write(this.target, line)
+      this.#renderedStepLineCount = 0
+      this.#renderChecklist()
+      return
+    }
+
+    this.#writeLine(line)
+  }
+
   warn (message: string): void {
     if (this.mode === 'none') {
       return
