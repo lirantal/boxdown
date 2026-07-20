@@ -393,7 +393,7 @@ export async function startDevcontainer (context: WorkspaceContext, options: Sta
       'devcontainer up',
       result,
       `devcontainer up failed for ${context.workspaceFolder}`,
-      { logPath: context.workspaceLogPath }
+      { logPath: options.logger?.logPath }
     )
   }
 
@@ -513,7 +513,7 @@ export async function ensureContainerSshRuntime (context: WorkspaceContext, opti
       'prepare SSH runtime',
       result,
       'Failed to prepare devcontainer SSH runtime',
-      { logPath: context.workspaceLogPath }
+      { logPath: options.logger?.logPath }
     )
   }
 }
@@ -605,7 +605,7 @@ export async function ensureContainerCodingAgentCli (
       `prepare ${codingAgentBinary(agent)}`,
       result,
       `Could not install or refresh ${codingAgentBinary(agent)} inside the devcontainer`,
-      { logPath: context.workspaceLogPath }
+      { logPath: options.logger?.logPath }
     )
   }
 }

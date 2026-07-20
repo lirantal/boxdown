@@ -23,7 +23,7 @@ import { canonicalGithubRemoteUrl, configureWorkspaceGithubGitAuth } from '../sr
 import { parseJsonc } from '../src/jsonc.ts'
 import { createWorkspaceListEntries, formatWorkspaceListDetailsText, formatWorkspaceListText } from '../src/list.ts'
 import { createWorkspaceCommandLogger, redactKnownSecretEnvironmentAssignments, withLoggedProcessOutput } from '../src/logging.ts'
-import { commandRequiresContainerRuntime, commandWritesWorkspaceMetadata, parseCliArgs, parseTunnelPort, parseTunnelPortList, prepareContainerLifecycle, runCli, setupWorkspace, USAGE, type BoxdownCommand } from '../src/main.ts'
+import { commandRequiresContainerRuntime, commandWritesWorkspaceMetadata, parseCliArgs, parseTunnelPort, parseTunnelPortList, prepareContainerLifecycle, runCli, runContainerRuntimePreflight, setupWorkspace, USAGE, type BoxdownCommand } from '../src/main.ts'
 import { listWorkspaceMetadata, readWorkspaceMetadata, recordWorkspaceDockerImage, workspaceMetadataPath, writeWorkspaceMetadata } from '../src/metadata.ts'
 import { readPackageVersion } from '../src/package-info.ts'
 import { createWorkspaceContext } from '../src/paths.ts'
@@ -1274,6 +1274,38 @@ describe('CLI execution', () => {
     })
 
     assert.deepStrictEqual(calls, ['runtime', 'metadata'])
+  })
+
+  test('verbose readiness emits a final outcome for Buildx and fallback success', async () => {
+    const context = createWorkspaceContext({
+      workspace: tempDir('verbose-runtime-ready-workspace'),
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('verbose-runtime-ready-cache'),
+        BOXDOWN_DATA_HOME: tempDir('verbose-runtime-ready-data')
+      },
+      assetsDevcontainerDir
+    })
+    const fallbackWarning = 'Docker Buildx is unavailable; the Dev Containers CLI will use its classic-build fallback.'
+    const cases = [
+      { mode: 'buildx' as const, warnings: [] },
+      { mode: 'fallback' as const, warnings: [fallbackWarning] }
+    ]
+
+    for (const ready of cases) {
+      const lines: string[] = []
+      const progress = createProgress({
+        mode: 'verbose',
+        write: (_target, message) => { lines.push(message) }
+      })
+      progress.setSteps([{ id: 'container-runtime', label: 'Checking container runtime' }])
+
+      await runContainerRuntimePreflight(context, progress, {
+        waitForContainerRuntime: async () => ({ state: 'ready', ...ready })
+      })
+
+      assert.strictEqual(lines.filter((line) => line === 'Container runtime ready').length, 1)
+      assert.strictEqual(lines.filter((line) => line === `Warning: ${fallbackWarning}`).length, ready.mode === 'fallback' ? 1 : 0)
+    }
   })
 
   test('a readiness failure leaves no state and a later attempt decides afresh', async () => {
@@ -3453,6 +3485,35 @@ describe('progress output', () => {
     assert.match(log, /\[boxdown\] visible message/)
   })
 
+  test('buffered commands time out once and settle their command log once', async () => {
+    const context = createWorkspaceContext({
+      workspace: tempDir('buffered-command-timeout-workspace'),
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('buffered-command-timeout-cache'),
+        BOXDOWN_DATA_HOME: tempDir('buffered-command-timeout-data')
+      },
+      assetsDevcontainerDir
+    })
+    const logger = createWorkspaceCommandLogger(context)
+    const result = await runBuffered(process.execPath, [
+      '--eval',
+      'setInterval(() => {}, 1_000)'
+    ], {
+      logger,
+      mirrorStdout: false,
+      mirrorStderr: false,
+      timeoutMs: 20
+    })
+
+    await new Promise((resolve) => setTimeout(resolve, 50))
+
+    assert.strictEqual(result.code, 124)
+    assert.match(result.stderr, /Command timed out after 20 milliseconds\./)
+    const log = readFileSync(context.workspaceLogPath, 'utf8')
+    assert.strictEqual(log.match(/command error: Command timed out after 20 milliseconds\./gu)?.length, 1)
+    assert.strictEqual(log.match(/command exit: 124/gu)?.length, 1)
+  })
+
   test('buffered commands log hidden stdout and stderr', async () => {
     const workspace = tempDir('logger-buffered-workspace')
     const context = createWorkspaceContext({
@@ -3553,8 +3614,9 @@ describe('progress output', () => {
     const beforeStatus = output.length
     progress.status('Waiting for Docker daemon')
     const statusOutput = output.slice(beforeStatus)
-    assert.strictEqual(statusOutput[0], 'raw:\u001B[2A')
+    assert.strictEqual(statusOutput[0], 'raw:\u001B[2A\r\u001B[2K')
     assert.match(statusOutput[1] ?? '', /Waiting for Docker daemon/)
+    assert.strictEqual(statusOutput.slice(2).map((entry) => entry.slice(0, 4)).join(''), 'raw:raw:')
     assert.strictEqual(statusOutput.filter((entry) => entry.includes('Checking container runtime')).length, 1)
     assert.strictEqual(statusOutput.filter((entry) => entry.includes('Starting devcontainer')).length, 1)
 
@@ -3581,8 +3643,9 @@ describe('progress output', () => {
     const beforeWarning = output.length
     progress.warn('Docker Buildx is unavailable; using fallback')
     const warningOutput = output.slice(beforeWarning)
-    assert.strictEqual(warningOutput[0], 'raw:\u001B[2A')
+    assert.strictEqual(warningOutput[0], 'raw:\u001B[2A\r\u001B[2K')
     assert.match(warningOutput[1] ?? '', /Docker Buildx is unavailable; using fallback/)
+    assert.strictEqual(warningOutput.slice(2).map((entry) => entry.slice(0, 4)).join(''), 'raw:raw:')
     assert.strictEqual(warningOutput.filter((entry) => entry.includes('Checking container runtime')).length, 1)
     assert.strictEqual(warningOutput.filter((entry) => entry.includes('Starting devcontainer')).length, 1)
 
@@ -4181,7 +4244,7 @@ describe('progress output', () => {
         assert.ok(error instanceof Error)
         assert.match(error.message, /registry authentication failed/)
         assert.doesNotMatch(error.message, /docker buildx build --load/)
-        assert.match(error.message, new RegExp(`Command log: ${context.workspaceLogPath}`))
+        assert.doesNotMatch(error.message, /Command log:/)
         return true
       }
     )
@@ -4189,6 +4252,40 @@ describe('progress output', () => {
     assert.strictEqual(calls.length, 1)
     assert.strictEqual(calls[0]?.label, 'devcontainer up')
     assert.ok(calls[0]?.args.includes('up'))
+  })
+
+  test('devcontainer failures advertise the exact managed log when a logger participates', async () => {
+    const workspace = tempDir('devcontainer-up-logged-failure-workspace')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('devcontainer-up-logged-failure-cache'),
+        BOXDOWN_DATA_HOME: tempDir('devcontainer-up-logged-failure-data')
+      },
+      assetsDevcontainerDir
+    })
+    const logger = createWorkspaceCommandLogger(context)
+
+    mkdirSync(context.sshKeyDir, { recursive: true })
+    writeFileSync(context.sshKeyPath, 'test private key\n')
+    writeFileSync(context.sshPublicKeyPath, 'test public key\n')
+
+    await assert.rejects(
+      startDevcontainer(context, {
+        logger,
+        progress: createProgress({ mode: 'none' }),
+        runDevcontainerUp: async () => ({
+          code: 1,
+          stdout: '',
+          stderr: 'failed to solve: registry authentication failed\n'
+        })
+      }),
+      (error: unknown) => {
+        assert.ok(error instanceof Error)
+        assert.ok(error.message.includes(`Command log: ${context.workspaceLogPath}`))
+        return true
+      }
+    )
   })
 })
 

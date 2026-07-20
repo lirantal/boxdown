@@ -1,3 +1,5 @@
+import { performance } from 'node:perf_hooks'
+
 import { runBuffered, type CommandResult } from './process.ts'
 
 export type ContainerRuntimeReason =
@@ -9,7 +11,8 @@ export type ContainerRuntimeMode = 'buildx' | 'fallback'
 export type ContainerRuntimeCommandResult = CommandResult
 export type ContainerRuntimeCommandRunner = (
   command: string,
-  args: string[]
+  args: string[],
+  timeoutMs?: number
 ) => Promise<ContainerRuntimeCommandResult>
 
 export interface ContainerRuntimeFailure {
@@ -27,11 +30,13 @@ const BUILDX_FALLBACK_WARNING = 'Docker Buildx is unavailable; the Dev Container
 
 async function runContainerRuntimeCommand (
   command: string,
-  args: string[]
+  args: string[],
+  timeoutMs?: number
 ): Promise<ContainerRuntimeCommandResult> {
   return runBuffered(command, args, {
     mirrorStdout: false,
-    mirrorStderr: false
+    mirrorStderr: false,
+    timeoutMs
   })
 }
 
@@ -107,11 +112,15 @@ export type ContainerRuntimeWaitResult =
 
 export interface WaitForContainerRuntimeOptions {
   runCommand?: ContainerRuntimeCommandRunner
+  onTransition?: (probe: ContainerRuntimeProbe) => void
+}
+
+/** @internal */
+export interface InternalContainerRuntimeWaitOptions extends WaitForContainerRuntimeOptions {
   timeoutMs?: number
   pollIntervalMs?: number
   now?: () => number
   sleep?: (milliseconds: number) => Promise<void>
-  onTransition?: (probe: ContainerRuntimeProbe) => void
 }
 
 function defaultSleep (milliseconds: number): Promise<void> {
@@ -122,8 +131,9 @@ function transitionKey (probe: ContainerRuntimeProbe): string {
   return probe.state === 'ready' ? 'ready' : `${probe.state}:${probe.failure.reason}`
 }
 
-export async function waitForContainerRuntime (
-  options: WaitForContainerRuntimeOptions = {}
+/** @internal */
+export async function waitForContainerRuntimeInternal (
+  options: InternalContainerRuntimeWaitOptions = {}
 ): Promise<ContainerRuntimeWaitResult> {
   const timeoutMs = options.timeoutMs ?? 60_000
   const pollIntervalMs = options.pollIntervalMs ?? 1_000
@@ -137,9 +147,18 @@ export async function waitForContainerRuntime (
   const sleep = options.sleep ?? defaultSleep
   const deadline = now() + timeoutMs
   let lastTransition: string | undefined
+  let lastWaitingFailure: ContainerRuntimeFailure | undefined
 
   while (true) {
-    const probe = await probeContainerRuntime(options.runCommand)
+    if (lastWaitingFailure !== undefined && deadline - now() <= 0) {
+      return { state: 'failed', failure: lastWaitingFailure, timedOut: true, timeoutMs }
+    }
+
+    const runCommand = options.runCommand ?? runContainerRuntimeCommand
+    const probe = await probeContainerRuntime(async (command, args) => {
+      const remainingMs = Math.max(0, Math.floor(deadline - now()))
+      return runCommand(command, args, remainingMs)
+    })
 
     if (probe.state === 'ready') return probe
 
@@ -153,6 +172,8 @@ export async function waitForContainerRuntime (
       return { state: 'failed', failure: probe.failure, timedOut: false, timeoutMs }
     }
 
+    lastWaitingFailure = probe.failure
+
     const remainingMs = deadline - now()
     if (remainingMs <= 0) {
       return { state: 'failed', failure: probe.failure, timedOut: true, timeoutMs }
@@ -160,6 +181,19 @@ export async function waitForContainerRuntime (
 
     await sleep(Math.min(pollIntervalMs, remainingMs))
   }
+}
+
+export async function waitForContainerRuntime (
+  options: WaitForContainerRuntimeOptions = {}
+): Promise<ContainerRuntimeWaitResult> {
+  return waitForContainerRuntimeInternal({
+    runCommand: options.runCommand,
+    onTransition: options.onTransition,
+    timeoutMs: 60_000,
+    pollIntervalMs: 1_000,
+    now: () => performance.now(),
+    sleep: defaultSleep
+  })
 }
 
 function commandText (command: readonly string[]): string {

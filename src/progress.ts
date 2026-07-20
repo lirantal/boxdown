@@ -341,7 +341,7 @@ export class ProgressReporter {
 
   #writeInteractiveLine (message: string): void {
     if (this.#isTTY && this.#renderedStepLineCount > 0) {
-      this.#writeRaw(this.target, `\u001B[${this.#renderedStepLineCount}A`)
+      this.#writeRaw(this.target, `\u001B[${this.#renderedStepLineCount}A\r\u001B[2K`)
       this.#write(this.target, message)
       this.#renderedStepLineCount = 0
       this.#renderChecklist()

@@ -1136,11 +1136,12 @@ export async function runContainerRuntimePreflight (
   const wait = options.waitForContainerRuntime ?? waitForContainerRuntime
   progress.startStep('container-runtime')
   const result = await wait({
-    runCommand: async (command, args) => runBuffered(command, args, {
+    runCommand: async (command, args, timeoutMs) => runBuffered(command, args, {
       env: options.env,
       logger,
       mirrorStdout: false,
-      mirrorStderr: false
+      mirrorStderr: false,
+      timeoutMs
     }),
     onTransition: (probe) => {
       const message = runtimeTransitionMessage(probe)
@@ -1156,6 +1157,7 @@ export async function runContainerRuntimePreflight (
   }
 
   for (const warning of result.warnings) progress.warn(warning)
+  if (progress.mode === 'verbose') progress.status('Container runtime ready')
   progress.completeStep('container-runtime')
 }
 

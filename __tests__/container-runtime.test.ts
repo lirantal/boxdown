@@ -5,6 +5,7 @@ import {
   formatContainerRuntimeFailure,
   probeContainerRuntime,
   waitForContainerRuntime,
+  waitForContainerRuntimeInternal,
   type ContainerRuntimeCommandResult,
   type ContainerRuntimeCommandRunner,
   type ContainerRuntimeProbe
@@ -124,7 +125,7 @@ describe('container runtime waiter', () => {
     for (const timeoutMs of [Number.NaN, Number.POSITIVE_INFINITY, -1]) {
       const calls: string[][] = []
       await assert.rejects(
-        waitForContainerRuntime({
+        waitForContainerRuntimeInternal({
           runCommand: runnerFrom([ok], calls),
           timeoutMs
         }),
@@ -137,7 +138,7 @@ describe('container runtime waiter', () => {
   test('rejects a timeout above 60 seconds before probing', async () => {
     const calls: string[][] = []
     await assert.rejects(
-      waitForContainerRuntime({
+      waitForContainerRuntimeInternal({
         runCommand: runnerFrom([ok], calls),
         timeoutMs: 60_001
       }),
@@ -149,7 +150,7 @@ describe('container runtime waiter', () => {
   test('rejects a polling cadence other than one second before probing', async () => {
     const calls: string[][] = []
     await assert.rejects(
-      waitForContainerRuntime({
+      waitForContainerRuntimeInternal({
         runCommand: runnerFrom([ok], calls),
         pollIntervalMs: 999
       }),
@@ -161,7 +162,7 @@ describe('container runtime waiter', () => {
   test('probes immediately and sleeps exactly once per transient retry', async () => {
     let now = 0
     const sleeps: number[] = []
-    const result = await waitForContainerRuntime({
+    const result = await waitForContainerRuntimeInternal({
       runCommand: daemonSequenceRunner([
         { code: 1, stdout: '', stderr: 'starting one' },
         { code: 1, stdout: '', stderr: 'starting two' },
@@ -179,9 +180,45 @@ describe('container runtime waiter', () => {
     assert.strictEqual(result.mode, 'buildx')
   })
 
+  test('gives each command only the remaining absolute deadline', async () => {
+    let now = 0
+    const commandTimeouts: number[] = []
+    const commandDurations = [100, 250, 200, 50]
+    let commandIndex = 0
+    const result = await waitForContainerRuntimeInternal({
+      timeoutMs: 1_000,
+      now: () => now,
+      sleep: async (milliseconds) => { now += milliseconds },
+      runCommand: async (_command, _args, timeoutMs) => {
+        assert.notStrictEqual(timeoutMs, undefined)
+        commandTimeouts.push(timeoutMs as number)
+        now += commandDurations[commandIndex] as number
+        commandIndex += 1
+        return ok
+      }
+    })
+
+    assert.strictEqual(result.state, 'ready')
+    assert.deepStrictEqual(commandTimeouts, [1_000, 900, 650, 450])
+  })
+
+  test('production timing cannot be overridden by callers', async () => {
+    const result = await waitForContainerRuntime({
+      runCommand: runnerFrom([ok, ok, ok, ok], []),
+      ...({
+        timeoutMs: 0,
+        pollIntervalMs: 0,
+        now: () => { throw new Error('caller clock must not run') },
+        sleep: async () => { throw new Error('caller scheduler must not run') }
+      } as Record<string, unknown>)
+    })
+
+    assert.deepStrictEqual(result, { state: 'ready', mode: 'buildx', warnings: [] })
+  })
+
   test('does not sleep after a terminal failure', async () => {
     const sleeps: number[] = []
-    const result = await waitForContainerRuntime({
+    const result = await waitForContainerRuntimeInternal({
       runCommand: runnerFrom([{ code: 127, stdout: '', stderr: 'ENOENT' }], []),
       sleep: async (milliseconds) => { sleeps.push(milliseconds) }
     })
@@ -193,27 +230,47 @@ describe('container runtime waiter', () => {
 
   test('stops at the deadline and retains the final probe', async () => {
     let now = 0
-    const result = await waitForContainerRuntime({
-      runCommand: daemonSequenceRunner([
-        { code: 1, stdout: '', stderr: 'first diagnostic' },
-        { code: 1, stdout: '', stderr: 'last diagnostic' }
-      ]),
-      timeoutMs: 1_000,
+    const calls: string[][] = []
+    const sleeps: number[] = []
+    const daemonDiagnostics = ['first diagnostic', 'last diagnostic']
+    let daemonIndex = 0
+    const result = await waitForContainerRuntimeInternal({
+      runCommand: async (command, args) => {
+        calls.push([command, ...args])
+        if (args[0] === '--version') return ok
+        if (args[0] === 'info') {
+          const detail = daemonDiagnostics[Math.min(daemonIndex, daemonDiagnostics.length - 1)] as string
+          daemonIndex += 1
+          return { code: 1, stdout: '', stderr: detail }
+        }
+        assert.fail(`Unexpected command: ${command} ${args.join(' ')}`)
+      },
+      timeoutMs: 1_500,
       pollIntervalMs: 1_000,
       now: () => now,
-      sleep: async (milliseconds) => { now += milliseconds }
+      sleep: async (milliseconds) => {
+        sleeps.push(milliseconds)
+        now += milliseconds
+      }
     })
 
     assert.strictEqual(result.state, 'failed')
     assert.strictEqual(result.timedOut, true)
-    assert.strictEqual(result.timeoutMs, 1_000)
+    assert.strictEqual(result.timeoutMs, 1_500)
     assert.strictEqual(result.failure.detail, 'last diagnostic')
+    assert.deepStrictEqual(sleeps, [1_000, 500])
+    assert.deepStrictEqual(calls, [
+      ['docker', '--version'],
+      ['docker', 'info'],
+      ['docker', '--version'],
+      ['docker', 'info']
+    ])
   })
 
   test('emits only state and reason transitions', async () => {
     let now = 0
     const transitions: ContainerRuntimeProbe[] = []
-    const result = await waitForContainerRuntime({
+    const result = await waitForContainerRuntimeInternal({
       runCommand: daemonSequenceRunner([
         { code: 1, stdout: '', stderr: 'first' },
         { code: 1, stdout: '', stderr: 'changed output' },
@@ -230,7 +287,7 @@ describe('container runtime waiter', () => {
   })
 
   test('formats timeout, manual check, detail, and optional log path', async () => {
-    const result = await waitForContainerRuntime({
+    const result = await waitForContainerRuntimeInternal({
       runCommand: daemonSequenceRunner([{ code: 1, stdout: '', stderr: 'Cannot connect' }]),
       timeoutMs: 0,
       now: () => 0
