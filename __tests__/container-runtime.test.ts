@@ -120,6 +120,44 @@ describe('container runtime probe', () => {
 })
 
 describe('container runtime waiter', () => {
+  test('rejects invalid and non-finite timeouts before probing', async () => {
+    for (const timeoutMs of [Number.NaN, Number.POSITIVE_INFINITY, -1]) {
+      const calls: string[][] = []
+      await assert.rejects(
+        waitForContainerRuntime({
+          runCommand: runnerFrom([ok], calls),
+          timeoutMs
+        }),
+        /timeoutMs must be a finite number between 0 and 60000 milliseconds/
+      )
+      assert.deepStrictEqual(calls, [])
+    }
+  })
+
+  test('rejects a timeout above 60 seconds before probing', async () => {
+    const calls: string[][] = []
+    await assert.rejects(
+      waitForContainerRuntime({
+        runCommand: runnerFrom([ok], calls),
+        timeoutMs: 60_001
+      }),
+      /timeoutMs must be a finite number between 0 and 60000 milliseconds/
+    )
+    assert.deepStrictEqual(calls, [])
+  })
+
+  test('rejects a polling cadence other than one second before probing', async () => {
+    const calls: string[][] = []
+    await assert.rejects(
+      waitForContainerRuntime({
+        runCommand: runnerFrom([ok], calls),
+        pollIntervalMs: 999
+      }),
+      /pollIntervalMs must be exactly 1000 milliseconds/
+    )
+    assert.deepStrictEqual(calls, [])
+  })
+
   test('probes immediately and sleeps exactly once per transient retry', async () => {
     let now = 0
     const sleeps: number[] = []

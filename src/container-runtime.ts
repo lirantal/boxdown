@@ -127,6 +127,12 @@ export async function waitForContainerRuntime (
 ): Promise<ContainerRuntimeWaitResult> {
   const timeoutMs = options.timeoutMs ?? 60_000
   const pollIntervalMs = options.pollIntervalMs ?? 1_000
+  if (!Number.isFinite(timeoutMs) || timeoutMs < 0 || timeoutMs > 60_000) {
+    throw new Error('timeoutMs must be a finite number between 0 and 60000 milliseconds')
+  }
+  if (pollIntervalMs !== 1_000) {
+    throw new Error('pollIntervalMs must be exactly 1000 milliseconds')
+  }
   const now = options.now ?? Date.now
   const sleep = options.sleep ?? defaultSleep
   const deadline = now() + timeoutMs
