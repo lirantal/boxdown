@@ -4117,6 +4117,34 @@ describe('progress output', () => {
     assert.doesNotMatch(message, /docker buildx build --load/)
   })
 
+  test('zero failure-tail budget does not hide a stderr diagnostic behind a Dev Containers wrapper', () => {
+    const wrapper = JSON.stringify({
+      outcome: 'error',
+      message: 'Command failed: docker buildx build --load'
+    })
+    const message = formatCommandFailure('devcontainer up', {
+      code: 1,
+      stdout: `${wrapper}\n`,
+      stderr: 'failed to solve: registry authentication failed\n'
+    }, { tailLines: 0 })
+
+    assert.doesNotMatch(message, /nested command failure without diagnostic output/)
+  })
+
+  test('zero failure-tail budget does not hide a stdout diagnostic behind a Dev Containers wrapper', () => {
+    const wrapper = JSON.stringify({
+      outcome: 'error',
+      message: 'Command failed: docker buildx build --load'
+    })
+    const message = formatCommandFailure('devcontainer up', {
+      code: 1,
+      stdout: `${wrapper}\nfailed to solve: registry authentication failed\n`,
+      stderr: ''
+    }, { tailLines: 0 })
+
+    assert.doesNotMatch(message, /nested command failure without diagnostic output/)
+  })
+
   test('devcontainer up remains a single-attempt operation after runtime readiness', async () => {
     const workspace = tempDir('devcontainer-up-single-attempt-workspace')
     const context = createWorkspaceContext({

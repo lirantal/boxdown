@@ -539,11 +539,6 @@ function outputLines (output: string): string[] {
     .filter((line) => line.trim().length > 0)
 }
 
-function tailLines (output: string, maxLines: number): string[] {
-  if (maxLines <= 0) return []
-  return outputLines(output).slice(-maxLines)
-}
-
 function isDevcontainerErrorEnvelope (line: string): boolean {
   try {
     const value = JSON.parse(line) as { outcome?: unknown, message?: unknown }
@@ -556,10 +551,12 @@ function isDevcontainerErrorEnvelope (line: string): boolean {
 
 export function formatCommandFailure (label: string, result: CommandResult, options: CommandFailureOptions = {}): string {
   const maxLines = options.tailLines ?? DEFAULT_FAILURE_TAIL_LINES
-  const stderrTail = tailLines(outputWithoutProgressMarkers(result.stderr), maxLines)
+  const stderrLines = outputLines(outputWithoutProgressMarkers(result.stderr))
+  const stderrTail = maxLines <= 0 ? [] : stderrLines.slice(-maxLines)
   const stdoutLines = outputLines(outputWithoutProgressMarkers(result.stdout))
   const wrapperPresent = stdoutLines.some(isDevcontainerErrorEnvelope)
   const specificStdout = stdoutLines.filter((line) => !isDevcontainerErrorEnvelope(line))
+  const hasSpecificDiagnostic = stderrLines.length > 0 || specificStdout.length > 0
   const stdoutBudget = Math.max(0, maxLines - stderrTail.length)
   const stdoutTail = stdoutBudget === 0 ? [] : specificStdout.slice(-stdoutBudget)
   const lines = [
@@ -575,7 +572,7 @@ export function formatCommandFailure (label: string, result: CommandResult, opti
     lines.push('', 'stdout tail:', ...stdoutTail.map((line) => `  ${line}`))
   }
 
-  if (wrapperPresent && stderrTail.length === 0 && stdoutTail.length === 0) {
+  if (wrapperPresent && !hasSpecificDiagnostic) {
     lines.push('', 'The Dev Containers CLI reported a nested command failure without diagnostic output.')
   }
 
