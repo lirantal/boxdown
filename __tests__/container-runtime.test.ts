@@ -2,9 +2,12 @@ import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
 
 import {
+  formatContainerRuntimeFailure,
   probeContainerRuntime,
+  waitForContainerRuntime,
   type ContainerRuntimeCommandResult,
-  type ContainerRuntimeCommandRunner
+  type ContainerRuntimeCommandRunner,
+  type ContainerRuntimeProbe
 } from '../src/container-runtime.ts'
 
 const ok: ContainerRuntimeCommandResult = { code: 0, stdout: '', stderr: '' }
@@ -20,6 +23,22 @@ function runnerFrom (
     index += 1
     assert.ok(result !== undefined, `Unexpected command: ${command} ${args.join(' ')}`)
     return result
+  }
+}
+
+function daemonSequenceRunner (
+  daemonResults: readonly ContainerRuntimeCommandResult[]
+): ContainerRuntimeCommandRunner {
+  let daemonIndex = 0
+  return async (_command, args) => {
+    if (args[0] === '--version' || args[0] === 'buildx') return ok
+    if (args[0] === 'info') {
+      const result = daemonResults[Math.min(daemonIndex, daemonResults.length - 1)]
+      daemonIndex += 1
+      assert.ok(result !== undefined)
+      return result
+    }
+    assert.fail(`Unexpected args: ${args.join(' ')}`)
   }
 }
 
@@ -97,5 +116,94 @@ describe('container runtime probe', () => {
     ], []))
     assert.strictEqual(failed.state, 'waiting')
     assert.strictEqual(failed.failure.detail, 'daemon still starting')
+  })
+})
+
+describe('container runtime waiter', () => {
+  test('probes immediately and sleeps exactly once per transient retry', async () => {
+    let now = 0
+    const sleeps: number[] = []
+    const result = await waitForContainerRuntime({
+      runCommand: daemonSequenceRunner([
+        { code: 1, stdout: '', stderr: 'starting one' },
+        { code: 1, stdout: '', stderr: 'starting two' },
+        ok
+      ]),
+      now: () => now,
+      sleep: async (milliseconds) => {
+        sleeps.push(milliseconds)
+        now += milliseconds
+      }
+    })
+
+    assert.deepStrictEqual(sleeps, [1_000, 1_000])
+    assert.strictEqual(result.state, 'ready')
+    assert.strictEqual(result.mode, 'buildx')
+  })
+
+  test('does not sleep after a terminal failure', async () => {
+    const sleeps: number[] = []
+    const result = await waitForContainerRuntime({
+      runCommand: runnerFrom([{ code: 127, stdout: '', stderr: 'ENOENT' }], []),
+      sleep: async (milliseconds) => { sleeps.push(milliseconds) }
+    })
+
+    assert.deepStrictEqual(sleeps, [])
+    assert.strictEqual(result.state, 'failed')
+    assert.strictEqual(result.timedOut, false)
+  })
+
+  test('stops at the deadline and retains the final probe', async () => {
+    let now = 0
+    const result = await waitForContainerRuntime({
+      runCommand: daemonSequenceRunner([
+        { code: 1, stdout: '', stderr: 'first diagnostic' },
+        { code: 1, stdout: '', stderr: 'last diagnostic' }
+      ]),
+      timeoutMs: 1_000,
+      pollIntervalMs: 1_000,
+      now: () => now,
+      sleep: async (milliseconds) => { now += milliseconds }
+    })
+
+    assert.strictEqual(result.state, 'failed')
+    assert.strictEqual(result.timedOut, true)
+    assert.strictEqual(result.timeoutMs, 1_000)
+    assert.strictEqual(result.failure.detail, 'last diagnostic')
+  })
+
+  test('emits only state and reason transitions', async () => {
+    let now = 0
+    const transitions: ContainerRuntimeProbe[] = []
+    const result = await waitForContainerRuntime({
+      runCommand: daemonSequenceRunner([
+        { code: 1, stdout: '', stderr: 'first' },
+        { code: 1, stdout: '', stderr: 'changed output' },
+        ok
+      ]),
+      now: () => now,
+      sleep: async (milliseconds) => { now += milliseconds },
+      onTransition: (probe) => { transitions.push(probe) }
+    })
+
+    assert.strictEqual(result.state, 'ready')
+    assert.strictEqual(transitions.length, 1)
+    assert.strictEqual(transitions[0]?.state, 'waiting')
+  })
+
+  test('formats timeout, manual check, detail, and optional log path', async () => {
+    const result = await waitForContainerRuntime({
+      runCommand: daemonSequenceRunner([{ code: 1, stdout: '', stderr: 'Cannot connect' }]),
+      timeoutMs: 0,
+      now: () => 0
+    })
+    assert.strictEqual(result.state, 'failed')
+
+    const message = formatContainerRuntimeFailure(result, { logPath: '/tmp/boxdown.log' })
+    assert.match(message, /Docker daemon did not become ready within 0 seconds\./)
+    assert.match(message, /Last check: docker info/)
+    assert.match(message, /Detail: Cannot connect/)
+    assert.match(message, /Check Docker with: docker info/)
+    assert.match(message, /Command log: \/tmp\/boxdown\.log/)
   })
 })

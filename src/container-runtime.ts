@@ -95,3 +95,97 @@ export async function probeContainerRuntime (
 
   return { state: 'ready', mode: 'buildx', warnings: [] }
 }
+
+export type ContainerRuntimeWaitResult =
+  | { state: 'ready', mode: ContainerRuntimeMode, warnings: string[] }
+  | {
+      state: 'failed'
+      failure: ContainerRuntimeFailure
+      timedOut: boolean
+      timeoutMs: number
+    }
+
+export interface WaitForContainerRuntimeOptions {
+  runCommand?: ContainerRuntimeCommandRunner
+  timeoutMs?: number
+  pollIntervalMs?: number
+  now?: () => number
+  sleep?: (milliseconds: number) => Promise<void>
+  onTransition?: (probe: ContainerRuntimeProbe) => void
+}
+
+function defaultSleep (milliseconds: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds))
+}
+
+function transitionKey (probe: ContainerRuntimeProbe): string {
+  return probe.state === 'ready' ? 'ready' : `${probe.state}:${probe.failure.reason}`
+}
+
+export async function waitForContainerRuntime (
+  options: WaitForContainerRuntimeOptions = {}
+): Promise<ContainerRuntimeWaitResult> {
+  const timeoutMs = options.timeoutMs ?? 60_000
+  const pollIntervalMs = options.pollIntervalMs ?? 1_000
+  const now = options.now ?? Date.now
+  const sleep = options.sleep ?? defaultSleep
+  const deadline = now() + timeoutMs
+  let lastTransition: string | undefined
+
+  while (true) {
+    const probe = await probeContainerRuntime(options.runCommand)
+
+    if (probe.state === 'ready') return probe
+
+    const currentTransition = transitionKey(probe)
+    if (currentTransition !== lastTransition) {
+      options.onTransition?.(probe)
+      lastTransition = currentTransition
+    }
+
+    if (probe.state === 'failed') {
+      return { state: 'failed', failure: probe.failure, timedOut: false, timeoutMs }
+    }
+
+    const remainingMs = deadline - now()
+    if (remainingMs <= 0) {
+      return { state: 'failed', failure: probe.failure, timedOut: true, timeoutMs }
+    }
+
+    await sleep(Math.min(pollIntervalMs, remainingMs))
+  }
+}
+
+function commandText (command: readonly string[]): string {
+  return command.join(' ')
+}
+
+export function formatContainerRuntimeFailure (
+  result: Extract<ContainerRuntimeWaitResult, { state: 'failed' }>,
+  options: { logPath?: string } = {}
+): string {
+  const seconds = result.timeoutMs / 1_000
+  const descriptions: Record<ContainerRuntimeReason, string> = {
+    'docker-cli-unavailable': 'Docker CLI is required but was not available.',
+    'docker-daemon-unavailable': result.timedOut
+      ? `Docker daemon did not become ready within ${seconds} seconds.`
+      : 'Docker daemon is required but was not reachable.',
+    'buildx-builder-unavailable': result.timedOut
+      ? `Docker Buildx builder did not become ready within ${seconds} seconds.`
+      : 'Docker Buildx builder was not operational.'
+  }
+  const manualCheck = result.failure.reason === 'buildx-builder-unavailable'
+    ? 'docker buildx inspect'
+    : result.failure.reason === 'docker-daemon-unavailable'
+      ? 'docker info'
+      : 'docker --version'
+  const lines = [
+    descriptions[result.failure.reason],
+    `Last check: ${commandText(result.failure.command)}`,
+    `Detail: ${result.failure.detail}`,
+    `Check ${result.failure.reason === 'buildx-builder-unavailable' ? 'Buildx' : 'Docker'} with: ${manualCheck}`
+  ]
+
+  if (options.logPath !== undefined) lines.push(`Command log: ${options.logPath}`)
+  return lines.join('\n')
+}
