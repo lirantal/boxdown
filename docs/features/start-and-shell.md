@@ -21,6 +21,11 @@ boxdown antigravity
 Use `boxdown setup` when you want to prepare the devcontainer and SSH/app
 integration without opening an interactive shell.
 
+Start does not require a completed setup. It performs a fresh runtime-readiness
+check, then writes workspace inventory metadata and creates the generated state
+needed for the devcontainer. It does not install the setup-only SSH alias or
+external application integrations.
+
 `boxdown shell` remains supported as an alias for `boxdown start`, but `start`
 is the canonical command used in help and documentation.
 `boxdown cc` remains supported as an alias for `boxdown claude`, but `claude`

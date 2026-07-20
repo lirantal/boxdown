@@ -20,6 +20,11 @@ interactive shell. It accepts:
 --verbose
 ```
 
+Setup readiness runs before prompts or workspace state is written. A missing
+Docker CLI fails immediately; a starting Docker daemon or discoverable Buildx
+builder is polled once per second for up to 60 seconds. If this preflight fails,
+setup leaves no workspace metadata, generated devcontainer config, or SSH key.
+
 ## Flow
 
 1. Resolve the workspace to a real absolute path.

@@ -169,6 +169,16 @@ no-start bind-mount probe for the workspace and Boxdown-managed mount paths.
 Run `boxdown doctor` directly for the complete diagnostic report; an unavailable
 best-effort mount probe is reported as a warning and does not block setup.
 
+`boxdown start` is standalone: it can create or reuse the devcontainer even if
+`boxdown setup` was skipped or its preflight failed. Setup-only SSH aliases and
+Codex/Claude application integrations are still installed only by `setup`.
+
+Before a command creates or starts a container, Boxdown waits up to 60 seconds
+for the Docker daemon and the selected Docker Buildx builder. If Buildx is not
+installed, the bundled Dev Containers CLI uses its supported classic-build
+fallback and Boxdown continues with a warning. Boxdown does not retry an actual
+Dev Containers build failure.
+
 Container bring-up installs Codex and Claude Code by default. The OpenCode and
 Antigravity commands stay available, but install/update those CLIs only when you
 launch them. Use `--` to pass arguments to the selected agent:

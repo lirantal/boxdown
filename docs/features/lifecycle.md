@@ -129,6 +129,19 @@ do not prompt so existing targeted scripts keep working. Non-interactive
 `purge` from an untracked directory fails safely instead of treating the current
 directory as a workspace.
 
+## Container runtime readiness
+
+Commands that may create or start a devcontainer wait for Docker before writing
+workspace metadata. Docker daemon and Buildx builder startup races are retried
+for up to 60 seconds; the underlying `devcontainer up` command is still run only
+once after readiness succeeds.
+
+For a daemon timeout, run `docker info`. For a Buildx timeout, run
+`docker buildx inspect`. Logged lifecycle errors also print the workspace
+command-log path, which contains full redacted stdout and stderr. A generic Dev
+Containers JSON error without nested output means the command log is the next
+place to inspect.
+
 ## Doctor
 
 `doctor` validates required host prerequisites: Node, Docker CLI, Docker
