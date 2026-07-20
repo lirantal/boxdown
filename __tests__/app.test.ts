@@ -3563,6 +3563,34 @@ describe('progress output', () => {
     assert.strictEqual(output.filter((entry) => entry.includes('Waiting for Docker daemon')).length, 1)
   })
 
+  test('interactive TTY warning stays above an active checklist across redraws', () => {
+    const output: string[] = []
+    const progress = createProgress({
+      mode: 'interactive',
+      isTTY: true,
+      spinnerIntervalMs: 60_000,
+      write: (_target, message) => output.push(`line:${message}`),
+      writeRaw: (_target, message) => output.push(`raw:${message}`)
+    })
+    progress.setSteps([
+      { id: 'container-runtime', label: 'Checking container runtime' },
+      { id: 'devcontainer-start', label: 'Starting devcontainer' }
+    ])
+    progress.startStep('container-runtime')
+
+    const beforeWarning = output.length
+    progress.warn('Docker Buildx is unavailable; using fallback')
+    const warningOutput = output.slice(beforeWarning)
+    assert.strictEqual(warningOutput[0], 'raw:\u001B[2A')
+    assert.match(warningOutput[1] ?? '', /Docker Buildx is unavailable; using fallback/)
+    assert.strictEqual(warningOutput.filter((entry) => entry.includes('Checking container runtime')).length, 1)
+    assert.strictEqual(warningOutput.filter((entry) => entry.includes('Starting devcontainer')).length, 1)
+
+    progress.completeStep('container-runtime')
+    progress.end()
+    assert.strictEqual(output.filter((entry) => entry.includes('Docker Buildx is unavailable; using fallback')).length, 1)
+  })
+
   test('reports whether a checklist is active', () => {
     const progress = createProgress({
       mode: 'none'

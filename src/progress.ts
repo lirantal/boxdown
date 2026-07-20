@@ -185,16 +185,7 @@ export class ProgressReporter {
       return
     }
 
-    const line = `${promptRail()}  ${color(message, 'dim')}`
-    if (this.#isTTY && this.#renderedStepLineCount > 0) {
-      this.#writeRaw(this.target, `\u001B[${this.#renderedStepLineCount}A`)
-      this.#write(this.target, line)
-      this.#renderedStepLineCount = 0
-      this.#renderChecklist()
-      return
-    }
-
-    this.#writeLine(line)
+    this.#writeInteractiveLine(`${promptRail()}  ${color(message, 'dim')}`)
   }
 
   warn (message: string): void {
@@ -207,7 +198,7 @@ export class ProgressReporter {
       return
     }
 
-    this.#writeLine(`${promptRail()}  ${color('!', 'dim')} ${message}`)
+    this.#writeInteractiveLine(`${promptRail()}  ${color('!', 'dim')} ${message}`)
   }
 
   marker (message: string): void {
@@ -346,6 +337,18 @@ export class ProgressReporter {
     }
 
     this.#write(this.target, message)
+  }
+
+  #writeInteractiveLine (message: string): void {
+    if (this.#isTTY && this.#renderedStepLineCount > 0) {
+      this.#writeRaw(this.target, `\u001B[${this.#renderedStepLineCount}A`)
+      this.#write(this.target, message)
+      this.#renderedStepLineCount = 0
+      this.#renderChecklist()
+      return
+    }
+
+    this.#writeLine(message)
   }
 
   #renderSpinner (): void {
