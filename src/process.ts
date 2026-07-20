@@ -13,12 +13,24 @@ export interface BufferedCommandOptions {
   onStdout?: (chunk: Buffer) => void
   onStderr?: (chunk: Buffer) => void
   timeoutMs?: number
+  timeoutControl?: BufferedTimeoutControl
 }
 
 export interface CommandResult {
   code: number
   stdout: string
   stderr: string
+  timedOut?: boolean
+}
+
+export interface BufferedTimeoutControl {
+  schedule: (callback: () => void, milliseconds: number) => unknown
+  cancel: (handle: unknown) => void
+}
+
+const realTimeoutControl: BufferedTimeoutControl = {
+  schedule: (callback, milliseconds) => setTimeout(callback, milliseconds),
+  cancel: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>)
 }
 
 function mergedEnv (env?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
@@ -100,7 +112,9 @@ export function runBuffered (command: string, args: string[], options: BufferedC
     const stdoutChunks: Buffer[] = []
     const stderrChunks: Buffer[] = []
     let settled = false
-    let timeout: ReturnType<typeof setTimeout> | undefined
+    let timeoutHandle: unknown
+    let timeoutScheduled = false
+    const timeoutControl = options.timeoutControl ?? realTimeoutControl
 
     child.stdout.on('data', (chunk: Buffer) => {
       if (settled) return
@@ -122,7 +136,7 @@ export function runBuffered (command: string, args: string[], options: BufferedC
       if (settled) return
 
       settled = true
-      if (timeout !== undefined) clearTimeout(timeout)
+      if (timeoutScheduled) timeoutControl.cancel(timeoutHandle)
       loggedCommand?.error(error)
       loggedCommand?.finish(127)
       resolve({
@@ -136,7 +150,7 @@ export function runBuffered (command: string, args: string[], options: BufferedC
       if (settled) return
 
       settled = true
-      if (timeout !== undefined) clearTimeout(timeout)
+      if (timeoutScheduled) timeoutControl.cancel(timeoutHandle)
       loggedCommand?.finish(code ?? 1)
       resolve({
         code: code ?? 1,
@@ -146,7 +160,7 @@ export function runBuffered (command: string, args: string[], options: BufferedC
     })
 
     if (options.timeoutMs !== undefined) {
-      timeout = setTimeout(() => {
+      timeoutHandle = timeoutControl.schedule(() => {
         if (settled) return
 
         settled = true
@@ -159,9 +173,11 @@ export function runBuffered (command: string, args: string[], options: BufferedC
         resolve({
           code: 124,
           stdout,
-          stderr: `${stderr}${stderr.length > 0 && !stderr.endsWith('\n') ? '\n' : ''}${message}\n`
+          stderr: `${stderr}${stderr.length > 0 && !stderr.endsWith('\n') ? '\n' : ''}${message}\n`,
+          timedOut: true
         })
       }, options.timeoutMs)
+      timeoutScheduled = true
     }
 
     if (options.input !== undefined) {

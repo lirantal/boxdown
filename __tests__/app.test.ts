@@ -3485,7 +3485,7 @@ describe('progress output', () => {
     assert.match(log, /\[boxdown\] visible message/)
   })
 
-  test('buffered commands time out once and settle their command log once', async () => {
+  test('buffered commands deterministically time out once and settle their command log once', async () => {
     const context = createWorkspaceContext({
       workspace: tempDir('buffered-command-timeout-workspace'),
       env: {
@@ -3495,6 +3495,7 @@ describe('progress output', () => {
       assetsDevcontainerDir
     })
     const logger = createWorkspaceCommandLogger(context)
+    const scheduledTimeouts: number[] = []
     const result = await runBuffered(process.execPath, [
       '--eval',
       'setInterval(() => {}, 1_000)'
@@ -3502,15 +3503,23 @@ describe('progress output', () => {
       logger,
       mirrorStdout: false,
       mirrorStderr: false,
-      timeoutMs: 20
+      timeoutMs: 60_000,
+      timeoutControl: {
+        schedule: (callback, milliseconds) => {
+          scheduledTimeouts.push(milliseconds)
+          queueMicrotask(callback)
+          return Symbol('timeout')
+        },
+        cancel: () => {}
+      }
     })
 
-    await new Promise((resolve) => setTimeout(resolve, 50))
-
     assert.strictEqual(result.code, 124)
-    assert.match(result.stderr, /Command timed out after 20 milliseconds\./)
+    assert.strictEqual(result.timedOut, true)
+    assert.deepStrictEqual(scheduledTimeouts, [60_000])
+    assert.match(result.stderr, /Command timed out after 60000 milliseconds\./)
     const log = readFileSync(context.workspaceLogPath, 'utf8')
-    assert.strictEqual(log.match(/command error: Command timed out after 20 milliseconds\./gu)?.length, 1)
+    assert.strictEqual(log.match(/command error: Command timed out after 60000 milliseconds\./gu)?.length, 1)
     assert.strictEqual(log.match(/command exit: 124/gu)?.length, 1)
   })
 

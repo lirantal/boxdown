@@ -19,6 +19,7 @@ export interface ContainerRuntimeFailure {
   reason: ContainerRuntimeReason
   command: string[]
   detail: string
+  timedOut?: true
 }
 
 export type ContainerRuntimeProbe =
@@ -54,7 +55,8 @@ function failure (
   return {
     reason,
     command,
-    detail: compactCommandOutput(result)
+    detail: compactCommandOutput(result),
+    ...(result.timedOut === true ? { timedOut: true as const } : {})
   }
 }
 
@@ -81,6 +83,12 @@ export async function probeContainerRuntime (
 
   const buildxVersionCommand = ['docker', 'buildx', 'version']
   const buildxVersion = await runCommand(buildxVersionCommand[0] as string, buildxVersionCommand.slice(1))
+  if (buildxVersion.timedOut === true) {
+    return {
+      state: 'waiting',
+      failure: failure('buildx-builder-unavailable', buildxVersionCommand, buildxVersion)
+    }
+  }
   if (buildxVersion.code !== 0) {
     return {
       state: 'ready',
@@ -131,6 +139,30 @@ function transitionKey (probe: ContainerRuntimeProbe): string {
   return probe.state === 'ready' ? 'ready' : `${probe.state}:${probe.failure.reason}`
 }
 
+class ContainerRuntimeDeadlineError extends Error {
+  readonly command: string[]
+
+  constructor (command: string[]) {
+    super(`Container runtime deadline expired before ${command.join(' ')}`)
+    this.command = command
+  }
+}
+
+function deadlineFailure (command: string[]): ContainerRuntimeFailure {
+  const reason: ContainerRuntimeReason = command[1] === 'info'
+    ? 'docker-daemon-unavailable'
+    : command[1] === 'buildx'
+      ? 'buildx-builder-unavailable'
+      : 'docker-cli-unavailable'
+
+  return {
+    reason,
+    command,
+    detail: `Readiness deadline expired before ${command.join(' ')} could start.`,
+    timedOut: true
+  }
+}
+
 /** @internal */
 export async function waitForContainerRuntimeInternal (
   options: InternalContainerRuntimeWaitOptions = {}
@@ -155,10 +187,37 @@ export async function waitForContainerRuntimeInternal (
     }
 
     const runCommand = options.runCommand ?? runContainerRuntimeCommand
-    const probe = await probeContainerRuntime(async (command, args) => {
-      const remainingMs = Math.max(0, Math.floor(deadline - now()))
-      return runCommand(command, args, remainingMs)
-    })
+    let lastStartedCommand: string[] | undefined
+    let probe: ContainerRuntimeProbe
+    try {
+      probe = await probeContainerRuntime(async (command, args) => {
+        const commandArgs = [command, ...args]
+        const remainingMs = Math.floor(deadline - now())
+        if (remainingMs <= 0) throw new ContainerRuntimeDeadlineError(commandArgs)
+        lastStartedCommand = commandArgs
+        return runCommand(command, args, remainingMs)
+      })
+    } catch (error) {
+      if (!(error instanceof ContainerRuntimeDeadlineError)) throw error
+      return {
+        state: 'failed',
+        failure: lastWaitingFailure ?? deadlineFailure(error.command),
+        timedOut: true,
+        timeoutMs
+      }
+    }
+
+    if (deadline - now() <= 0) {
+      const currentFailure = probe.state === 'ready'
+        ? deadlineFailure(lastStartedCommand ?? ['docker', '--version'])
+        : probe.failure
+      return {
+        state: 'failed',
+        failure: lastWaitingFailure ?? currentFailure,
+        timedOut: true,
+        timeoutMs
+      }
+    }
 
     if (probe.state === 'ready') return probe
 
@@ -169,7 +228,12 @@ export async function waitForContainerRuntimeInternal (
     }
 
     if (probe.state === 'failed') {
-      return { state: 'failed', failure: probe.failure, timedOut: false, timeoutMs }
+      return {
+        state: 'failed',
+        failure: probe.failure,
+        timedOut: probe.failure.timedOut === true,
+        timeoutMs
+      }
     }
 
     lastWaitingFailure = probe.failure

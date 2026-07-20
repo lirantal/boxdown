@@ -202,6 +202,65 @@ describe('container runtime waiter', () => {
     assert.deepStrictEqual(commandTimeouts, [1_000, 900, 650, 450])
   })
 
+  test('does not launch the next command when the deadline is reached between probe commands', async () => {
+    let now = 0
+    const calls: string[][] = []
+    const result = await waitForContainerRuntimeInternal({
+      timeoutMs: 100,
+      now: () => now,
+      runCommand: async (command, args) => {
+        calls.push([command, ...args])
+        now = 100
+        return ok
+      }
+    })
+
+    assert.strictEqual(result.state, 'failed')
+    assert.strictEqual(result.timedOut, true)
+    assert.deepStrictEqual(result.failure.command, ['docker', 'info'])
+    assert.deepStrictEqual(calls, [['docker', '--version']])
+  })
+
+  test('treats an explicit Buildx version timeout as transient instead of fallback-ready', async () => {
+    const probe = await probeContainerRuntime(runnerFrom([
+      ok,
+      ok,
+      {
+        code: 124,
+        stdout: '',
+        stderr: 'Command timed out after 100 milliseconds.\n',
+        timedOut: true
+      }
+    ], []))
+
+    assert.strictEqual(probe.state, 'waiting')
+    assert.strictEqual(probe.failure.reason, 'buildx-builder-unavailable')
+    assert.deepStrictEqual(probe.failure.command, ['docker', 'buildx', 'version'])
+  })
+
+  test('rejects Buildx and fallback readiness completed at the deadline', async () => {
+    for (const mode of ['buildx', 'fallback'] as const) {
+      let now = 0
+      const result = await waitForContainerRuntimeInternal({
+        timeoutMs: 100,
+        now: () => now,
+        runCommand: async (_command, args) => {
+          if (mode === 'buildx' && args.join(' ') === 'buildx inspect --bootstrap') {
+            now = 100
+          }
+          if (mode === 'fallback' && args.join(' ') === 'buildx version') {
+            now = 100
+            return { code: 1, stdout: '', stderr: 'buildx is unavailable' }
+          }
+          return ok
+        }
+      })
+
+      assert.strictEqual(result.state, 'failed', mode)
+      assert.strictEqual(result.timedOut, true, mode)
+    }
+  })
+
   test('production timing cannot be overridden by callers', async () => {
     const result = await waitForContainerRuntime({
       runCommand: runnerFrom([ok, ok, ok, ok], []),
@@ -267,6 +326,44 @@ describe('container runtime waiter', () => {
     ])
   })
 
+  test('retains the prior diagnostic when a partial final probe exhausts the deadline', async () => {
+    let now = 0
+    let dockerVersionCalls = 0
+    let dockerInfoCalls = 0
+    const calls: string[][] = []
+    const result = await waitForContainerRuntimeInternal({
+      timeoutMs: 1_500,
+      now: () => now,
+      sleep: async (milliseconds) => { now += milliseconds },
+      runCommand: async (command, args) => {
+        calls.push([command, ...args])
+        if (args[0] === '--version') {
+          dockerVersionCalls += 1
+          if (dockerVersionCalls === 2) now = 1_500
+          return ok
+        }
+        if (args[0] === 'info') {
+          dockerInfoCalls += 1
+          return {
+            code: 1,
+            stdout: '',
+            stderr: dockerInfoCalls === 1 ? 'prior daemon diagnostic' : 'partial probe diagnostic'
+          }
+        }
+        assert.fail(`Unexpected command: ${command} ${args.join(' ')}`)
+      }
+    })
+
+    assert.strictEqual(result.state, 'failed')
+    assert.strictEqual(result.timedOut, true)
+    assert.strictEqual(result.failure.detail, 'prior daemon diagnostic')
+    assert.deepStrictEqual(calls, [
+      ['docker', '--version'],
+      ['docker', 'info'],
+      ['docker', '--version']
+    ])
+  })
+
   test('emits only state and reason transitions', async () => {
     let now = 0
     const transitions: ContainerRuntimeProbe[] = []
@@ -287,15 +384,17 @@ describe('container runtime waiter', () => {
   })
 
   test('formats timeout, manual check, detail, and optional log path', async () => {
+    let now = 0
     const result = await waitForContainerRuntimeInternal({
       runCommand: daemonSequenceRunner([{ code: 1, stdout: '', stderr: 'Cannot connect' }]),
-      timeoutMs: 0,
-      now: () => 0
+      timeoutMs: 1_000,
+      now: () => now,
+      sleep: async (milliseconds) => { now += milliseconds }
     })
     assert.strictEqual(result.state, 'failed')
 
     const message = formatContainerRuntimeFailure(result, { logPath: '/tmp/boxdown.log' })
-    assert.match(message, /Docker daemon did not become ready within 0 seconds\./)
+    assert.match(message, /Docker daemon did not become ready within 1 seconds\./)
     assert.match(message, /Last check: docker info/)
     assert.match(message, /Detail: Cannot connect/)
     assert.match(message, /Check Docker with: docker info/)
