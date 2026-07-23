@@ -212,7 +212,7 @@ Shared options:
 ```sh
 --workspace <path>  # target project directory, defaults to cwd; repeatable with down; purge also accepts list values
 --alias <name>      # SSH alias, defaults to <repo-name>-devcontainer
---target <name>     # with setup/ssh install, optional target; repeatable; supported: codex, claude
+--target <name>     # with setup/ssh install/ssh uninstall, optional target; repeatable; supported: codex, claude
 --port <port>       # tunnel port for `boxdown tunnel`; repeatable
 --recreate          # recreate the devcontainer before starting
 --json              # JSON output for status and list

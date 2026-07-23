@@ -1852,6 +1852,51 @@ describe('CLI execution', () => {
     assert.doesNotMatch(result.stdout, /Codex app config:/)
   })
 
+  test('rejects an invalid alias before targeted SSH uninstall mutates app configuration', () => {
+    const workspace = tempDir('cli-uninstall-invalid-alias-workspace')
+    const workspaceName = realpathSync(workspace).split('/').at(-1) ?? 'workspace'
+    const alias = 'invalid alias'
+    const codexConfigPath = join(tempDir('cli-uninstall-invalid-alias-codex'), 'config.json')
+    const originalConfig = `${JSON.stringify({
+      version: 1,
+      remoteConnections: [
+        {
+          sshAlias: alias,
+          projects: [
+            {
+              remotePath: `/workspaces/${workspaceName}`,
+              label: workspaceName
+            }
+          ]
+        }
+      ]
+    }, null, 2)}\n`
+    writeFileSync(codexConfigPath, originalConfig)
+
+    const result = runCliProcess([
+      'ssh',
+      'uninstall',
+      '--workspace',
+      workspace,
+      '--alias',
+      alias,
+      '--target',
+      'codex'
+    ], {
+      ...process.env,
+      HOME: tempDir('cli-uninstall-invalid-alias-home'),
+      BOXDOWN_CACHE_HOME: tempDir('cli-uninstall-invalid-alias-cache'),
+      BOXDOWN_DATA_HOME: tempDir('cli-uninstall-invalid-alias-data'),
+      BOXDOWN_SSH_CONFIG: join(tempDir('cli-uninstall-invalid-alias-ssh'), 'config'),
+      BOXDOWN_CODEX_APP_CONFIG: codexConfigPath,
+      BOXDOWN_CODEX_GLOBAL_STATE: join(tempDir('cli-uninstall-invalid-alias-state'), '.codex-global-state.json')
+    })
+
+    assert.strictEqual(result.code, 1)
+    assert.match(result.stderr, /SSH alias contains unsupported characters: invalid alias/)
+    assert.strictEqual(readFileSync(codexConfigPath, 'utf8'), originalConfig)
+  })
+
   test('uninstalls selected SSH target for Codex only', () => {
     const workspace = tempDir('cli-uninstall-codex-workspace')
     const sshConfigPath = join(tempDir('cli-uninstall-codex-ssh'), 'config')
@@ -1956,6 +2001,45 @@ describe('CLI execution', () => {
     assert.match(result.stdout, /Removed Codex sidebar state:/)
     assert.doesNotMatch(result.stdout, /Removed SSH alias:/)
     assert.doesNotMatch(result.stdout, /Claude SSH config:/)
+  })
+
+  test('reports completed Codex app-config cleanup before global-state cleanup fails', () => {
+    const workspace = tempDir('cli-uninstall-codex-partial-workspace')
+    const workspaceName = realpathSync(workspace).split('/').at(-1) ?? 'workspace'
+    const alias = `${workspaceName}-devcontainer`
+    const codexConfigPath = join(tempDir('cli-uninstall-codex-partial-app'), 'config.json')
+    const codexStatePath = join(tempDir('cli-uninstall-codex-partial-state'), '.codex-global-state.json')
+    writeFileSync(codexConfigPath, `${JSON.stringify({
+      version: 1,
+      remoteConnections: [
+        {
+          sshAlias: alias,
+          projects: [
+            {
+              remotePath: `/workspaces/${workspaceName}`,
+              label: workspaceName
+            }
+          ]
+        }
+      ]
+    }, null, 2)}\n`)
+    writeFileSync(codexStatePath, 'invalid global state\n')
+
+    const result = runCliProcess(['ssh', 'uninstall', '--workspace', workspace, '--target', 'codex'], {
+      ...process.env,
+      HOME: tempDir('cli-uninstall-codex-partial-home'),
+      BOXDOWN_CACHE_HOME: tempDir('cli-uninstall-codex-partial-cache'),
+      BOXDOWN_DATA_HOME: tempDir('cli-uninstall-codex-partial-data'),
+      BOXDOWN_SSH_CONFIG: join(tempDir('cli-uninstall-codex-partial-ssh'), 'config'),
+      BOXDOWN_CODEX_APP_CONFIG: codexConfigPath,
+      BOXDOWN_CODEX_GLOBAL_STATE: codexStatePath
+    })
+
+    assert.strictEqual(result.code, 1)
+    assert.match(result.stdout, /Codex app config:/)
+    assert.match(result.stdout, /Removed Codex remote project:/)
+    assert.match(result.stdout, /Codex app config backup:/)
+    assert.doesNotMatch(result.stdout, /Codex app state:/)
   })
 
   test('preserves shared Codex host state when targeted uninstall leaves another project', () => {
@@ -6558,6 +6642,68 @@ describe('Codex app config injection', () => {
     for (const key of Object.keys(hostSettings)) {
       assert.deepStrictEqual(afterLastRemoval[key], {})
       assert.deepStrictEqual(atomAfterLastRemoval[key], {})
+    }
+
+    const atomOnlyState = {
+      ...hostSettings,
+      'codex-managed-remote-connections': state['codex-managed-remote-connections'],
+      'selected-remote-host-id': hostId,
+      'remote-projects': [
+        {
+          id: 'first-project',
+          hostId,
+          remotePath: entry.remotePath,
+          label: entry.label
+        }
+      ],
+      'electron-persisted-atom-state': {
+        ...hostSettings,
+        'codex-managed-remote-connections': state['codex-managed-remote-connections'],
+        'selected-remote-host-id': hostId,
+        'remote-projects': [
+          {
+            id: 'first-project',
+            hostId,
+            remotePath: entry.remotePath,
+            label: entry.label
+          },
+          {
+            id: 'second-project',
+            hostId,
+            remotePath: remainingEntry.remotePath,
+            label: remainingEntry.label
+          }
+        ]
+      }
+    }
+    const atomOnlyAfterFirstRemoval = removeCodexGlobalStateProject(atomOnlyState, entry)
+    const atomOnlyAfterLastRemoval = removeCodexGlobalStateProject(atomOnlyAfterFirstRemoval, remainingEntry)
+    const atomOnlyAfterFirstAtom = atomOnlyAfterFirstRemoval['electron-persisted-atom-state'] as Record<string, unknown>
+    const atomOnlyAfterLastAtom = atomOnlyAfterLastRemoval['electron-persisted-atom-state'] as Record<string, unknown>
+
+    assert.deepStrictEqual(atomOnlyAfterFirstRemoval['remote-projects'], [])
+    assert.deepStrictEqual(atomOnlyAfterFirstAtom['remote-projects'], [
+      {
+        id: 'second-project',
+        hostId,
+        remotePath: remainingEntry.remotePath,
+        label: remainingEntry.label
+      }
+    ])
+    assert.deepStrictEqual(atomOnlyAfterFirstRemoval['codex-managed-remote-connections'], state['codex-managed-remote-connections'])
+    assert.strictEqual(atomOnlyAfterFirstRemoval['selected-remote-host-id'], hostId)
+    for (const [key, value] of Object.entries(hostSettings)) {
+      assert.deepStrictEqual(atomOnlyAfterFirstRemoval[key], value)
+      assert.deepStrictEqual(atomOnlyAfterFirstAtom[key], value)
+    }
+    assert.deepStrictEqual(atomOnlyAfterLastAtom['remote-projects'], [])
+    assert.deepStrictEqual(atomOnlyAfterLastRemoval['codex-managed-remote-connections'], [])
+    assert.strictEqual(atomOnlyAfterLastRemoval['selected-remote-host-id'], undefined)
+    assert.deepStrictEqual(atomOnlyAfterLastAtom['codex-managed-remote-connections'], [])
+    assert.strictEqual(atomOnlyAfterLastAtom['selected-remote-host-id'], undefined)
+    for (const key of Object.keys(hostSettings)) {
+      assert.deepStrictEqual(atomOnlyAfterLastRemoval[key], {})
+      assert.deepStrictEqual(atomOnlyAfterLastAtom[key], {})
     }
   })
 

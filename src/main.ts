@@ -14,7 +14,7 @@ import { createWorkspaceContext, createWorkspaceContextFromIdentity, defaultData
 import { createProgress, resolveProgressMode, type ProgressReporter, type ProgressOutputTarget, type ProgressStepDefinition } from './progress.ts'
 import { runBuffered } from './process.ts'
 import { purgeWorkspace, removeWorkspaceRuntimeState } from './purge.ts'
-import { defaultSshAlias, installSshConfig, uninstallSshConfig } from './ssh-config.ts'
+import { defaultSshAlias, installSshConfig, uninstallSshConfig, validateSshAlias } from './ssh-config.ts'
 import { dedupeSshInstallTargets, installSshInstallTarget, isSshConfigInstallTarget, SSH_INSTALL_TARGETS, sshInstallTargetFlagHintsText, supportedSshInstallTargetsText, uninstallSshInstallTarget, type SshConfigInstallTarget } from './ssh-install-targets.ts'
 import { createStatusInfo, formatStatusText, statusIsHealthy } from './status.ts'
 import type { CliColor } from './cli-style.ts'
@@ -1326,6 +1326,7 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
     }
 
     if (parsed.command === 'ssh-uninstall') {
+      validateSshAlias(alias)
       const targets = parsed.targets ?? SSH_INSTALL_TARGETS.map((target) => target.value)
 
       if (parsed.targets === undefined) {

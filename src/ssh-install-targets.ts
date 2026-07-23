@@ -49,21 +49,24 @@ function uninstallCodexTarget (context: WorkspaceContext, alias: string, options
   const result = uninstallCodexAppConfigProject(entry, {
     additionalRemotePaths: [legacyRemotePath]
   })
+
+  if (options.quiet !== true) {
+    process.stdout.write(`\nCodex app config: ${result.configPath}\n`)
+    process.stdout.write(result.changed
+      ? `Removed Codex remote project: ${entry.label} (${entry.remotePath})\n`
+      : `Codex remote project not installed: ${entry.label} (${entry.remotePath})\n`)
+
+    if (result.backupPath !== undefined) {
+      process.stdout.write(`Codex app config backup: ${result.backupPath}\n`)
+    }
+  }
+
   const stateResult = uninstallCodexGlobalStateProject(entry, {
     additionalRemotePaths: [legacyRemotePath]
   })
 
   if (options.quiet === true) {
     return
-  }
-
-  process.stdout.write(`\nCodex app config: ${result.configPath}\n`)
-  process.stdout.write(result.changed
-    ? `Removed Codex remote project: ${entry.label} (${entry.remotePath})\n`
-    : `Codex remote project not installed: ${entry.label} (${entry.remotePath})\n`)
-
-  if (result.backupPath !== undefined) {
-    process.stdout.write(`Codex app config backup: ${result.backupPath}\n`)
   }
 
   process.stdout.write(`\nCodex app state: ${stateResult.statePath}\n`)
