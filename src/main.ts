@@ -1,7 +1,5 @@
 import { existsSync } from 'node:fs'
 
-import { claudeSshConfigEntryForWorkspace, uninstallClaudeSshConfigHost } from './claude-app-config.ts'
-import { codexProjectEntryForWorkspace, legacyCodexRemotePathForWorkspace, uninstallCodexAppConfigProject, uninstallCodexGlobalStateProject } from './codex-app-config.ts'
 import { codingAgentBinary, codingAgentFromCommand, type CodingAgentCli } from './coding-agents.ts'
 import { buildGeneratedDevcontainerConfig, publishContainerPortFromConfig } from './config.ts'
 import { formatContainerRuntimeFailure, waitForContainerRuntime, type ContainerRuntimeProbe } from './container-runtime.ts'
@@ -17,7 +15,7 @@ import { createProgress, resolveProgressMode, type ProgressReporter, type Progre
 import { runBuffered } from './process.ts'
 import { purgeWorkspace, removeWorkspaceRuntimeState } from './purge.ts'
 import { defaultSshAlias, installSshConfig, uninstallSshConfig } from './ssh-config.ts'
-import { dedupeSshInstallTargets, installSshInstallTarget, isSshConfigInstallTarget, SSH_INSTALL_TARGETS, sshInstallTargetFlagHintsText, supportedSshInstallTargetsText, type SshConfigInstallTarget } from './ssh-install-targets.ts'
+import { dedupeSshInstallTargets, installSshInstallTarget, isSshConfigInstallTarget, SSH_INSTALL_TARGETS, sshInstallTargetFlagHintsText, supportedSshInstallTargetsText, uninstallSshInstallTarget, type SshConfigInstallTarget } from './ssh-install-targets.ts'
 import { createStatusInfo, formatStatusText, statusIsHealthy } from './status.ts'
 import type { CliColor } from './cli-style.ts'
 
@@ -1328,48 +1326,16 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
     }
 
     if (parsed.command === 'ssh-uninstall') {
-      uninstallSshConfig(alias)
-      const entry = codexProjectEntryForWorkspace(context, alias)
-      const legacyRemotePath = legacyCodexRemotePathForWorkspace(context)
-      const result = uninstallCodexAppConfigProject(entry, {
-        additionalRemotePaths: [legacyRemotePath]
-      })
+      const targets = parsed.targets ?? SSH_INSTALL_TARGETS.map((target) => target.value)
 
-      process.stdout.write(`\nCodex app config: ${result.configPath}\n`)
-      process.stdout.write(result.changed
-        ? `Removed Codex remote project: ${entry.label} (${entry.remotePath})\n`
-        : `Codex remote project not installed: ${entry.label} (${entry.remotePath})\n`)
-
-      if (result.backupPath !== undefined) {
-        process.stdout.write(`Codex app config backup: ${result.backupPath}\n`)
+      if (parsed.targets === undefined) {
+        uninstallSshConfig(alias)
       }
 
-      const stateResult = uninstallCodexGlobalStateProject(entry, {
-        additionalRemotePaths: [legacyRemotePath]
-      })
-
-      process.stdout.write(`\nCodex app state: ${stateResult.statePath}\n`)
-      process.stdout.write(stateResult.changed
-        ? `Removed Codex sidebar state: ${entry.label} (${entry.remotePath})\n`
-        : `Codex sidebar state not installed: ${entry.label} (${entry.remotePath})\n`)
-
-      if (stateResult.backupPath !== undefined) {
-        process.stdout.write(`Codex app state backup: ${stateResult.backupPath}\n`)
+      for (const target of targets) {
+        await uninstallSshInstallTarget(context, alias, target)
       }
 
-      const claudeEntry = claudeSshConfigEntryForWorkspace(context, alias)
-      const claudeResult = uninstallClaudeSshConfigHost(claudeEntry)
-
-      process.stdout.write(`\nClaude SSH config: ${claudeResult.configPath}\n`)
-      process.stdout.write(claudeResult.changed
-        ? `Removed Claude SSH remote: ${claudeEntry.name} (${claudeEntry.sshHost})\n`
-        : `Claude SSH remote not installed: ${claudeEntry.name} (${claudeEntry.sshHost})\n`)
-
-      if (claudeResult.backupPath !== undefined) {
-        process.stdout.write(`Claude SSH config backup: ${claudeResult.backupPath}\n`)
-      }
-
-      process.stdout.write('Restart Codex and Claude to apply the remote project removal.\n')
       return 0
     }
 

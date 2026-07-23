@@ -1,22 +1,23 @@
-import { claudeSshConfigEntryForWorkspace, installClaudeSshConfigHost } from './claude-app-config.ts'
-import { codexProjectEntryForWorkspace, installCodexAppConfigProject, installCodexGlobalStateProject, legacyCodexRemotePathForWorkspace } from './codex-app-config.ts'
+import { claudeSshConfigEntryForWorkspace, installClaudeSshConfigHost, uninstallClaudeSshConfigHost } from './claude-app-config.ts'
+import { codexProjectEntryForWorkspace, installCodexAppConfigProject, installCodexGlobalStateProject, legacyCodexRemotePathForWorkspace, uninstallCodexAppConfigProject, uninstallCodexGlobalStateProject } from './codex-app-config.ts'
 import type { WorkspaceContext } from './paths.ts'
 
 export type SshConfigInstallTarget = 'codex' | 'claude'
+
+export interface SshInstallTargetOptions {
+  quiet?: boolean
+}
 
 export interface SshInstallTargetDefinition {
   value: SshConfigInstallTarget
   label: string
   description: string
   flag: string
-  install: (context: WorkspaceContext, alias: string, options?: SshInstallTargetInstallOptions) => Promise<void> | void
+  install: (context: WorkspaceContext, alias: string, options?: SshInstallTargetOptions) => Promise<void> | void
+  uninstall: (context: WorkspaceContext, alias: string, options?: SshInstallTargetOptions) => Promise<void> | void
 }
 
-export interface SshInstallTargetInstallOptions {
-  quiet?: boolean
-}
-
-function installCodexTarget (context: WorkspaceContext, alias: string, options: SshInstallTargetInstallOptions = {}): void {
+function installCodexTarget (context: WorkspaceContext, alias: string, options: SshInstallTargetOptions = {}): void {
   const entry = codexProjectEntryForWorkspace(context, alias)
   const legacyRemotePath = legacyCodexRemotePathForWorkspace(context)
   const result = installCodexAppConfigProject(entry, { legacyRemotePaths: [legacyRemotePath] })
@@ -42,7 +43,42 @@ function installCodexTarget (context: WorkspaceContext, alias: string, options: 
   process.stdout.write('Restart Codex to apply the remote project entry.\n')
 }
 
-function installClaudeTarget (context: WorkspaceContext, alias: string, options: SshInstallTargetInstallOptions = {}): void {
+function uninstallCodexTarget (context: WorkspaceContext, alias: string, options: SshInstallTargetOptions = {}): void {
+  const entry = codexProjectEntryForWorkspace(context, alias)
+  const legacyRemotePath = legacyCodexRemotePathForWorkspace(context)
+  const result = uninstallCodexAppConfigProject(entry, {
+    additionalRemotePaths: [legacyRemotePath]
+  })
+  const stateResult = uninstallCodexGlobalStateProject(entry, {
+    additionalRemotePaths: [legacyRemotePath]
+  })
+
+  if (options.quiet === true) {
+    return
+  }
+
+  process.stdout.write(`\nCodex app config: ${result.configPath}\n`)
+  process.stdout.write(result.changed
+    ? `Removed Codex remote project: ${entry.label} (${entry.remotePath})\n`
+    : `Codex remote project not installed: ${entry.label} (${entry.remotePath})\n`)
+
+  if (result.backupPath !== undefined) {
+    process.stdout.write(`Codex app config backup: ${result.backupPath}\n`)
+  }
+
+  process.stdout.write(`\nCodex app state: ${stateResult.statePath}\n`)
+  process.stdout.write(stateResult.changed
+    ? `Removed Codex sidebar state: ${entry.label} (${entry.remotePath})\n`
+    : `Codex sidebar state not installed: ${entry.label} (${entry.remotePath})\n`)
+
+  if (stateResult.backupPath !== undefined) {
+    process.stdout.write(`Codex app state backup: ${stateResult.backupPath}\n`)
+  }
+
+  process.stdout.write('Restart Codex to apply the remote project removal.\n')
+}
+
+function installClaudeTarget (context: WorkspaceContext, alias: string, options: SshInstallTargetOptions = {}): void {
   const entry = claudeSshConfigEntryForWorkspace(context, alias)
   const result = installClaudeSshConfigHost(entry)
 
@@ -62,20 +98,42 @@ function installClaudeTarget (context: WorkspaceContext, alias: string, options:
   process.stdout.write('Restart Claude to apply the SSH remote entry.\n')
 }
 
+function uninstallClaudeTarget (context: WorkspaceContext, alias: string, options: SshInstallTargetOptions = {}): void {
+  const entry = claudeSshConfigEntryForWorkspace(context, alias)
+  const result = uninstallClaudeSshConfigHost(entry)
+
+  if (options.quiet === true) {
+    return
+  }
+
+  process.stdout.write(`\nClaude SSH config: ${result.configPath}\n`)
+  process.stdout.write(result.changed
+    ? `Removed Claude SSH remote: ${entry.name} (${entry.sshHost})\n`
+    : `Claude SSH remote not installed: ${entry.name} (${entry.sshHost})\n`)
+
+  if (result.backupPath !== undefined) {
+    process.stdout.write(`Claude SSH config backup: ${result.backupPath}\n`)
+  }
+
+  process.stdout.write('Restart Claude to apply the SSH remote removal.\n')
+}
+
 export const SSH_INSTALL_TARGETS: readonly SshInstallTargetDefinition[] = [
   {
     value: 'codex',
     label: 'Codex',
     description: 'Register this SSH alias as a Codex app remote project.',
     flag: '--target codex',
-    install: installCodexTarget
+    install: installCodexTarget,
+    uninstall: uninstallCodexTarget
   },
   {
     value: 'claude',
     label: 'Claude',
     description: 'Register this SSH alias as a Claude app SSH remote.',
     flag: '--target claude',
-    install: installClaudeTarget
+    install: installClaudeTarget,
+    uninstall: uninstallClaudeTarget
   }
 ]
 
@@ -99,7 +157,7 @@ export async function installSshInstallTarget (
   context: WorkspaceContext,
   alias: string,
   targetValue: SshConfigInstallTarget,
-  options: SshInstallTargetInstallOptions = {}
+  options: SshInstallTargetOptions = {}
 ): Promise<void> {
   const target = SSH_INSTALL_TARGETS.find((candidate) => candidate.value === targetValue)
 
@@ -108,4 +166,19 @@ export async function installSshInstallTarget (
   }
 
   await target.install(context, alias, options)
+}
+
+export async function uninstallSshInstallTarget (
+  context: WorkspaceContext,
+  alias: string,
+  targetValue: SshConfigInstallTarget,
+  options: SshInstallTargetOptions = {}
+): Promise<void> {
+  const target = SSH_INSTALL_TARGETS.find((candidate) => candidate.value === targetValue)
+
+  if (target === undefined) {
+    throw new Error(`Unsupported ssh install target: ${targetValue}`)
+  }
+
+  await target.uninstall(context, alias, options)
 }

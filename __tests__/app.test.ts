@@ -1821,6 +1821,167 @@ describe('CLI execution', () => {
     assert.deepStrictEqual(claudeConfig.trustedHosts, [`${workspaceName}-devcontainer`])
   })
 
+  test('uninstalls selected SSH target for Claude only', () => {
+    const workspace = tempDir('cli-uninstall-claude-workspace')
+    const sshConfigPath = join(tempDir('cli-uninstall-claude-ssh'), 'config')
+    const codexConfigPath = join(tempDir('cli-uninstall-claude-codex'), 'config.json')
+    const claudeConfigPath = join(tempDir('cli-uninstall-claude-app'), 'ssh_configs.json')
+    const env = {
+      ...process.env,
+      HOME: tempDir('cli-uninstall-claude-home'),
+      BOXDOWN_CACHE_HOME: tempDir('cli-uninstall-claude-cache'),
+      BOXDOWN_DATA_HOME: tempDir('cli-uninstall-claude-data'),
+      BOXDOWN_SSH_CONFIG: sshConfigPath,
+      BOXDOWN_CODEX_APP_CONFIG: codexConfigPath,
+      BOXDOWN_CLAUDE_SSH_CONFIGS: claudeConfigPath
+    }
+
+    const installResult = runCliProcess(['ssh', 'install', '--workspace', workspace, '--target', 'codex', '--target', 'claude'], env)
+    const result = runCliProcess(['ssh', 'uninstall', '--workspace', workspace, '--target', 'claude'], env)
+
+    assert.strictEqual(installResult.code, 0)
+    assert.strictEqual(result.code, 0)
+    assert.strictEqual(existsSync(sshConfigPath), true)
+    assert.strictEqual(parseCodexAppConfig(JSON.parse(readFileSync(codexConfigPath, 'utf8'))).remoteConnections.length, 1)
+    assert.deepStrictEqual(parseClaudeSshConfigs(JSON.parse(readFileSync(claudeConfigPath, 'utf8'))), {
+      configs: [],
+      trustedHosts: []
+    })
+    assert.match(result.stdout, /Removed Claude SSH remote:/)
+    assert.doesNotMatch(result.stdout, /Removed SSH alias:/)
+    assert.doesNotMatch(result.stdout, /Codex app config:/)
+  })
+
+  test('uninstalls selected SSH target for Codex only', () => {
+    const workspace = tempDir('cli-uninstall-codex-workspace')
+    const sshConfigPath = join(tempDir('cli-uninstall-codex-ssh'), 'config')
+    const codexConfigPath = join(tempDir('cli-uninstall-codex-app'), 'config.json')
+    const codexStatePath = join(tempDir('cli-uninstall-codex-state'), '.codex-global-state.json')
+    const claudeConfigPath = join(tempDir('cli-uninstall-codex-claude'), 'ssh_configs.json')
+    const env = {
+      ...process.env,
+      HOME: tempDir('cli-uninstall-codex-home'),
+      BOXDOWN_CACHE_HOME: tempDir('cli-uninstall-codex-cache'),
+      BOXDOWN_DATA_HOME: tempDir('cli-uninstall-codex-data'),
+      BOXDOWN_SSH_CONFIG: sshConfigPath,
+      BOXDOWN_CODEX_APP_CONFIG: codexConfigPath,
+      BOXDOWN_CODEX_GLOBAL_STATE: codexStatePath,
+      BOXDOWN_CLAUDE_SSH_CONFIGS: claudeConfigPath
+    }
+    const workspaceName = realpathSync(workspace).split('/').at(-1) ?? 'workspace'
+    const alias = `${workspaceName}-devcontainer`
+    const hostId = codexDiscoveredRemoteHostId(alias)
+    const canonicalRemotePath = `/workspaces/${workspaceName}`
+    const legacyRemotePath = `/home/node/${workspaceName}`
+
+    const installResult = runCliProcess(['ssh', 'install', '--workspace', workspace, '--target', 'codex', '--target', 'claude'], env)
+    writeFileSync(codexStatePath, `${JSON.stringify({
+      'codex-managed-remote-connections': [
+        {
+          hostId,
+          displayName: alias,
+          alias
+        }
+      ],
+      'remote-projects': [
+        {
+          id: 'canonical-project',
+          hostId,
+          remotePath: canonicalRemotePath,
+          label: workspaceName
+        },
+        {
+          id: 'legacy-project',
+          hostId,
+          remotePath: legacyRemotePath,
+          label: workspaceName
+        }
+      ]
+    })}\n`)
+
+    const result = runCliProcess(['ssh', 'uninstall', '--workspace', workspace, '--target', 'codex'], env)
+    const codexConfig = parseCodexAppConfig(JSON.parse(readFileSync(codexConfigPath, 'utf8')))
+    const codexState = JSON.parse(readFileSync(codexStatePath, 'utf8')) as Record<string, unknown>
+    const remoteProjects = codexState['remote-projects'] as Array<{ hostId?: string, remotePath?: string }>
+    const claudeConfig = parseClaudeSshConfigs(JSON.parse(readFileSync(claudeConfigPath, 'utf8')))
+
+    assert.strictEqual(installResult.code, 0)
+    assert.strictEqual(result.code, 0)
+    assert.strictEqual(existsSync(sshConfigPath), true)
+    assert.strictEqual(codexConfig.remoteConnections.some((connection) =>
+      connection.sshAlias === alias &&
+      connection.projects.some((project) => project.remotePath === canonicalRemotePath || project.remotePath === legacyRemotePath)
+    ), false)
+    assert.strictEqual(remoteProjects.some((project) =>
+      project.hostId === hostId &&
+      (project.remotePath === canonicalRemotePath || project.remotePath === legacyRemotePath)
+    ), false)
+    assert.strictEqual(claudeConfig.configs.length, 1)
+    assert.deepStrictEqual(claudeConfig.trustedHosts, [alias])
+    assert.match(result.stdout, /Removed Codex remote project:/)
+    assert.match(result.stdout, /Removed Codex sidebar state:/)
+    assert.doesNotMatch(result.stdout, /Removed SSH alias:/)
+    assert.doesNotMatch(result.stdout, /Claude SSH config:/)
+  })
+
+  test('uninstalls selected SSH targets together without removing the SSH alias', () => {
+    const workspace = tempDir('cli-uninstall-targets-workspace')
+    const sshConfigPath = join(tempDir('cli-uninstall-targets-ssh'), 'config')
+    const codexConfigPath = join(tempDir('cli-uninstall-targets-codex'), 'config.json')
+    const claudeConfigPath = join(tempDir('cli-uninstall-targets-claude'), 'ssh_configs.json')
+    const env = {
+      ...process.env,
+      HOME: tempDir('cli-uninstall-targets-home'),
+      BOXDOWN_CACHE_HOME: tempDir('cli-uninstall-targets-cache'),
+      BOXDOWN_DATA_HOME: tempDir('cli-uninstall-targets-data'),
+      BOXDOWN_SSH_CONFIG: sshConfigPath,
+      BOXDOWN_CODEX_APP_CONFIG: codexConfigPath,
+      BOXDOWN_CLAUDE_SSH_CONFIGS: claudeConfigPath
+    }
+
+    const installResult = runCliProcess(['ssh', 'install', '--workspace', workspace, '--target', 'codex', '--target', 'claude'], env)
+    const result = runCliProcess(['ssh', 'uninstall', '--workspace', workspace, '--target', 'codex', '--target', 'claude'], env)
+
+    assert.strictEqual(installResult.code, 0)
+    assert.strictEqual(result.code, 0)
+    assert.strictEqual(existsSync(sshConfigPath), true)
+    assert.notStrictEqual(readFileSync(sshConfigPath, 'utf8'), '')
+    assert.deepStrictEqual(parseCodexAppConfig(JSON.parse(readFileSync(codexConfigPath, 'utf8'))).remoteConnections, [])
+    assert.deepStrictEqual(parseClaudeSshConfigs(JSON.parse(readFileSync(claudeConfigPath, 'utf8'))), {
+      configs: [],
+      trustedHosts: []
+    })
+    assert.doesNotMatch(result.stdout, /Removed SSH alias:/)
+  })
+
+  test('uninstalls all SSH integrations when no target is selected', () => {
+    const workspace = tempDir('cli-uninstall-all-workspace')
+    const sshConfigPath = join(tempDir('cli-uninstall-all-ssh'), 'config')
+    const codexConfigPath = join(tempDir('cli-uninstall-all-codex'), 'config.json')
+    const claudeConfigPath = join(tempDir('cli-uninstall-all-claude'), 'ssh_configs.json')
+    const env = {
+      ...process.env,
+      HOME: tempDir('cli-uninstall-all-home'),
+      BOXDOWN_CACHE_HOME: tempDir('cli-uninstall-all-cache'),
+      BOXDOWN_DATA_HOME: tempDir('cli-uninstall-all-data'),
+      BOXDOWN_SSH_CONFIG: sshConfigPath,
+      BOXDOWN_CODEX_APP_CONFIG: codexConfigPath,
+      BOXDOWN_CLAUDE_SSH_CONFIGS: claudeConfigPath
+    }
+
+    const installResult = runCliProcess(['ssh', 'install', '--workspace', workspace, '--target', 'codex', '--target', 'claude'], env)
+    const result = runCliProcess(['ssh', 'uninstall', '--workspace', workspace], env)
+
+    assert.strictEqual(installResult.code, 0)
+    assert.strictEqual(result.code, 0)
+    assert.strictEqual(readFileSync(sshConfigPath, 'utf8'), '')
+    assert.deepStrictEqual(parseCodexAppConfig(JSON.parse(readFileSync(codexConfigPath, 'utf8'))).remoteConnections, [])
+    assert.deepStrictEqual(parseClaudeSshConfigs(JSON.parse(readFileSync(claudeConfigPath, 'utf8'))), {
+      configs: [],
+      trustedHosts: []
+    })
+  })
+
   test('skips optional ssh install targets without a TTY', () => {
     const workspace = tempDir('cli-non-tty-workspace')
     const sshConfigPath = join(tempDir('cli-non-tty-ssh'), 'config')
