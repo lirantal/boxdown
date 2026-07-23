@@ -1873,8 +1873,31 @@ describe('CLI execution', () => {
     const hostId = codexDiscoveredRemoteHostId(alias)
     const canonicalRemotePath = `/workspaces/${workspaceName}`
     const legacyRemotePath = `/home/node/${workspaceName}`
+    const unrelatedRemotePath = '/workspaces/unrelated'
 
     const installResult = runCliProcess(['ssh', 'install', '--workspace', workspace, '--target', 'codex', '--target', 'claude'], env)
+    writeFileSync(codexConfigPath, `${JSON.stringify({
+      version: 1,
+      remoteConnections: [
+        {
+          sshAlias: alias,
+          projects: [
+            {
+              remotePath: canonicalRemotePath,
+              label: workspaceName
+            },
+            {
+              remotePath: legacyRemotePath,
+              label: `Legacy ${workspaceName}`
+            },
+            {
+              remotePath: unrelatedRemotePath,
+              label: 'Unrelated'
+            }
+          ]
+        }
+      ]
+    }, null, 2)}\n`)
     writeFileSync(codexStatePath, `${JSON.stringify({
       'codex-managed-remote-connections': [
         {
@@ -1912,6 +1935,17 @@ describe('CLI execution', () => {
       connection.sshAlias === alias &&
       connection.projects.some((project) => project.remotePath === canonicalRemotePath || project.remotePath === legacyRemotePath)
     ), false)
+    assert.deepStrictEqual(codexConfig.remoteConnections, [
+      {
+        sshAlias: alias,
+        projects: [
+          {
+            remotePath: unrelatedRemotePath,
+            label: 'Unrelated'
+          }
+        ]
+      }
+    ])
     assert.strictEqual(remoteProjects.some((project) =>
       project.hostId === hostId &&
       (project.remotePath === canonicalRemotePath || project.remotePath === legacyRemotePath)
@@ -1922,6 +1956,105 @@ describe('CLI execution', () => {
     assert.match(result.stdout, /Removed Codex sidebar state:/)
     assert.doesNotMatch(result.stdout, /Removed SSH alias:/)
     assert.doesNotMatch(result.stdout, /Claude SSH config:/)
+  })
+
+  test('preserves shared Codex host state when targeted uninstall leaves another project', () => {
+    const firstWorkspace = tempDir('cli-uninstall-shared-first-workspace')
+    const secondWorkspace = tempDir('cli-uninstall-shared-second-workspace')
+    const alias = 'shared-devcontainer'
+    const hostId = codexDiscoveredRemoteHostId(alias)
+    const firstWorkspaceName = realpathSync(firstWorkspace).split('/').at(-1) ?? 'first-workspace'
+    const secondWorkspaceName = realpathSync(secondWorkspace).split('/').at(-1) ?? 'second-workspace'
+    const firstRemotePath = `/workspaces/${firstWorkspaceName}`
+    const secondRemotePath = `/workspaces/${secondWorkspaceName}`
+    const sshConfigPath = join(tempDir('cli-uninstall-shared-ssh'), 'config')
+    const codexConfigPath = join(tempDir('cli-uninstall-shared-codex-app'), 'config.json')
+    const codexStatePath = join(tempDir('cli-uninstall-shared-codex-state'), '.codex-global-state.json')
+    const env = {
+      ...process.env,
+      HOME: tempDir('cli-uninstall-shared-home'),
+      BOXDOWN_CACHE_HOME: tempDir('cli-uninstall-shared-cache'),
+      BOXDOWN_DATA_HOME: tempDir('cli-uninstall-shared-data'),
+      BOXDOWN_SSH_CONFIG: sshConfigPath,
+      BOXDOWN_CODEX_APP_CONFIG: codexConfigPath,
+      BOXDOWN_CODEX_GLOBAL_STATE: codexStatePath
+    }
+
+    const firstInstall = runCliProcess(['ssh', 'install', '--workspace', firstWorkspace, '--alias', alias, '--target', 'codex'], env)
+    const secondInstall = runCliProcess(['ssh', 'install', '--workspace', secondWorkspace, '--alias', alias, '--target', 'codex'], env)
+    writeFileSync(codexStatePath, `${JSON.stringify({
+      'codex-managed-remote-connections': [
+        {
+          hostId,
+          displayName: alias,
+          alias
+        }
+      ],
+      'selected-remote-host-id': hostId,
+      'remote-connection-auto-connect-by-host-id': {
+        [hostId]: true
+      },
+      'agent-mode-by-host-id': {
+        [hostId]: 'auto'
+      },
+      'remote-projects': [
+        {
+          id: 'first-project',
+          hostId,
+          remotePath: firstRemotePath,
+          label: firstWorkspaceName
+        },
+        {
+          id: 'second-project',
+          hostId,
+          remotePath: secondRemotePath,
+          label: secondWorkspaceName
+        }
+      ]
+    })}\n`)
+
+    const result = runCliProcess(['ssh', 'uninstall', '--workspace', firstWorkspace, '--alias', alias, '--target', 'codex'], env)
+    const codexConfig = parseCodexAppConfig(JSON.parse(readFileSync(codexConfigPath, 'utf8')))
+    const codexState = JSON.parse(readFileSync(codexStatePath, 'utf8')) as Record<string, unknown>
+
+    assert.strictEqual(firstInstall.code, 0)
+    assert.strictEqual(secondInstall.code, 0)
+    assert.strictEqual(result.code, 0)
+    assert.match(readFileSync(sshConfigPath, 'utf8'), /^Host shared-devcontainer$/mu)
+    assert.deepStrictEqual(codexConfig.remoteConnections, [
+      {
+        sshAlias: alias,
+        projects: [
+          {
+            remotePath: secondRemotePath,
+            label: secondWorkspaceName
+          }
+        ]
+      }
+    ])
+    assert.deepStrictEqual(codexState['remote-projects'], [
+      {
+        id: 'second-project',
+        hostId,
+        remotePath: secondRemotePath,
+        label: secondWorkspaceName
+      }
+    ])
+    assert.deepStrictEqual(codexState['codex-managed-remote-connections'], [
+      {
+        hostId,
+        displayName: alias,
+        alias
+      }
+    ])
+    assert.strictEqual(codexState['selected-remote-host-id'], hostId)
+    assert.deepStrictEqual(codexState['remote-connection-auto-connect-by-host-id'], {
+      [hostId]: true
+    })
+    assert.deepStrictEqual(codexState['agent-mode-by-host-id'], {
+      [hostId]: 'auto'
+    })
+    assert.doesNotMatch(result.stdout, /Removed SSH alias:/)
   })
 
   test('uninstalls selected SSH targets together without removing the SSH alias', () => {
@@ -6323,6 +6456,109 @@ describe('Codex app config injection', () => {
     assert.deepStrictEqual(nextState['electron-persisted-atom-state']['agent-mode-by-host-id'], {
       [otherHostId]: 'full-access'
     })
+  })
+
+  test('preserves shared Codex host state until its last project is removed', () => {
+    const entry = {
+      sshAlias: 'shared-devcontainer',
+      remotePath: '/workspaces/first',
+      label: 'First'
+    }
+    const remainingEntry = {
+      sshAlias: entry.sshAlias,
+      remotePath: '/workspaces/second',
+      label: 'Second'
+    }
+    const hostId = codexDiscoveredRemoteHostId(entry.sshAlias)
+    const hostSettings = {
+      'remote-connection-analytics-id-by-host-id': {
+        [hostId]: 'shared-analytics'
+      },
+      'remote-connection-auto-connect-by-host-id': {
+        [hostId]: true
+      },
+      'preferred-non-full-access-agent-mode-by-host-id': {
+        [hostId]: 'read-only'
+      },
+      'agent-mode-by-host-id': {
+        [hostId]: 'auto'
+      },
+      'unread-thread-ids-by-host-v1': {
+        [hostId]: ['thread-1']
+      }
+    }
+    const state = {
+      ...hostSettings,
+      'codex-managed-remote-connections': [
+        {
+          hostId,
+          displayName: entry.sshAlias,
+          alias: entry.sshAlias
+        }
+      ],
+      'selected-remote-host-id': hostId,
+      'project-order': ['first-project', 'second-project'],
+      'sidebar-collapsed-groups': {
+        'first-project': true,
+        'second-project': true
+      },
+      'remote-projects': [
+        {
+          id: 'first-project',
+          hostId,
+          remotePath: entry.remotePath,
+          label: entry.label
+        },
+        {
+          id: 'second-project',
+          hostId,
+          remotePath: remainingEntry.remotePath,
+          label: remainingEntry.label
+        }
+      ],
+      'electron-persisted-atom-state': {
+        ...hostSettings,
+        'codex-managed-remote-connections': [
+          {
+            hostId,
+            displayName: entry.sshAlias,
+            alias: entry.sshAlias
+          }
+        ],
+        'selected-remote-host-id': hostId
+      }
+    }
+
+    const afterFirstRemoval = removeCodexGlobalStateProject(state, entry)
+    const afterLastRemoval = removeCodexGlobalStateProject(afterFirstRemoval, remainingEntry)
+    const atomAfterFirstRemoval = afterFirstRemoval['electron-persisted-atom-state'] as Record<string, unknown>
+    const atomAfterLastRemoval = afterLastRemoval['electron-persisted-atom-state'] as Record<string, unknown>
+
+    assert.deepStrictEqual(afterFirstRemoval['remote-projects'], [
+      {
+        id: 'second-project',
+        hostId,
+        remotePath: remainingEntry.remotePath,
+        label: remainingEntry.label
+      }
+    ])
+    assert.deepStrictEqual(afterFirstRemoval['codex-managed-remote-connections'], state['codex-managed-remote-connections'])
+    assert.strictEqual(afterFirstRemoval['selected-remote-host-id'], hostId)
+    for (const [key, value] of Object.entries(hostSettings)) {
+      assert.deepStrictEqual(afterFirstRemoval[key], value)
+      assert.deepStrictEqual(atomAfterFirstRemoval[key], value)
+    }
+    assert.deepStrictEqual(atomAfterFirstRemoval['codex-managed-remote-connections'], state['codex-managed-remote-connections'])
+    assert.strictEqual(atomAfterFirstRemoval['selected-remote-host-id'], hostId)
+    assert.deepStrictEqual(afterLastRemoval['remote-projects'], [])
+    assert.deepStrictEqual(afterLastRemoval['codex-managed-remote-connections'], [])
+    assert.strictEqual(afterLastRemoval['selected-remote-host-id'], undefined)
+    assert.deepStrictEqual(atomAfterLastRemoval['codex-managed-remote-connections'], [])
+    assert.strictEqual(atomAfterLastRemoval['selected-remote-host-id'], undefined)
+    for (const key of Object.keys(hostSettings)) {
+      assert.deepStrictEqual(afterLastRemoval[key], {})
+      assert.deepStrictEqual(atomAfterLastRemoval[key], {})
+    }
   })
 
   test('canonicalizes matching Codex global sidebar state and preserves project identity', () => {

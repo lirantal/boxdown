@@ -338,6 +338,10 @@ function cleanupCodexStateContainer (container: Record<string, unknown>, hostId:
     })
   }
 
+  return removedProjectIds
+}
+
+function cleanupCodexHostStateContainer (container: Record<string, unknown>, hostId: string): void {
   const managedConnections = container['codex-managed-remote-connections']
   if (Array.isArray(managedConnections)) {
     container['codex-managed-remote-connections'] = managedConnections.filter((connection) => !isRecord(connection) || connection.hostId !== hostId)
@@ -356,8 +360,11 @@ function cleanupCodexStateContainer (container: Record<string, unknown>, hostId:
   if (container['selected-remote-host-id'] === hostId) {
     delete container['selected-remote-host-id']
   }
+}
 
-  return removedProjectIds
+function hasCodexStateProjectForHost (container: Record<string, unknown>, hostId: string): boolean {
+  const remoteProjects = container['remote-projects']
+  return Array.isArray(remoteProjects) && remoteProjects.some((project) => isRecord(project) && project.hostId === hostId)
 }
 
 function cleanupProjectReferences (state: Record<string, unknown>, atomState: unknown, removedProjectIds: Set<string>): void {
@@ -396,6 +403,16 @@ export function removeCodexGlobalStateProject (
   if (isRecord(atomState)) {
     for (const projectId of cleanupCodexStateContainer(atomState, hostId, remotePaths)) {
       removedProjectIds.add(projectId)
+    }
+  }
+
+  const hostHasRemainingProject = hasCodexStateProjectForHost(nextState, hostId) ||
+    (isRecord(atomState) && hasCodexStateProjectForHost(atomState, hostId))
+
+  if (!hostHasRemainingProject) {
+    cleanupCodexHostStateContainer(nextState, hostId)
+    if (isRecord(atomState)) {
+      cleanupCodexHostStateContainer(atomState, hostId)
     }
   }
 
