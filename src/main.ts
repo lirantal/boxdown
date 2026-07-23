@@ -252,7 +252,7 @@ export function parseCliArgs (argv: string[]): ParsedCli {
     }
 
     if (targets.length > 0) {
-      throw new Error('--target is only supported with setup and ssh install')
+      throw new Error('--target is only supported with setup, ssh install, and ssh uninstall')
     }
 
     if (tunnelPorts.length > 0) {
