@@ -502,6 +502,17 @@ describe('CLI parsing', () => {
       json: false,
       verbose: false
     })
+    assert.deepStrictEqual(parseCliArgs([
+      'ssh', 'uninstall', '--target', 'codex', '--target', 'claude', '--target', 'codex'
+    ]), {
+      command: 'ssh-uninstall',
+      workspace: undefined,
+      alias: undefined,
+      targets: ['codex', 'claude'],
+      recreate: false,
+      json: false,
+      verbose: false
+    })
   })
 
   test('parses tunnel ports', () => {
@@ -659,9 +670,15 @@ describe('CLI parsing', () => {
     assert.throws(() => parseCliArgs(['install-ssh-config']), /Unknown command/)
     assert.throws(() => parseCliArgs(['start', '--json']), /--json is only supported with status and list/)
     assert.throws(() => parseCliArgs(['ssh', 'install', '--target', 'cursor']), /Unsupported ssh install target: cursor/)
-    assert.throws(() => parseCliArgs(['start', '--target', 'codex']), /--target is only supported with setup and ssh install/)
+    assert.throws(
+      () => parseCliArgs(['start', '--target', 'codex']),
+      /--target is only supported with setup, ssh install, and ssh uninstall/
+    )
     assert.throws(() => parseCliArgs(['start', '--port', '3030']), /--port is only supported with tunnel/)
-    assert.throws(() => parseCliArgs(['codex', '--target', 'codex']), /--target is only supported with setup and ssh install/)
+    assert.throws(
+      () => parseCliArgs(['codex', '--target', 'claude']),
+      /--target is only supported with setup, ssh install, and ssh uninstall/
+    )
     assert.throws(() => parseCliArgs(['codex', '--port', '3030']), /--port is only supported with tunnel/)
     assert.throws(() => parseCliArgs(['start', '--dry-run']), /Unknown option: --dry-run/)
     assert.throws(() => parseCliArgs(['start', '--details']), /--details is only supported with list/)
@@ -691,6 +708,7 @@ describe('CLI parsing', () => {
 
     assert.match(USAGE, /Commands:/)
     assert.match(USAGE, /boxdown setup \[--workspace <path>\] \[--alias <name>\] \[--recreate\] \[--target <name>\]\.\.\./)
+    assert.match(USAGE, /boxdown ssh uninstall \[--workspace <path>\] \[--alias <name>\] \[--target <name>\]\.\.\./)
     assert.match(USAGE, /boxdown list \[--details\] \[--json\|--format json\]/)
     assert.match(USAGE, /boxdown status \[--workspace <path>\] \[--alias <name>\] \[--json\|--format json\]/)
     assert.match(USAGE, /setup\s+Prepare the workspace devcontainer/)
@@ -727,8 +745,8 @@ describe('CLI parsing', () => {
     assert.match(USAGE, /ssh install\s+Install or update an SSH host alias/)
     assert.match(USAGE, /ssh uninstall\s+Remove Boxdown's managed SSH host alias/)
     assert.doesNotMatch(USAGE, /ssh-config/)
-    assert.match(USAGE, /--target <name>\s+Optional SSH install target/)
-    assert.match(USAGE, /Repeatable\. Supported by[\s\S]*setup and ssh install: codex, claude\./)
+    assert.match(USAGE, /--target <name>\s+Optional SSH integration target/)
+    assert.match(USAGE, /Repeatable\. Supported by[\s\S]*setup, ssh install, and ssh uninstall: codex, claude\./)
     assert.match(USAGE, /ssh-proxy\s+Internal command used by the generated SSH/)
     assert.match(USAGE, /tunnel\s+Start or reuse the devcontainer/)
     assert.match(USAGE, /boxdown tunnel \[--port <port>\]/)

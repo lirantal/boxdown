@@ -81,7 +81,7 @@ export const USAGE = `Usage:
   boxdown purge [--workspace <path|ssh-alias|repo>] [--alias <name>]
   boxdown doctor [--workspace <path>]
   boxdown ssh install [--workspace <path>] [--alias <name>] [--target <name>]...
-  boxdown ssh uninstall [--workspace <path>] [--alias <name>]
+  boxdown ssh uninstall [--workspace <path>] [--alias <name>] [--target <name>]...
   boxdown ssh-proxy [--workspace <path>] [--alias <name>]
   boxdown tunnel [--port <port>] [--port <local:remote>] [--workspace <path>] [--alias <name>]
   boxdown refresh-gh-token [--workspace <path>]
@@ -114,8 +114,8 @@ Commands:
   doctor                    Check required host tools and Boxdown assets.
   ssh install               Install or update an SSH host alias for the workspace
                             devcontainer.
-  ssh uninstall             Remove Boxdown's managed SSH host alias block and
-                            matching Codex/Claude app entries.
+  ssh uninstall             Remove Boxdown's managed SSH host alias block or
+                            selected Codex/Claude app integrations.
   ssh-proxy                 Internal command used by the generated SSH
                             ProxyCommand. Starts or reuses the devcontainer and
                             bridges SSH over docker exec.
@@ -134,8 +134,8 @@ Options:
                       directory when it is tracked; otherwise interactive
                       terminals prompt for tracked workspaces.
   --alias <name>      SSH host alias. Defaults to <repo-name>-devcontainer.
-  --target <name>     Optional SSH install target. Repeatable. Supported by
-                      setup and ssh install: codex, claude.
+  --target <name>     Optional SSH integration target. Repeatable. Supported by
+                      setup, ssh install, and ssh uninstall: codex, claude.
   --port <port>       Tunnel a local port to the same remote port, or use
                       <local:remote>. Repeatable. Supported by tunnel.
   --recreate          Remove the existing devcontainer before starting.
@@ -211,8 +211,8 @@ export function parseCliArgs (argv: string[]): ParsedCli {
       throw new Error('-- passthrough is only supported with coding-agent commands')
     }
 
-    if (targets.length > 0 && command !== 'setup' && command !== 'ssh-install') {
-      throw new Error('--target is only supported with setup and ssh install')
+    if (targets.length > 0 && command !== 'setup' && command !== 'ssh-install' && command !== 'ssh-uninstall') {
+      throw new Error('--target is only supported with setup, ssh install, and ssh uninstall')
     }
 
     if (tunnelPorts.length > 0 && command !== 'tunnel') {
