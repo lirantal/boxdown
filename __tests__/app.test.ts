@@ -5159,6 +5159,24 @@ describe('interactive shell setup', () => {
     assert.match(script, /export COLORTERM="\$\{COLORTERM:-truecolor\}"/)
     assert.match(script, /exec "\$@"/)
   })
+
+  test('preserves coding-agent arguments while normalizing the TTY width', () => {
+    const script = interactiveCommandScript().replace('if [ -t 0 ]; then', 'if true; then')
+    const result = spawnSync('bash', [
+      '-c',
+      `stty() { printf '24 61\\n'; }\n${script}`,
+      'boxdown-agent',
+      'printf',
+      '%s\\n',
+      'claude'
+    ], {
+      encoding: 'utf8',
+      env: { ...process.env, BASH_ENV: '/dev/null' }
+    })
+
+    assert.strictEqual(result.status, 0)
+    assert.strictEqual(result.stdout, 'claude\n')
+  })
 })
 
 describe('GitHub Git auth setup', () => {
