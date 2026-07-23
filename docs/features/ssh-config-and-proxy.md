@@ -8,6 +8,8 @@ boxdown setup --target claude
 boxdown ssh install
 boxdown ssh install --target codex
 boxdown ssh install --target claude
+boxdown ssh uninstall --target claude
+boxdown ssh uninstall --target codex --target claude
 boxdown ssh uninstall
 boxdown ssh-proxy
 boxdown tunnel --port 3030
@@ -45,11 +47,20 @@ alias. The menu supports selecting multiple targets or skipping all optional
 targets. In non-interactive contexts, Boxdown skips optional targets instead of
 blocking and prints the explicit `--target` form for scripts.
 
-`boxdown ssh uninstall` removes the Boxdown-managed marker block for the
-selected alias, the matching Codex app remote project entry, and the matching
-Codex persisted sidebar state for the workspace. It leaves unrelated OpenSSH
-config entries, unrelated Codex remote projects, generated state, and SSH key
-files in place.
+`boxdown ssh uninstall` has two cleanup modes:
+
+| Invocation | SSH alias block | Removed integrations |
+| --- | --- | --- |
+| `boxdown ssh uninstall --target claude` | Preserved | Claude only |
+| `boxdown ssh uninstall --target codex --target claude` | Preserved | Codex and Claude |
+| `boxdown ssh uninstall` | Removed | All registered targets |
+
+`--target` is repeatable. Supplying every known target is still targeted mode,
+so the Boxdown-managed SSH alias remains in place. Only an unqualified
+uninstall removes the alias. Targeted cleanup removes only the selected app
+integration; complete cleanup removes the marker block for the selected alias
+and every registered integration. Both modes leave unrelated OpenSSH config
+entries, unrelated app projects, generated state, and SSH key files in place.
 
 `boxdown status` reports whether that Boxdown-managed block is `installed`,
 `missing`, or `outdated`. It only recognizes blocks wrapped in Boxdown's marker

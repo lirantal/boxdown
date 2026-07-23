@@ -60,6 +60,13 @@ Boxdown writes the Claude SSH remote entry needed to point Claude at the same
 Boxdown-managed SSH alias. On uninstall, it removes that matching Claude SSH
 remote and trusted-host entry.
 
+Each app integration is independently removable through `boxdown ssh uninstall
+--target <name>`, which preserves the Boxdown-managed SSH alias. The target
+registry owns each integration's lifecycle so future targets can participate in
+the same cleanup flow. `boxdown ssh uninstall` without `--target` and
+`boxdown purge` both perform full cleanup, removing the alias and all known
+integrations.
+
 ## Container Asset Mounts
 
 The generated config mounts `assets/devcontainer/` read-only into the container

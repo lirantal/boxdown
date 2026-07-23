@@ -126,12 +126,18 @@ directory. Repeat it with `down` to remove multiple workspace containers in one
 command. When `down` runs from a directory that is not a known Boxdown
 workspace, interactive terminals show a workspace picker instead.
 
-Remove Boxdown's managed SSH host block and matching Codex/Claude app entries
-when you no longer need the alias:
+Remove one app integration while keeping the SSH alias, or remove the alias and
+all known integrations when you no longer need it:
 
 ```sh
+npx boxdown ssh uninstall --target claude
+npx boxdown ssh uninstall --target codex
 npx boxdown ssh uninstall
 ```
+
+`--target` is repeatable and removes only the selected agent integration; the
+Boxdown-managed SSH alias remains in place. Omitting `--target` removes the
+alias and all known integrations.
 
 ### Commands
 
