@@ -1,5 +1,11 @@
 # boxdown
 
+## 1.3.0
+
+### Minor Changes
+
+- [`6250ffd`](https://github.com/lirantal/boxdown/commit/6250ffde708704d92457dbef2d52eaa57fe3827d) Thanks [@lirantal](https://github.com/lirantal)! - fixes for setup and start readiness checks
+
 ## 1.2.1
 
 ### Patch Changes
