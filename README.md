@@ -17,7 +17,10 @@
   <a href="https://github.com/lirantal/boxdown/actions/workflows/ci.yml"><img src="https://github.com/lirantal/boxdown/actions/workflows/ci.yml/badge.svg?branch=main" alt="build"/></a>
   <a href="https://app.codecov.io/gh/lirantal/boxdown"><img src="https://badgen.net/codecov/c/github/lirantal/boxdown" alt="codecov"/></a>
   <a href="./SECURITY.md"><img src="https://img.shields.io/badge/Security-Responsible%20Disclosure-yellow.svg" alt="Responsible Disclosure Policy" /></a>
+  
 </p>
+
+![boxdown setup demo](.github/boxdown-setup-screenshot.png)
 
 ## Install
 
@@ -58,6 +61,10 @@ npx boxdown start
 ```
 
 Boxdown ships and invokes its own `@devcontainers/cli` dependency. It does not require a host/global Dev Containers CLI install.
+
+## Boxdown Demo
+
+<https://github.com/user-attachments/assets/2c53a4c7-13d9-4b81-8540-b0ab6a624f35>
 
 ### Portless SSH
 
