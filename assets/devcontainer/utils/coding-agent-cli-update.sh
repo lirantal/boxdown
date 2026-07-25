@@ -30,6 +30,7 @@ usage() {
   cat >&2 <<'EOF'
 Usage: coding-agent-cli-update.sh <install|update-now|maybe-update> [codex|opencode|claude|antigravity...]
        coding-agent-cli-update.sh ensure <codex|opencode|claude|antigravity...>
+       coding-agent-cli-update.sh initialize-stamps
 EOF
 }
 
@@ -138,6 +139,19 @@ ensure_state_dir() {
   local lock_dir="$2"
 
   mkdir -p "$(dirname "${stamp_file}")" "$(dirname "${lock_dir}")"
+}
+
+initialize_default_stamps() {
+  local agent
+  local stamp_file
+  local lock_dir
+
+  for agent in "${DEFAULT_AGENTS[@]}"; do
+    stamp_file="$(agent_stamp_file "${agent}")"
+    lock_dir="$(agent_lock_dir "${agent}")"
+    ensure_state_dir "${stamp_file}" "${lock_dir}"
+    touch "${stamp_file}"
+  done
 }
 
 stamp_fresh() {
@@ -619,6 +633,15 @@ main() {
   shift
 
   prepend_agent_bin_paths
+
+  if [ "${action}" = "initialize-stamps" ]; then
+    if [ "$#" -ne 0 ]; then
+      usage
+      return 1
+    fi
+    initialize_default_stamps
+    return
+  fi
 
   if [ "$#" -eq 0 ]; then
     if [ "${action}" = "ensure" ]; then

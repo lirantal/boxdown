@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+if [ "$#" -ne 0 ]; then
+  exit 64
+fi
+
+node_uid="$(id -u node)"
+node_gid="$(id -g node)"
+
+exec /usr/local/bin/node \
+  /opt/boxdown/devcontainer/utils/ssh-agent-proxy.mjs \
+  --source /run/boxdown/ssh-agent.sock \
+  --target /run/boxdown/ssh-agent-node.sock \
+  --uid "${node_uid}" \
+  --gid "${node_gid}"

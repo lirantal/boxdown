@@ -1,14 +1,17 @@
 import {execFileSync} from 'node:child_process'
+import {createHash} from 'node:crypto'
 import {readFileSync} from 'node:fs'
 import {resolve} from 'node:path'
 import {fileURLToPath} from 'node:url'
 
 const releasePackageName = 'boxdown'
 const imageSource = 'https://github.com/lirantal/boxdown'
+const toolLockLabel = 'io.boxdown.tools-lock.sha256'
 const requiredLabels = [
   'org.opencontainers.image.source',
   'org.opencontainers.image.revision',
-  'org.opencontainers.image.version'
+  'org.opencontainers.image.version',
+  toolLockLabel
 ] as const
 
 type ImageLabels = Record<string, string | undefined>
@@ -89,6 +92,7 @@ function assertCurrentReleaseIdentity(
 export async function checkImageRelease(
   version: string,
   revision: string,
+  toolLockSha256: string,
   inspect: InspectImage
 ): Promise<'publish' | 'reuse'> {
   const labels = await inspect()
@@ -97,7 +101,8 @@ export async function checkImageRelease(
   const expectedLabels: ImageLabels = {
     'org.opencontainers.image.source': imageSource,
     'org.opencontainers.image.revision': revision,
-    'org.opencontainers.image.version': version
+    'org.opencontainers.image.version': version,
+    [toolLockLabel]: toolLockSha256
   }
   const mismatchedLabel = Object.entries(expectedLabels).find(
     ([label, expected]) => labels[label] !== expected
@@ -179,6 +184,12 @@ function requiredEnvironment(name: string): string {
   return value
 }
 
+function toolLockSha256(): string {
+  return createHash('sha256')
+    .update(readFileSync(resolve('assets/image/tools.lock.json')))
+    .digest('hex')
+}
+
 async function main(arguments_: string[]): Promise<void> {
   const [command] = arguments_
   const packageName = requiredEnvironment('RELEASE_PACKAGE_NAME')
@@ -204,6 +215,7 @@ async function main(arguments_: string[]): Promise<void> {
   const decision = await checkImageRelease(
     version,
     revision,
+    toolLockSha256(),
     async () => inspectReleaseLabels(reference)
   )
   process.stdout.write(`${decision}\n`)

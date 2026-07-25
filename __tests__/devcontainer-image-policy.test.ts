@@ -34,12 +34,18 @@ test('uses the release-matched Boxdown image without Dev Container Features', ()
     image: string
     features?: Record<string, unknown>
     overrideFeatureInstallOrder?: string[]
+    updateRemoteUserUID?: boolean
   }>(readFileSync(devcontainerPath, 'utf8'))
   const packageJson = JSON.parse(readFileSync(packagePath, 'utf8')) as { version: string }
 
   assert.equal(devcontainer.image, `ghcr.io/lirantal/boxdown:${packageJson.version}`)
   assert.equal(devcontainer.features, undefined)
   assert.equal(devcontainer.overrideFeatureInstallOrder, undefined)
+  assert.equal(
+    devcontainer.updateRemoteUserUID,
+    false,
+    'published images must not be replaced by a locally built UID-mutated derivative'
+  )
 })
 
 test('scopes Renovate to monthly Dockerfile Node base image digest updates', () => {

@@ -25,6 +25,39 @@ as_root() {
   fi
 }
 
+run_ssh_runtime_privileged() {
+  local action="$1"
+
+  if [ -x /usr/local/sbin/boxdown-ssh-runtime ]; then
+    if [ "$(id -u)" -eq 0 ]; then
+      /usr/local/sbin/boxdown-ssh-runtime "${action}"
+    else
+      sudo -n /usr/local/sbin/boxdown-ssh-runtime "${action}"
+    fi
+    return
+  fi
+
+  # Legacy Feature-built containers do not contain the fixed-purpose helper.
+  case "${action}" in
+    prepare)
+      as_root ssh-keygen -A
+      as_root install -d -m 0755 /run/sshd
+      ;;
+    validate)
+      as_root /usr/sbin/sshd -t \
+        -o PubkeyAuthentication=yes \
+        -o PasswordAuthentication=no \
+        -o KbdInteractiveAuthentication=no \
+        -o AllowTcpForwarding=yes \
+        -o AllowStreamLocalForwarding=yes \
+        -o PermitTTY=yes
+      ;;
+    *)
+      return 64
+      ;;
+  esac
+}
+
 ssh_user_home() {
   getent passwd "${SSH_USER}" | cut -d: -f6
 }
@@ -132,17 +165,15 @@ install_authorized_key_if_present() {
   authorized_keys="${user_home}/.ssh/authorized_keys"
   public_key="$(sed -n '1p' "${PUBLIC_KEY_FILE}")"
 
-  as_root install -d -m 0700 -o "${SSH_USER}" -g "${SSH_USER}" "${user_home}/.ssh"
-  as_root touch "${authorized_keys}"
-  as_root chown "${SSH_USER}:${SSH_USER}" "${authorized_keys}"
-  as_root chmod 0600 "${authorized_keys}"
+  install -d -m 0700 "${user_home}/.ssh"
+  touch "${authorized_keys}"
+  chmod 0600 "${authorized_keys}"
 
-  if ! as_root grep -qxF "${public_key}" "${authorized_keys}"; then
-    printf '%s\n' "${public_key}" | as_root tee -a "${authorized_keys}" >/dev/null
+  if ! grep -qxF "${public_key}" "${authorized_keys}"; then
+    printf '%s\n' "${public_key}" >> "${authorized_keys}"
   fi
 
-  as_root chown "${SSH_USER}:${SSH_USER}" "${authorized_keys}"
-  as_root chmod 0600 "${authorized_keys}"
+  chmod 0600 "${authorized_keys}"
 }
 
 ensure_workspace_home_symlink() {
@@ -162,8 +193,7 @@ ensure_workspace_home_symlink() {
     return 0
   fi
 
-  as_root ln -sfn "${WORKSPACE_FOLDER}" "${link_path}"
-  as_root chown -h "${SSH_USER}:${SSH_USER}" "${link_path}"
+  ln -sfn "${WORKSPACE_FOLDER}" "${link_path}"
 }
 
 ensure_runtime_ready() {
@@ -174,17 +204,10 @@ ensure_runtime_ready() {
 
   progress "Preparing SSH daemon runtime"
   ensure_openssh_server_configured
-  as_root ssh-keygen -A
-  as_root install -d -m 0755 /run/sshd
+  run_ssh_runtime_privileged prepare
   install_authorized_key_if_present
   ensure_workspace_home_symlink
-  as_root /usr/sbin/sshd -t \
-    -o PubkeyAuthentication=yes \
-    -o PasswordAuthentication=no \
-    -o KbdInteractiveAuthentication=no \
-    -o AllowTcpForwarding=yes \
-    -o AllowStreamLocalForwarding=yes \
-    -o PermitTTY=yes
+  run_ssh_runtime_privileged validate
 }
 
 main() {

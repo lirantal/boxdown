@@ -7,8 +7,10 @@ const requiredPlatforms = ['linux/amd64', 'linux/arm64'] as const
 const requiredLabels = [
   'org.opencontainers.image.source',
   'org.opencontainers.image.revision',
-  'org.opencontainers.image.version'
+  'org.opencontainers.image.version',
+  'io.boxdown.tools-lock.sha256'
 ] as const
+const imageSource = 'https://github.com/lirantal/boxdown'
 
 interface Descriptor {
   digest?: string
@@ -42,6 +44,7 @@ interface ImageSizeBudget {
 export interface VerifyImageManifestOptions {
   manifest: ManifestIndex
   labels: Record<string, string | undefined>
+  expectedLabels: Record<string, string>
   compressedBytes: number
   budget: ImageSizeBudget
 }
@@ -63,7 +66,7 @@ function assertBudget(budget: ImageSizeBudget): void {
 }
 
 export function verifyImageManifest(options: VerifyImageManifestOptions): void {
-  const {manifest, labels, compressedBytes, budget} = options
+  const {manifest, labels, expectedLabels, compressedBytes, budget} = options
   const platforms = new Set((manifest.manifests ?? []).map(platformName))
 
   for (const platform of requiredPlatforms) {
@@ -71,8 +74,14 @@ export function verifyImageManifest(options: VerifyImageManifestOptions): void {
   }
 
   for (const label of requiredLabels) {
-    if (typeof labels[label] !== 'string' || labels[label]!.length === 0) {
-      throw new Error(`image is missing ${label} label`)
+    const expected = expectedLabels[label]
+    if (typeof expected !== 'string' || expected.length === 0) {
+      throw new Error(`image verifier is missing expected ${label} label`)
+    }
+    if (labels[label] !== expected) {
+      throw new Error(
+        `image ${label} label is ${labels[label] ?? 'missing'}, expected ${expected}`
+      )
     }
   }
 
@@ -118,7 +127,11 @@ function resolveOciIndex(directory: string): ManifestIndex {
   return imageIndex
 }
 
-function verifyOciLayout(directory: string, budgetPath: string): void {
+function verifyOciLayout(
+  directory: string,
+  budgetPath: string,
+  expectedLabels: Record<string, string>
+): void {
   const manifest = resolveOciIndex(directory)
   const budget = readJson<ImageSizeBudget>(budgetPath)
   let compressedBytes = 0
@@ -137,7 +150,7 @@ function verifyOciLayout(directory: string, budgetPath: string): void {
   }
 
   for (const labels of platformLabels) {
-    verifyImageManifest({manifest, labels, compressedBytes, budget})
+    verifyImageManifest({manifest, labels, expectedLabels, compressedBytes, budget})
   }
   for (const label of requiredLabels) {
     if (platformLabels.some(labels => labels[label] !== platformLabels[0]?.[label])) {
@@ -145,7 +158,7 @@ function verifyOciLayout(directory: string, budgetPath: string): void {
     }
   }
   if (platformLabels.length === 0) {
-    verifyImageManifest({manifest, labels: {}, compressedBytes, budget})
+    verifyImageManifest({manifest, labels: {}, expectedLabels, compressedBytes, budget})
   }
 }
 
@@ -167,7 +180,11 @@ export function registryPlatformReference(
   return `${imageName}@${platformDigest}`
 }
 
-function verifyRegistryImage(reference: string, budgetPath: string): void {
+function verifyRegistryImage(
+  reference: string,
+  budgetPath: string,
+  expectedLabels: Record<string, string>
+): void {
   const manifest = inspectJson<ManifestIndex>('--raw', reference)
   const budget = readJson<ImageSizeBudget>(budgetPath)
   let compressedBytes = 0
@@ -176,7 +193,7 @@ function verifyRegistryImage(reference: string, budgetPath: string): void {
   for (const platform of requiredPlatforms) {
     const descriptor = (manifest.manifests ?? []).find(candidate => platformName(candidate) === platform)
     if (descriptor?.digest === undefined) {
-      verifyImageManifest({manifest, labels: {}, compressedBytes, budget})
+      verifyImageManifest({manifest, labels: {}, expectedLabels, compressedBytes, budget})
       return
     }
 
@@ -197,6 +214,7 @@ function verifyRegistryImage(reference: string, budgetPath: string): void {
     verifyImageManifest({
       manifest,
       labels: platformLabels.at(-1)!,
+      expectedLabels,
       compressedBytes,
       budget
     })
@@ -209,17 +227,32 @@ function verifyRegistryImage(reference: string, budgetPath: string): void {
 }
 
 function main(arguments_: string[]): void {
-  const [sourceType, source, budgetPath] = arguments_
-  if (source === undefined || budgetPath === undefined) {
+  const [sourceType, source, budgetPath, revision, version, toolLockSha256] = arguments_
+  if (
+    source === undefined ||
+    budgetPath === undefined ||
+    revision === undefined ||
+    version === undefined ||
+    toolLockSha256 === undefined
+  ) {
     throw new Error(
-      'usage: verify-image-manifest.ts <oci-layout|registry> <source> <size-budget.json>'
+      'usage: verify-image-manifest.ts <oci-layout|registry> <source> <size-budget.json> <revision> <version> <tool-lock-sha256>'
     )
+  }
+  if (!/^[a-f0-9]{64}$/.test(toolLockSha256)) {
+    throw new Error('invalid tool lock SHA-256')
+  }
+  const expectedLabels = {
+    'org.opencontainers.image.source': imageSource,
+    'org.opencontainers.image.revision': revision,
+    'org.opencontainers.image.version': version,
+    'io.boxdown.tools-lock.sha256': toolLockSha256
   }
 
   if (sourceType === 'oci-layout') {
-    verifyOciLayout(source, budgetPath)
+    verifyOciLayout(source, budgetPath, expectedLabels)
   } else if (sourceType === 'registry') {
-    verifyRegistryImage(source, budgetPath)
+    verifyRegistryImage(source, budgetPath, expectedLabels)
   } else {
     throw new Error(`unsupported image source type: ${sourceType ?? ''}`)
   }

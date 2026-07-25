@@ -618,9 +618,11 @@ export async function ensureContainerCodingAgentCli (
   }
 }
 
-export async function runSshdProxy (containerId: string, options: { logger?: WorkspaceCommandLogger } = {}): Promise<number> {
-  return runInteractive('docker', [
+export function sshdProxyDockerArgs (containerId: string): string[] {
+  return [
     'exec',
+    '--user',
+    'root',
     '-i',
     containerId,
     '/usr/sbin/sshd',
@@ -639,7 +641,11 @@ export async function runSshdProxy (containerId: string, options: { logger?: Wor
     'AllowStreamLocalForwarding=yes',
     '-o',
     'PermitTTY=yes'
-  ], { logger: options.logger })
+  ]
+}
+
+export async function runSshdProxy (containerId: string, options: { logger?: WorkspaceCommandLogger } = {}): Promise<number> {
+  return runInteractive('docker', sshdProxyDockerArgs(containerId), { logger: options.logger })
 }
 
 export function sshTunnelArgs (alias: string, ports: TunnelPortForward[], options: SshTunnelOptions = {}): string[] {

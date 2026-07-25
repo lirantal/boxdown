@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+case "${1:-}" in
+  prepare)
+    if [ "$#" -ne 1 ]; then
+      exit 64
+    fi
+    /usr/bin/ssh-keygen -A
+    /usr/bin/install -d -m 0755 /run/sshd
+    ;;
+  validate)
+    if [ "$#" -ne 1 ]; then
+      exit 64
+    fi
+    exec /usr/sbin/sshd -t \
+      -o PubkeyAuthentication=yes \
+      -o PasswordAuthentication=no \
+      -o KbdInteractiveAuthentication=no \
+      -o AllowTcpForwarding=yes \
+      -o AllowStreamLocalForwarding=yes \
+      -o PermitTTY=yes
+    ;;
+  *)
+    exit 64
+    ;;
+esac

@@ -15,7 +15,7 @@ import { codingAgentBinary, codingAgentFromCommand } from '../src/coding-agents.
 import { color, formatPromptEnd, formatPromptTitle, promptRail, selectedMark } from '../src/cli-style.ts'
 import { buildGeneratedDevcontainerConfig, publishContainerPortFromConfig } from '../src/config.ts'
 import { BOXDOWN_CONTAINER_AGENTS_DIR, BOXDOWN_CONTAINER_CODEX_AUTH_PATH, BOXDOWN_CONTAINER_CODEX_DIR, BOXDOWN_CONTAINER_GITCONFIG_PATH, BOXDOWN_CONTAINER_HOST_GITCONFIG_DIR, BOXDOWN_CONTAINER_SECRET_ENV_BOOTSTRAP, BOXDOWN_CONTAINER_SECRET_ENV_DIR, DEVCONTAINER_CLI_VERSION } from '../src/constants.ts'
-import { codingAgentDevcontainerExecArgs, isPublishedBoxdownImage, parseDockerInspectImage, sshTunnelArgs, startDevcontainer } from '../src/devcontainer.ts'
+import { codingAgentDevcontainerExecArgs, isPublishedBoxdownImage, parseDockerInspectImage, sshdProxyDockerArgs, sshTunnelArgs, startDevcontainer } from '../src/devcontainer.ts'
 import { resolveDevcontainerCli } from '../src/devcontainer-cli.ts'
 import { doctorHasFailures, formatDoctorText, runDoctorChecks } from '../src/doctor.ts'
 import { parseSshPublicKey, reportGitSigningPlan, resolveConfiguredSshSigningKey, resolveGitSigningPlan, selectGitSigningKey, type GitSigningPlan, type GitSigningReason } from '../src/git-signing.ts'
@@ -3087,6 +3087,19 @@ describe('coding-agent command mapping', () => {
   })
 })
 
+describe('SSH proxy container execution', () => {
+  test('starts inetd-mode sshd explicitly as root in the non-root image', () => {
+    assert.deepStrictEqual(sshdProxyDockerArgs('container-123').slice(0, 5), [
+      'exec',
+      '--user',
+      'root',
+      '-i',
+      'container-123'
+    ])
+    assert.equal(sshdProxyDockerArgs('container-123').includes('/usr/sbin/sshd'), true)
+  })
+})
+
 describe('host tool path', () => {
   test('adds GUI-missing Docker and Homebrew paths while preserving existing priority', () => {
     const home = tempDir('host-tool-path-home')
@@ -5160,7 +5173,7 @@ describe('git signing selection', () => {
 
 describe('SSH-agent proxy asset', () => {
   test('forwards node SSH-agent connections', async () => {
-    const root = mkdtempSync(join(process.cwd(), '.ssh-agent-proxy-'))
+    const root = mkdtempSync('/private/tmp/boxdown-ssh-agent-proxy-')
     const sourcePath = join(root, 'source.sock')
     const targetPath = join(root, 'target.sock')
     const proxyPath = join(assetsDevcontainerDir, 'utils', 'ssh-agent-proxy.mjs')
@@ -7491,6 +7504,43 @@ describe('packaged assets', () => {
 
     for (const agent of ['codex', 'opencode', 'claude', 'antigravity']) {
       writeFileSync(join(stateDir, `${agent}.stamp`), '')
+    }
+
+    execFileSync('bash', [updaterPath, 'maybe-update'], {
+      env: {
+        ...process.env,
+        BOXDOWN_CODING_AGENT_UPDATE_STATE_DIR: stateDir,
+        BOXDOWN_CODING_AGENT_UPDATE_INTERVAL_SECONDS: '999999'
+      },
+      stdio: 'pipe'
+    })
+  })
+
+  test('refreshes image-aged coding-agent stamps when the container is created', () => {
+    const updaterPath = join(assetsDevcontainerDir, 'utils', 'coding-agent-cli-update.sh')
+    const stateDir = tempDir('coding-agent-create-stamps-state')
+    mkdirSync(stateDir, { recursive: true })
+
+    for (const agent of ['codex', 'claude']) {
+      const stampPath = join(stateDir, `${agent}.stamp`)
+      writeFileSync(stampPath, '')
+      execFileSync('touch', ['-t', '202001010000', stampPath])
+    }
+
+    execFileSync('bash', [updaterPath, 'initialize-stamps'], {
+      env: {
+        ...process.env,
+        BOXDOWN_CODING_AGENT_UPDATE_STATE_DIR: stateDir
+      },
+      stdio: 'pipe'
+    })
+
+    const nowSeconds = Date.now() / 1000
+    for (const agent of ['codex', 'claude']) {
+      assert.ok(
+        nowSeconds - statSync(join(stateDir, `${agent}.stamp`)).mtimeMs / 1000 < 10,
+        `${agent} stamp must reflect container creation, not image build time`
+      )
     }
 
     execFileSync('bash', [updaterPath, 'maybe-update'], {

@@ -1,5 +1,14 @@
 {
   "schemaVersion": 1,
-  "compressedBytes": 500000000,
-  "allowedGrowthPercent": 10
+  "compressedBytes": 710945145,
+  "allowedGrowthPercent": 10,
+  "measurement": {
+    "source": "current accepted Docker build",
+    "method": "docker buildx dual-platform OCI directory export; sum each child manifest's compressed layer bytes from descriptor sizes and use the larger platform",
+    "measuredAt": "2026-07-26",
+    "platforms": {
+      "linux/amd64": 710945145,
+      "linux/arm64": 665515260
+    }
+  }
 }

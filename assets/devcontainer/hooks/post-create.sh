@@ -10,6 +10,7 @@ main() {
   run_step "Configuring workspace Git" configure_local_git
   run_step "Configuring runtime secret environment" configure_runtime_secret_environment
   run_step "Preparing SSH runtime" configure_sshd_runtime
+  run_step "Initializing coding-agent refresh state" initialize_coding_agent_refresh_state
   run_step "Installing workspace dependencies" run_deps_install
 }
 
@@ -57,6 +58,10 @@ configure_runtime_secret_environment() {
 
 configure_sshd_runtime() {
   bash "${DEVCONTAINER_DIR}/utils/ssh-bootstrap.sh" runtime
+}
+
+initialize_coding_agent_refresh_state() {
+  bash "${DEVCONTAINER_DIR}/utils/coding-agent-cli-update.sh" initialize-stamps
 }
 
 run_deps_install() {

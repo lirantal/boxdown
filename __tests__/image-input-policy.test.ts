@@ -1,4 +1,5 @@
 import assert from 'node:assert'
+import { createHash } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
@@ -18,7 +19,9 @@ const imageNpmLockPath = fileURLToPath(new URL('../assets/image/npm/package-lock
 const nativeToolLockPath = fileURLToPath(new URL('../assets/image/tools.lock.json', import.meta.url))
 const imageSizeBudgetPath = fileURLToPath(new URL('../assets/image/image-size-budget.json', import.meta.url))
 const dockerfilePath = fileURLToPath(new URL('../assets/image/Dockerfile', import.meta.url))
+const imageLifecycleSmokePath = fileURLToPath(new URL('../assets/image/lifecycle-smoke-test.sh', import.meta.url))
 const releaseWorkflowPath = fileURLToPath(new URL('../.github/workflows/release.yml', import.meta.url))
+const ciWorkflowPath = fileURLToPath(new URL('../.github/workflows/ci.yml', import.meta.url))
 
 const requiredNpmPackages = ['@openai/codex', '@anthropic-ai/claude-code', 'snyk'] as const
 const sha256 = /^[a-f0-9]{64}$/
@@ -102,6 +105,11 @@ test('sets a 10 percent compressed image growth budget', () => {
     schemaVersion?: number
     compressedBytes?: number
     allowedGrowthPercent?: number
+    measurement?: {
+      source?: string
+      method?: string
+      platforms?: Record<string, number>
+    }
   }
 
   assert.equal(budget.schemaVersion, 1)
@@ -109,6 +117,12 @@ test('sets a 10 percent compressed image growth budget', () => {
   assert.equal(Number.isInteger(budget.compressedBytes), true)
   assert.equal(budget.compressedBytes! > 0, true)
   assert.equal(budget.allowedGrowthPercent, 10)
+  assert.equal(budget.measurement?.source, 'current accepted Docker build')
+  assert.match(budget.measurement?.method ?? '', /compressed layer bytes/i)
+  assert.deepEqual(
+    budget.compressedBytes,
+    Math.max(...Object.values(budget.measurement?.platforms ?? {}))
+  )
 })
 
 test('uses the pinned Node image and has no mutable installer or lazy tools', () => {
@@ -117,17 +131,38 @@ test('uses the pinned Node image and has no mutable installer or lazy tools', ()
   assert.match(dockerfile, /^FROM node:24-trixie-slim@sha256:[a-f0-9]{64}/m)
   assert.match(dockerfile, /apt-get install -y --no-install-recommends/)
   assert.match(dockerfile, /USER node/)
+  assert.match(dockerfile, /visudo -cf/)
+  assert.doesNotMatch(dockerfile, /coding-agent-clis\/(?:codex|claude)\.stamp/)
   assert.doesNotMatch(dockerfile, /\b(latest|stable)\b/i)
   assert.doesNotMatch(dockerfile, /python3|pipx|\buv\b|opencode|antigravity/)
+})
+
+test('runs a non-root lifecycle smoke test in the built image', () => {
+  const lifecycleSmoke = readFileSync(imageLifecycleSmokePath, 'utf8')
+  const ciWorkflow = readFileSync(ciWorkflowPath, 'utf8')
+
+  assert.match(lifecycleSmoke, /test "\$\(id -u\)" -ne 0/)
+  assert.match(lifecycleSmoke, /sudo -n true/)
+  assert.match(lifecycleSmoke, /ssh-bootstrap\.sh" runtime/)
+  assert.match(lifecycleSmoke, /sudo -n -l .*boxdown-ssh-agent-proxy/)
+  assert.match(ciWorkflow, /lifecycle-smoke-test\.sh/)
+  assert.match(
+    ciWorkflow,
+    /assets\/devcontainer",target=\/opt\/boxdown\/devcontainer,readonly/
+  )
 })
 
 const source = 'https://github.com/lirantal/boxdown'
 const version = '1.4.0'
 const revision = 'abc'
+const toolLockSha256 = createHash('sha256')
+  .update(readFileSync(nativeToolLockPath))
+  .digest('hex')
 const labels = {
   'org.opencontainers.image.source': source,
   'org.opencontainers.image.revision': revision,
-  'org.opencontainers.image.version': version
+  'org.opencontainers.image.version': version,
+  'io.boxdown.tools-lock.sha256': toolLockSha256
 }
 const dualPlatformManifest = {
   manifests: [
@@ -151,6 +186,7 @@ test('requires AMD64 and ARM64 image manifest entries', () => {
     () => verifyImageManifest({
       manifest: amd64OnlyManifest,
       labels,
+      expectedLabels: labels,
       compressedBytes: 1,
       budget
     }),
@@ -163,6 +199,7 @@ test('rejects compressed images beyond the allowed growth budget', () => {
     () => verifyImageManifest({
       manifest: dualPlatformManifest,
       labels,
+      expectedLabels: labels,
       compressedBytes: 111,
       budget
     }),
@@ -174,26 +211,49 @@ test('accepts a dual-platform image with release labels within the size budget',
   assert.doesNotThrow(() => verifyImageManifest({
     manifest: dualPlatformManifest,
     labels,
+    expectedLabels: labels,
     compressedBytes: 110,
     budget
   }))
 })
 
 test('publishes a missing release image tag', async () => {
-  assert.equal(await checkImageRelease(version, revision, async () => undefined), 'publish')
+  assert.equal(
+    await checkImageRelease(version, revision, toolLockSha256, async () => undefined),
+    'publish'
+  )
 })
 
 test('reuses an identical release image tag', async () => {
-  assert.equal(await checkImageRelease(version, revision, async () => labels), 'reuse')
+  assert.equal(
+    await checkImageRelease(version, revision, toolLockSha256, async () => labels),
+    'reuse'
+  )
 })
 
 test('refuses to overwrite an occupied release image tag with mismatched labels', async () => {
   await assert.rejects(
-    () => checkImageRelease(version, revision, async () => ({
+    () => checkImageRelease(version, revision, toolLockSha256, async () => ({
       ...labels,
       'org.opencontainers.image.revision': 'other'
     })),
     /refusing to overwrite/
+  )
+})
+
+test('rejects a non-matching expected label value and tool-lock identity', () => {
+  assert.throws(
+    () => verifyImageManifest({
+      manifest: dualPlatformManifest,
+      labels: {
+        ...labels,
+        'io.boxdown.tools-lock.sha256': '0'.repeat(64)
+      },
+      expectedLabels: labels,
+      compressedBytes: 1,
+      budget
+    }),
+    /io\.boxdown\.tools-lock\.sha256.*expected/
   )
 })
 
@@ -266,19 +326,20 @@ test('validates and attests the immutable digest before moving release tags', ()
   const push = workflow.indexOf('- name: Push immutable dual-platform release image')
   const resolveDigest = workflow.indexOf('- name: Resolve release image digest')
   const validateDigest = workflow.indexOf('- name: Validate immutable release image digest')
+  const verifyBuildkitAttestations = workflow.indexOf('- name: Verify BuildKit provenance and SBOM attestations')
   const attestDigest = workflow.indexOf('- name: Attest immutable release image digest')
   const verifyAttestation = workflow.indexOf('- name: Verify immutable release image attestation')
   const moveTags = workflow.indexOf('- name: Update moving release image tags')
   const publishNpm = workflow.indexOf('- name: Publish to npm')
 
   assert.equal(
-    [push, resolveDigest, validateDigest, attestDigest, verifyAttestation, moveTags, publishNpm]
+    [push, resolveDigest, validateDigest, verifyBuildkitAttestations, attestDigest, verifyAttestation, moveTags, publishNpm]
       .every(index => index >= 0),
     true
   )
   assert.deepEqual(
-    [push, resolveDigest, validateDigest, attestDigest, verifyAttestation, moveTags, publishNpm],
-    [...[push, resolveDigest, validateDigest, attestDigest, verifyAttestation, moveTags, publishNpm]]
+    [push, resolveDigest, validateDigest, verifyBuildkitAttestations, attestDigest, verifyAttestation, moveTags, publishNpm],
+    [...[push, resolveDigest, validateDigest, verifyBuildkitAttestations, attestDigest, verifyAttestation, moveTags, publishNpm]]
       .sort((left, right) => left - right)
   )
 
@@ -289,12 +350,19 @@ test('validates and attests the immutable digest before moving release tags', ()
   )
   assert.doesNotMatch(pushStep, /boxdown:(?:1|latest)/)
 
-  const validateStep = workflow.slice(validateDigest, attestDigest)
+  const validateStep = workflow.slice(validateDigest, verifyBuildkitAttestations)
   assert.match(
     validateStep,
     /IMAGE_REFERENCE: ghcr\.io\/lirantal\/boxdown@\$\{\{ steps\.image\.outputs\.digest \}\}/
   )
   assert.match(validateStep, /registry "\$\{IMAGE_REFERENCE\}"/)
+
+  const buildkitAttestationStep = workflow.slice(verifyBuildkitAttestations, attestDigest)
+  assert.match(buildkitAttestationStep, /for platform in linux\/amd64 linux\/arm64/)
+  assert.match(buildkitAttestationStep, /index \.Provenance/)
+  assert.match(buildkitAttestationStep, /index \.SBOM/)
+  assert.match(buildkitAttestationStep, /\.SLSA/)
+  assert.match(buildkitAttestationStep, /\.SPDX/)
 
   const attestStep = workflow.slice(attestDigest, verifyAttestation)
   assert.match(attestStep, /subject-digest: \$\{\{ steps\.image\.outputs\.digest \}\}/)
