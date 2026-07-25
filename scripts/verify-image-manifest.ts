@@ -107,7 +107,7 @@ export function compressedLayerBytes(layers: unknown): number {
     const size = typeof layer === 'object' && layer !== null
       ? (layer as {size?: unknown}).size
       : undefined
-    if (!Number.isSafeInteger(size) || size <= 0) {
+    if (!Number.isSafeInteger(size) || size < 0) {
       throw new Error('invalid image layer size')
     }
     const nextTotal = total + size

@@ -17,3 +17,10 @@ Change the check to `size <= 0` and add `[{size: 0}]` to the negative test cases
 The previous Unix-socket portability finding is resolved. The SSH-agent test now creates its unique temporary directory with `/tmp/boxdown-ssh-agent-proxy-`, so the complete `source.sock` and `target.sock` paths remain short enough for macOS and Ubuntu Unix-domain socket limits. It still uses `mkdtempSync` for uniqueness and removes the test directory in `finally`.
 
 The parser otherwise rejects absent, non-array, empty, malformed, fractional, negative, and aggregate-overflow layer sizes. It uses `Number.isSafeInteger` both for each descriptor and for the running total, preventing JavaScript integer-overflow/precision undercounting.
+
+## OCI descriptor compatibility amendment
+
+OCI descriptor sizes may legitimately be `0`. The verifier therefore treats a
+zero-sized layer descriptor as zero compressed bytes, while continuing to
+reject missing, non-integer, negative, and aggregate-unsafe sizes. This retains
+the size-budget safeguard without rejecting valid OCI metadata.

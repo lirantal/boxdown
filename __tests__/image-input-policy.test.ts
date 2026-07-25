@@ -208,19 +208,22 @@ test('rejects compressed images beyond the allowed growth budget', () => {
   )
 })
 
-test('rejects missing, malformed, empty, non-positive, non-integer, and negative layer sizes', () => {
+test('rejects missing, malformed, empty, non-integer, and negative layer sizes', () => {
   for (const layers of [
     undefined,
     [],
     [{}],
     [{size: ''}],
-    [{size: 0}],
     [{size: 1.5}],
     [{size: -1}],
     [{size: Number.MAX_SAFE_INTEGER}, {size: 1}]
   ]) {
     assert.throws(() => compressedLayerBytes(layers), /invalid image layer size/)
   }
+})
+
+test('counts zero-sized OCI layer descriptors as zero bytes', () => {
+  assert.equal(compressedLayerBytes([{size: 0}, {size: 1}]), 1)
 })
 
 test('accepts a dual-platform image with release labels within the size budget', () => {
