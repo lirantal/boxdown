@@ -3,14 +3,22 @@ import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 
-import { checkImageRelease } from '../scripts/check-image-release.ts'
-import { verifyImageManifest } from '../scripts/verify-image-manifest.ts'
+import {
+  checkImageRelease,
+  inspectReleaseLabels,
+  validateReleaseIdentity
+} from '../scripts/check-image-release.ts'
+import {
+  registryPlatformReference,
+  verifyImageManifest
+} from '../scripts/verify-image-manifest.ts'
 
 const imageNpmPackagePath = fileURLToPath(new URL('../assets/image/npm/package.json', import.meta.url))
 const imageNpmLockPath = fileURLToPath(new URL('../assets/image/npm/package-lock.json', import.meta.url))
 const nativeToolLockPath = fileURLToPath(new URL('../assets/image/tools.lock.json', import.meta.url))
 const imageSizeBudgetPath = fileURLToPath(new URL('../assets/image/image-size-budget.json', import.meta.url))
 const dockerfilePath = fileURLToPath(new URL('../assets/image/Dockerfile', import.meta.url))
+const releaseWorkflowPath = fileURLToPath(new URL('../.github/workflows/release.yml', import.meta.url))
 
 const requiredNpmPackages = ['@openai/codex', '@anthropic-ai/claude-code', 'snyk'] as const
 const exactVersion = /^\d+\.\d+\.\d+(?:-[\w.]+)?$/
@@ -166,4 +174,111 @@ test('refuses to overwrite an occupied release image tag with mismatched labels'
     })),
     /refusing to overwrite/
   )
+})
+
+test('rejects malformed or multiline release versions', () => {
+  for (const invalidVersion of [
+    '1.4',
+    '01.4.0',
+    '1.4.0+build',
+    '1.4.0\npublish=true',
+    '1.4.0 latest'
+  ]) {
+    assert.throws(
+      () => validateReleaseIdentity('boxdown', invalidVersion),
+      /safe exact SemVer/
+    )
+  }
+})
+
+test('accepts a safe exact SemVer release version', () => {
+  assert.doesNotThrow(() => validateReleaseIdentity('boxdown', '1.4.0-rc.1'))
+})
+
+test('inspects platform manifests beneath the exact immutable digest', () => {
+  assert.equal(
+    registryPlatformReference(
+      'ghcr.io/lirantal/boxdown@sha256:index',
+      'sha256:platform'
+    ),
+    'ghcr.io/lirantal/boxdown@sha256:platform'
+  )
+})
+
+test('treats only top-level manifest absence as a publishable tag', () => {
+  const reference = 'ghcr.io/lirantal/boxdown:1.4.0'
+  const missingManifest = Object.assign(new Error('inspect failed'), {
+    stderr: `manifest unknown: ${reference}`
+  })
+  const calls: string[][] = []
+
+  assert.equal(
+    inspectReleaseLabels(reference, (...arguments_) => {
+      calls.push(arguments_)
+      throw missingManifest
+    }),
+    undefined
+  )
+  assert.equal(calls.length, 1)
+  assert.deepEqual(calls[0], ['--raw', reference])
+})
+
+test('fails closed when an occupied tag has a broken platform lookup', () => {
+  const reference = 'ghcr.io/lirantal/boxdown:1.4.0'
+  let callCount = 0
+
+  assert.throws(
+    () => inspectReleaseLabels(reference, () => {
+      callCount += 1
+      if (callCount === 1) return JSON.stringify({manifests: []})
+      throw Object.assign(new Error('platform inspect failed'), {
+        stderr: 'manifest unknown'
+      })
+    }),
+    /platform inspect failed/
+  )
+  assert.equal(callCount, 2)
+})
+
+test('validates and attests the immutable digest before moving release tags', () => {
+  const workflow = readFileSync(releaseWorkflowPath, 'utf8')
+  const push = workflow.indexOf('- name: Push immutable dual-platform release image')
+  const resolveDigest = workflow.indexOf('- name: Resolve release image digest')
+  const validateDigest = workflow.indexOf('- name: Validate immutable release image digest')
+  const attestDigest = workflow.indexOf('- name: Attest immutable release image digest')
+  const verifyAttestation = workflow.indexOf('- name: Verify immutable release image attestation')
+  const moveTags = workflow.indexOf('- name: Update moving release image tags')
+  const publishNpm = workflow.indexOf('- name: Publish to npm')
+
+  assert.equal(
+    [push, resolveDigest, validateDigest, attestDigest, verifyAttestation, moveTags, publishNpm]
+      .every(index => index >= 0),
+    true
+  )
+  assert.deepEqual(
+    [push, resolveDigest, validateDigest, attestDigest, verifyAttestation, moveTags, publishNpm],
+    [...[push, resolveDigest, validateDigest, attestDigest, verifyAttestation, moveTags, publishNpm]]
+      .sort((left, right) => left - right)
+  )
+
+  const pushStep = workflow.slice(push, resolveDigest)
+  assert.match(
+    pushStep,
+    /tags: ghcr\.io\/lirantal\/boxdown:\$\{\{ steps\.release-state\.outputs\.version \}\}/
+  )
+  assert.doesNotMatch(pushStep, /boxdown:(?:1|latest)/)
+
+  const validateStep = workflow.slice(validateDigest, attestDigest)
+  assert.match(
+    validateStep,
+    /IMAGE_REFERENCE: ghcr\.io\/lirantal\/boxdown@\$\{\{ steps\.image\.outputs\.digest \}\}/
+  )
+  assert.match(validateStep, /registry "\$\{IMAGE_REFERENCE\}"/)
+
+  const attestStep = workflow.slice(attestDigest, verifyAttestation)
+  assert.match(attestStep, /subject-digest: \$\{\{ steps\.image\.outputs\.digest \}\}/)
+
+  const movingTagStep = workflow.slice(moveTags, publishNpm)
+  assert.match(movingTagStep, /IMAGE_REFERENCE: ghcr\.io\/lirantal\/boxdown@\$\{\{ steps\.image\.outputs\.digest \}\}/)
+  assert.match(movingTagStep, /"\$\{IMAGE_REFERENCE\}"/)
 })

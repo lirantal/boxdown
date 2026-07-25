@@ -156,6 +156,17 @@ function inspectJson<T>(...arguments_: string[]): T {
   return JSON.parse(output) as T
 }
 
+export function registryPlatformReference(
+  reference: string,
+  platformDigest: string
+): string {
+  const digestSeparator = reference.lastIndexOf('@')
+  const imageName = digestSeparator === -1
+    ? reference
+    : reference.slice(0, digestSeparator)
+  return `${imageName}@${platformDigest}`
+}
+
 function verifyRegistryImage(reference: string, budgetPath: string): void {
   const manifest = inspectJson<ManifestIndex>('--raw', reference)
   const budget = readJson<ImageSizeBudget>(budgetPath)
@@ -169,7 +180,10 @@ function verifyRegistryImage(reference: string, budgetPath: string): void {
       return
     }
 
-    const imageManifest = inspectJson<ImageManifest>('--raw', `${reference}@${descriptor.digest}`)
+    const imageManifest = inspectJson<ImageManifest>(
+      '--raw',
+      registryPlatformReference(reference, descriptor.digest)
+    )
     const imageConfig = inspectJson<ImageConfig>(
       '--format',
       `{{json (index .Image "${platform}")}}`,

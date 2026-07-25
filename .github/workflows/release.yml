@@ -35,10 +35,17 @@ jobs:
         id: release-state
         shell: bash
         run: |
+          package_name="$(node -p "require('./package.json').name")"
           version="$(node -p "require('./package.json').version")"
+          env \
+            RELEASE_PACKAGE_NAME="${package_name}" \
+            RELEASE_VERSION="${version}" \
+            node --import tsx scripts/check-image-release.ts validate
+
+          echo "package_name=${package_name}" >> "${GITHUB_OUTPUT}"
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
 
-          if npm view "boxdown@${version}" version >/dev/null 2>"${RUNNER_TEMP}/npm-view-error"; then
+          if npm view "${package_name}@${version}" version >/dev/null 2>"${RUNNER_TEMP}/npm-view-error"; then
             echo "publish=false" >> "${GITHUB_OUTPUT}"
           elif grep -q 'E404' "${RUNNER_TEMP}/npm-view-error"; then
             echo "publish=true" >> "${GITHUB_OUTPUT}"
@@ -69,14 +76,23 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Reassert release identity before image publication
+        if: steps.release-state.outputs.publish == 'true'
+        env:
+          RELEASE_PACKAGE_NAME: ${{ steps.release-state.outputs.package_name }}
+          RELEASE_VERSION: ${{ steps.release-state.outputs.version }}
+        run: >-
+          node --import tsx scripts/check-image-release.ts assert-current
       - name: Check immutable image release tag
         if: steps.release-state.outputs.publish == 'true'
         id: image-state
+        env:
+          RELEASE_PACKAGE_NAME: ${{ steps.release-state.outputs.package_name }}
+          RELEASE_VERSION: ${{ steps.release-state.outputs.version }}
+          RELEASE_REVISION: ${{ github.sha }}
         run: |
           decision="$(
-            node --import tsx scripts/check-image-release.ts \
-              "${{ steps.release-state.outputs.version }}" \
-              "${{ github.sha }}"
+            node --import tsx scripts/check-image-release.ts check-image
           )"
           echo "decision=${decision}" >> "${GITHUB_OUTPUT}"
       - name: Build AMD64 release image
@@ -104,7 +120,7 @@ jobs:
           docker run --rm --user node
           boxdown-release:${{ github.sha }}
           /opt/boxdown/image-tools/smoke-test.sh
-      - name: Push dual-platform release image
+      - name: Push immutable dual-platform release image
         if: >-
           steps.release-state.outputs.publish == 'true' &&
           steps.image-state.outputs.decision == 'publish'
@@ -115,10 +131,7 @@ jobs:
           file: assets/image/Dockerfile
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: |
-            ghcr.io/lirantal/boxdown:${{ steps.release-state.outputs.version }}
-            ghcr.io/lirantal/boxdown:1
-            ghcr.io/lirantal/boxdown:latest
+          tags: ghcr.io/lirantal/boxdown:${{ steps.release-state.outputs.version }}
           labels: |
             org.opencontainers.image.source=https://github.com/lirantal/boxdown
             org.opencontainers.image.revision=${{ github.sha }}
@@ -130,34 +143,32 @@ jobs:
         id: image
         shell: bash
         env:
+          IMAGE_TAG: ghcr.io/lirantal/boxdown:${{ steps.release-state.outputs.version }}
           PUSHED_DIGEST: ${{ steps.push-image.outputs.digest }}
         run: |
           digest="${PUSHED_DIGEST}"
           if [ -z "${digest}" ]; then
             digest="$(
               docker buildx imagetools inspect \
-                "ghcr.io/lirantal/boxdown:${{ steps.release-state.outputs.version }}" \
+                "${IMAGE_TAG}" \
                 --format '{{json .Manifest}}' |
                 jq -r '.digest'
             )"
           fi
-          test -n "${digest}"
-          test "${digest}" != "null"
+          if [[ ! "${digest}" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+            echo "invalid immutable image digest: ${digest}" >&2
+            exit 1
+          fi
           echo "digest=${digest}" >> "${GITHUB_OUTPUT}"
-      - name: Update moving release image tags
+      - name: Validate immutable release image digest
         if: steps.release-state.outputs.publish == 'true'
-        run: >-
-          docker buildx imagetools create
-          --tag ghcr.io/lirantal/boxdown:1
-          --tag ghcr.io/lirantal/boxdown:latest
-          "ghcr.io/lirantal/boxdown@${{ steps.image.outputs.digest }}"
-      - name: Validate published release image
-        if: steps.release-state.outputs.publish == 'true'
+        env:
+          IMAGE_REFERENCE: ghcr.io/lirantal/boxdown@${{ steps.image.outputs.digest }}
         run: >-
           node --import tsx scripts/verify-image-manifest.ts
-          registry "ghcr.io/lirantal/boxdown:${{ steps.release-state.outputs.version }}"
+          registry "${IMAGE_REFERENCE}"
           assets/image/image-size-budget.json
-      - name: Attest published release image
+      - name: Attest immutable release image digest
         if: steps.release-state.outputs.publish == 'true'
         uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
         with:
@@ -165,14 +176,32 @@ jobs:
           subject-digest: ${{ steps.image.outputs.digest }}
           push-to-registry: true
           create-storage-record: false
-      - name: Verify release image attestation
+      - name: Verify immutable release image attestation
         if: steps.release-state.outputs.publish == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          IMAGE_REFERENCE: oci://ghcr.io/lirantal/boxdown@${{ steps.image.outputs.digest }}
+          REPOSITORY: ${{ github.repository }}
         run: >-
           gh attestation verify
-          "oci://ghcr.io/lirantal/boxdown@${{ steps.image.outputs.digest }}"
-          --repo "${{ github.repository }}"
+          "${IMAGE_REFERENCE}"
+          --repo "${REPOSITORY}"
+      - name: Update moving release image tags
+        if: steps.release-state.outputs.publish == 'true'
+        env:
+          IMAGE_REFERENCE: ghcr.io/lirantal/boxdown@${{ steps.image.outputs.digest }}
+        run: >-
+          docker buildx imagetools create
+          --tag ghcr.io/lirantal/boxdown:1
+          --tag ghcr.io/lirantal/boxdown:latest
+          "${IMAGE_REFERENCE}"
+      - name: Reassert release identity before npm publication
+        if: steps.release-state.outputs.publish == 'true'
+        env:
+          RELEASE_PACKAGE_NAME: ${{ steps.release-state.outputs.package_name }}
+          RELEASE_VERSION: ${{ steps.release-state.outputs.version }}
+        run: >-
+          node --import tsx scripts/check-image-release.ts assert-current
       - name: Publish to npm
         if: steps.release-state.outputs.publish == 'true'
         run: pnpm exec changeset publish
