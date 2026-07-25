@@ -61,7 +61,8 @@ tooling:
 - Node 24 and its npm runtime from the upstream base image;
 - Git, sudo/common shell utilities, ripgrep, GitHub CLI, and OpenSSH server;
 - Codex and Claude Code;
-- Snyk, 1Password CLI, and Agent Package Manager (APM).
+- Snyk and 1Password CLI on both platforms; and
+- Agent Package Manager (APM) on AMD64 only.
 
 The image build installs every downloaded third-party binary from a
 version/checksum lock manifest. Platform-specific URLs and checksums are
@@ -74,8 +75,11 @@ The image excludes Python, pipx, uv, OpenCode, and Antigravity. It also
 excludes project dependencies. Python's existing `python-bootstrap.sh` remains
 available for a future explicit, persisted per-workspace Python opt-in; when
 that feature is introduced, it will run inside the workspace container and
-will rerun after a deliberate recreation. OpenCode and Antigravity retain the
-existing lazy `ensure` behavior when their Boxdown commands are invoked.
+will rerun after a deliberate recreation. APM is likewise deferred on ARM64:
+its supported native Linux artifact is AMD64-only, and Boxdown must not add
+Python to every Apple Silicon image solely to install APM. OpenCode and
+Antigravity retain the existing lazy `ensure` behavior when their Boxdown
+commands are invoked.
 
 `deps-install.sh` remains a post-create concern because dependencies belong to
 the workspace, not the shared image.
@@ -105,9 +109,10 @@ performing an update check. Once the existing interval has elapsed, Codex and
 Claude continue to refresh in the writable workspace container exactly as they
 do today.
 
-Snyk, 1Password CLI, and APM are fixed at the version of the base image. They
-advance through a later Boxdown release and a deliberate container recreation;
-there is no new `boxdown tools update` command.
+Snyk and 1Password CLI are fixed at the version of the base image. APM has the
+same release/recreate lifecycle on AMD64 and is absent by design on ARM64 until
+the future explicit Python option installs it. There is no new `boxdown tools
+update` command.
 
 ## Image Identity and Version Synchronization
 
@@ -143,7 +148,8 @@ files. It builds the image without pushing, runs smoke tests as the non-root
 
 - `node`, `git`, `gh`, `rg`, and `sshd`;
 - `codex` and `claude`;
-- `snyk`, `op`, and `apm`.
+- `snyk` and `op` on both platforms; and
+- `apm` on AMD64, or the committed ARM64-deferred marker on ARM64.
 
 The job has no `packages: write` permission and never pushes from a pull
 request, including from a fork. It records the measured image size and enforces
@@ -269,8 +275,8 @@ base tools advance with Boxdown image releases.
 
 Use a public, release-coupled, AMD64/ARM64 GHCR base image for Boxdown. Keep
 the default image small by including the common runtime, Codex, Claude Code,
-Snyk, 1Password CLI, and APM, while retaining Python and optional agents as
-lazy capabilities. Preserve workspace-local hooks, secret boundaries, SSH
+Snyk, 1Password CLI, and AMD64 APM, while retaining Python and optional agents
+as lazy capabilities. Preserve workspace-local hooks, secret boundaries, SSH
 behavior, and Codex/Claude update cadence. Require explicit recreation for
 legacy workspaces, and make CI image publication a prerequisite for npm
 publication.
