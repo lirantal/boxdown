@@ -15,7 +15,7 @@ import { codingAgentBinary, codingAgentFromCommand } from '../src/coding-agents.
 import { color, formatPromptEnd, formatPromptTitle, promptRail, selectedMark } from '../src/cli-style.ts'
 import { buildGeneratedDevcontainerConfig, publishContainerPortFromConfig } from '../src/config.ts'
 import { BOXDOWN_CONTAINER_AGENTS_DIR, BOXDOWN_CONTAINER_CODEX_AUTH_PATH, BOXDOWN_CONTAINER_CODEX_DIR, BOXDOWN_CONTAINER_GITCONFIG_PATH, BOXDOWN_CONTAINER_HOST_GITCONFIG_DIR, BOXDOWN_CONTAINER_SECRET_ENV_BOOTSTRAP, BOXDOWN_CONTAINER_SECRET_ENV_DIR, DEVCONTAINER_CLI_VERSION } from '../src/constants.ts'
-import { codingAgentDevcontainerExecArgs, parseDockerInspectImage, sshTunnelArgs, startDevcontainer } from '../src/devcontainer.ts'
+import { codingAgentDevcontainerExecArgs, isPublishedBoxdownImage, parseDockerInspectImage, sshTunnelArgs, startDevcontainer } from '../src/devcontainer.ts'
 import { resolveDevcontainerCli } from '../src/devcontainer-cli.ts'
 import { doctorHasFailures, formatDoctorText, runDoctorChecks } from '../src/doctor.ts'
 import { parseSshPublicKey, reportGitSigningPlan, resolveConfiguredSshSigningKey, resolveGitSigningPlan, selectGitSigningKey, type GitSigningPlan, type GitSigningReason } from '../src/git-signing.ts'
@@ -24,7 +24,7 @@ import { parseJsonc } from '../src/jsonc.ts'
 import { createWorkspaceListEntries, formatWorkspaceListDetailsText, formatWorkspaceListText } from '../src/list.ts'
 import { createWorkspaceCommandLogger, redactKnownSecretEnvironmentAssignments, withLoggedProcessOutput } from '../src/logging.ts'
 import { commandRequiresContainerRuntime, commandWritesWorkspaceMetadata, parseCliArgs, parseTunnelPort, parseTunnelPortList, prepareContainerLifecycle, runCli, runContainerRuntimePreflight, setupWorkspace, USAGE, type BoxdownCommand } from '../src/main.ts'
-import { listWorkspaceMetadata, readWorkspaceMetadata, recordWorkspaceDockerImage, workspaceMetadataPath, writeWorkspaceMetadata } from '../src/metadata.ts'
+import { listWorkspaceMetadata, readWorkspaceMetadata, recordLegacyImageMigrationNotice, recordWorkspaceDockerImage, workspaceMetadataPath, writeWorkspaceMetadata } from '../src/metadata.ts'
 import { readPackageVersion } from '../src/package-info.ts'
 import { createWorkspaceContext } from '../src/paths.ts'
 import { promptConfirm, promptMultiSelect, promptText, type PromptInput, type PromptOutput } from '../src/interactive-prompts.ts'
@@ -131,6 +131,10 @@ async function withFakeDocker<T> (workspaces: FakeDockerWorkspace[], run: (logPa
     '  fi',
     '  while IFS="$(printf \'\\t\')" read -r folder id container_state remove_exit_code image_id image_name inspect_exit_code image_remove_exit_code; do',
     '    if [ "$folder" = "$workspace" ]; then',
+    '      if [[ "$*" == *\'{{.ID}}\'* ]]; then',
+    '        printf \'%s\\n\' "$id"',
+    '        exit 0',
+    '      fi',
     '      printf \'{"ID":"%s","Names":"%s","State":"%s","Status":"%s","Labels":"devcontainer.local_folder=%s"}\\n\' "$id" "$id" "$container_state" "$container_state" "$folder"',
     '      exit 0',
     '    fi',
@@ -3147,6 +3151,52 @@ describe('workspace metadata', () => {
     assert.strictEqual(imageMetadata?.dockerImageLastSeenAt, '2026-01-01T00:01:00.000Z')
     assert.strictEqual(laterMetadata.dockerImageId, 'sha256:demo-image')
     assert.deepStrictEqual(readWorkspaceMetadata(context), laterMetadata)
+  })
+
+  test('warns once for a legacy locally-built devcontainer image without removing it', async () => {
+    const workspace = tempDir('legacy-image-migration-workspace')
+    const migrationWorkspace = tempDir('legacy-image-migration-metadata-workspace')
+    const env = {
+      BOXDOWN_CACHE_HOME: tempDir('legacy-image-migration-cache'),
+      BOXDOWN_DATA_HOME: tempDir('legacy-image-migration-data')
+    }
+    const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+    const migrationContext = createWorkspaceContext({ workspace: migrationWorkspace, env, assetsDevcontainerDir })
+    const image = { id: 'sha256:legacy', name: 'vsc-example-legacy-uid' }
+    const stderr: string[] = []
+    const originalStderrWrite = process.stderr.write
+
+    writeWorkspaceMetadata(context, 'legacy-devcontainer')
+    writeWorkspaceMetadata(migrationContext, 'legacy-metadata-devcontainer')
+    assert.equal(isPublishedBoxdownImage(image), false)
+    assert.equal(isPublishedBoxdownImage({ id: 'sha256:published', name: 'ghcr.io/lirantal/boxdown:latest' }), true)
+    assert.equal(isPublishedBoxdownImage({ id: 'sha256:untagged', name: 'ghcr.io/lirantal/boxdown' }), false)
+    assert.equal(recordLegacyImageMigrationNotice(migrationContext), true)
+    assert.equal(recordLegacyImageMigrationNotice(migrationContext), false)
+    assert.match(readWorkspaceMetadata(migrationContext)?.legacyImageMigrationNotifiedAt ?? '', /^\d{4}-\d{2}-\d{2}T/)
+
+    await withFakeDocker([
+      { workspace, id: 'legacy-container', imageId: image.id, imageName: image.name }
+    ], async (logPath, dockerEnv) => {
+      process.stderr.write = function capturedStderrWrite (this: typeof process.stderr, chunk: string | Uint8Array): boolean {
+        stderr.push(Buffer.isBuffer(chunk) ? chunk.toString('utf8') : chunk)
+        return true
+      } as typeof process.stderr.write
+
+      try {
+        await withProcessEnv({ ...dockerEnv, ...env }, async () => {
+          await startDevcontainer(context, { reuseRunning: true })
+          await startDevcontainer(context, { reuseRunning: true })
+        })
+      } finally {
+        process.stderr.write = originalStderrWrite
+      }
+
+      const calls = fakeDockerCalls(logPath)
+      assert.match(stderr.join(''), /Run `boxdown start --recreate` to switch to the published Boxdown image\./)
+      assert.strictEqual(stderr.join('').match(/This workspace uses Boxdown's legacy locally-built devcontainer image\./g)?.length, 1)
+      assert.ok(!calls.some(call => call.startsWith('docker rm') || call.startsWith('docker image rm') || call.startsWith('rm ') || call.startsWith('image rm ')))
+    })
   })
 
   test('status does not record workspace metadata', () => {
