@@ -3,6 +3,9 @@ import { readFileSync } from 'node:fs'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 
+import { checkImageRelease } from '../scripts/check-image-release.ts'
+import { verifyImageManifest } from '../scripts/verify-image-manifest.ts'
+
 const imageNpmPackagePath = fileURLToPath(new URL('../assets/image/npm/package.json', import.meta.url))
 const imageNpmLockPath = fileURLToPath(new URL('../assets/image/npm/package-lock.json', import.meta.url))
 const nativeToolLockPath = fileURLToPath(new URL('../assets/image/tools.lock.json', import.meta.url))
@@ -87,4 +90,80 @@ test('uses the pinned Node image and has no mutable installer or lazy tools', ()
   assert.match(dockerfile, /USER node/)
   assert.doesNotMatch(dockerfile, /\b(latest|stable)\b/i)
   assert.doesNotMatch(dockerfile, /python3|pipx|\buv\b|opencode|antigravity/)
+})
+
+const source = 'https://github.com/lirantal/boxdown'
+const version = '1.4.0'
+const revision = 'abc'
+const labels = {
+  'org.opencontainers.image.source': source,
+  'org.opencontainers.image.revision': revision,
+  'org.opencontainers.image.version': version
+}
+const dualPlatformManifest = {
+  manifests: [
+    {platform: {architecture: 'amd64', os: 'linux'}},
+    {platform: {architecture: 'arm64', os: 'linux'}}
+  ]
+}
+const amd64OnlyManifest = {
+  manifests: [
+    {platform: {architecture: 'amd64', os: 'linux'}}
+  ]
+}
+const budget = {
+  schemaVersion: 1,
+  compressedBytes: 100,
+  allowedGrowthPercent: 10
+}
+
+test('requires AMD64 and ARM64 image manifest entries', () => {
+  assert.throws(
+    () => verifyImageManifest({
+      manifest: amd64OnlyManifest,
+      labels,
+      compressedBytes: 1,
+      budget
+    }),
+    /linux\/arm64/
+  )
+})
+
+test('rejects compressed images beyond the allowed growth budget', () => {
+  assert.throws(
+    () => verifyImageManifest({
+      manifest: dualPlatformManifest,
+      labels,
+      compressedBytes: 111,
+      budget
+    }),
+    /size budget/
+  )
+})
+
+test('accepts a dual-platform image with release labels within the size budget', () => {
+  assert.doesNotThrow(() => verifyImageManifest({
+    manifest: dualPlatformManifest,
+    labels,
+    compressedBytes: 110,
+    budget
+  }))
+})
+
+test('publishes a missing release image tag', async () => {
+  assert.equal(await checkImageRelease(version, revision, async () => undefined), 'publish')
+})
+
+test('reuses an identical release image tag', async () => {
+  assert.equal(await checkImageRelease(version, revision, async () => labels), 'reuse')
+})
+
+test('refuses to overwrite an occupied release image tag with mismatched labels', async () => {
+  await assert.rejects(
+    () => checkImageRelease(version, revision, async () => ({
+      ...labels,
+      'org.opencontainers.image.revision': 'other'
+    })),
+    /refusing to overwrite/
+  )
 })

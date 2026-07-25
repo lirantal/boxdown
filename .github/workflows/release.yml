@@ -16,8 +16,9 @@ jobs:
       issues: write         # to post issue comments (changesets/action)
       pull-requests: write  # to create pull request (changesets/action)
       id-token: write       # to create release (changesets/action)
-      packages: write       # to publish to npm (changesets/action)
-    timeout-minutes: 20
+      packages: write       # to publish the image to GHCR
+      attestations: write   # to attest the published image
+    timeout-minutes: 90
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -30,15 +31,152 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: build project
         run: pnpm run build
-      - name: Create Release Pull Request or Publish to npm
+      - name: Check release state
+        id: release-state
+        shell: bash
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+
+          if npm view "boxdown@${version}" version >/dev/null 2>"${RUNNER_TEMP}/npm-view-error"; then
+            echo "publish=false" >> "${GITHUB_OUTPUT}"
+          elif grep -q 'E404' "${RUNNER_TEMP}/npm-view-error"; then
+            echo "publish=true" >> "${GITHUB_OUTPUT}"
+          else
+            cat "${RUNNER_TEMP}/npm-view-error" >&2
+            exit 1
+          fi
+      - name: Create Release Pull Request
         uses: changesets/action@63a615b9cd06ba9a3e6d13796c7fbcb080a60a0b # v1.8.0
         with:
-          publish: pnpm run release
           version: pnpm run version
           commit: "chore: new release"
           title: "chore: new release candidate"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Allow Changesets' internal npm calls to warn on pnpm-only devEngines instead of failing the release.
+          NPM_CONFIG_FORCE: true
+      - name: Set up QEMU
+        if: steps.release-state.outputs.publish == 'true'
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+      - name: Set up Docker Buildx
+        if: steps.release-state.outputs.publish == 'true'
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - name: Log in to GHCR
+        if: steps.release-state.outputs.publish == 'true'
+        uses: docker/login-action@abd2ef45e78c5afb21d64d4ca52ee8550d9572c7 # v4.5.1
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Check immutable image release tag
+        if: steps.release-state.outputs.publish == 'true'
+        id: image-state
+        run: |
+          decision="$(
+            node --import tsx scripts/check-image-release.ts \
+              "${{ steps.release-state.outputs.version }}" \
+              "${{ github.sha }}"
+          )"
+          echo "decision=${decision}" >> "${GITHUB_OUTPUT}"
+      - name: Build AMD64 release image
+        if: >-
+          steps.release-state.outputs.publish == 'true' &&
+          steps.image-state.outputs.decision == 'publish'
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: assets/image/Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: boxdown-release:${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/lirantal/boxdown
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.release-state.outputs.version }}
+          provenance: false
+          sbom: false
+      - name: Smoke-test AMD64 release image as node
+        if: >-
+          steps.release-state.outputs.publish == 'true' &&
+          steps.image-state.outputs.decision == 'publish'
+        run: >-
+          docker run --rm --user node
+          boxdown-release:${{ github.sha }}
+          /opt/boxdown/image-tools/smoke-test.sh
+      - name: Push dual-platform release image
+        if: >-
+          steps.release-state.outputs.publish == 'true' &&
+          steps.image-state.outputs.decision == 'publish'
+        id: push-image
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: assets/image/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/lirantal/boxdown:${{ steps.release-state.outputs.version }}
+            ghcr.io/lirantal/boxdown:1
+            ghcr.io/lirantal/boxdown:latest
+          labels: |
+            org.opencontainers.image.source=https://github.com/lirantal/boxdown
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.release-state.outputs.version }}
+          provenance: mode=max
+          sbom: true
+      - name: Resolve release image digest
+        if: steps.release-state.outputs.publish == 'true'
+        id: image
+        shell: bash
+        env:
+          PUSHED_DIGEST: ${{ steps.push-image.outputs.digest }}
+        run: |
+          digest="${PUSHED_DIGEST}"
+          if [ -z "${digest}" ]; then
+            digest="$(
+              docker buildx imagetools inspect \
+                "ghcr.io/lirantal/boxdown:${{ steps.release-state.outputs.version }}" \
+                --format '{{json .Manifest}}' |
+                jq -r '.digest'
+            )"
+          fi
+          test -n "${digest}"
+          test "${digest}" != "null"
+          echo "digest=${digest}" >> "${GITHUB_OUTPUT}"
+      - name: Update moving release image tags
+        if: steps.release-state.outputs.publish == 'true'
+        run: >-
+          docker buildx imagetools create
+          --tag ghcr.io/lirantal/boxdown:1
+          --tag ghcr.io/lirantal/boxdown:latest
+          "ghcr.io/lirantal/boxdown@${{ steps.image.outputs.digest }}"
+      - name: Validate published release image
+        if: steps.release-state.outputs.publish == 'true'
+        run: >-
+          node --import tsx scripts/verify-image-manifest.ts
+          registry "ghcr.io/lirantal/boxdown:${{ steps.release-state.outputs.version }}"
+          assets/image/image-size-budget.json
+      - name: Attest published release image
+        if: steps.release-state.outputs.publish == 'true'
+        uses: actions/attest@f7c74d28b9d84cb8768d0b8ca14a4bac6ef463e6 # v4.2.0
+        with:
+          subject-name: ghcr.io/lirantal/boxdown
+          subject-digest: ${{ steps.image.outputs.digest }}
+          push-to-registry: true
+          create-storage-record: false
+      - name: Verify release image attestation
+        if: steps.release-state.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: >-
+          gh attestation verify
+          "oci://ghcr.io/lirantal/boxdown@${{ steps.image.outputs.digest }}"
+          --repo "${{ github.repository }}"
+      - name: Publish to npm
+        if: steps.release-state.outputs.publish == 'true'
+        run: pnpm exec changeset publish
+        env:
           NPM_CONFIG_PROVENANCE: true
           # Allow Changesets' internal npm calls to warn on pnpm-only devEngines instead of failing the release.
           NPM_CONFIG_FORCE: true

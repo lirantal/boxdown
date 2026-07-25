@@ -38,3 +38,94 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
         env:
           CI: true
+
+  image:
+    name: Image
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+      - name: Check image-related paths
+        id: changes
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        shell: bash
+        run: |
+          if ! git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            echo "image=true" >> "${GITHUB_OUTPUT}"
+          elif git diff --quiet "${BASE_SHA}" "${GITHUB_SHA}" -- \
+            'assets/image/**' \
+            'assets/devcontainer/**' \
+            'scripts/**' \
+            '__tests__/**' \
+            'package.json' \
+            'pnpm-lock.yaml' \
+            '.github/workflows/**'; then
+            echo "image=false" >> "${GITHUB_OUTPUT}"
+          else
+            echo "image=true" >> "${GITHUB_OUTPUT}"
+          fi
+      - if: steps.changes.outputs.image == 'true'
+        uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
+      - if: steps.changes.outputs.image == 'true'
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: 24.x
+          cache: 'pnpm'
+      - name: Install dependencies
+        if: steps.changes.outputs.image == 'true'
+        run: pnpm install --frozen-lockfile
+      - name: Read package version
+        if: steps.changes.outputs.image == 'true'
+        id: package
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          echo "version=${version}" >> "${GITHUB_OUTPUT}"
+      - if: steps.changes.outputs.image == 'true'
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+      - if: steps.changes.outputs.image == 'true'
+        uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+      - name: Build AMD64 image
+        if: steps.changes.outputs.image == 'true'
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: assets/image/Dockerfile
+          platforms: linux/amd64
+          load: true
+          tags: boxdown-ci:${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=https://github.com/lirantal/boxdown
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.package.outputs.version }}
+          provenance: false
+          sbom: false
+      - name: Smoke-test AMD64 image as node
+        if: steps.changes.outputs.image == 'true'
+        run: >-
+          docker run --rm --user node
+          boxdown-ci:${{ github.sha }}
+          /opt/boxdown/image-tools/smoke-test.sh
+      - name: Export dual-platform OCI image
+        if: steps.changes.outputs.image == 'true'
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          file: assets/image/Dockerfile
+          platforms: linux/amd64,linux/arm64
+          outputs: type=oci,dest=${{ runner.temp }}/boxdown-oci,tar=false
+          labels: |
+            org.opencontainers.image.source=https://github.com/lirantal/boxdown
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.version=${{ steps.package.outputs.version }}
+          provenance: false
+          sbom: false
+      - name: Validate dual-platform OCI image
+        if: steps.changes.outputs.image == 'true'
+        run: >-
+          node --import tsx scripts/verify-image-manifest.ts
+          oci-layout "${{ runner.temp }}/boxdown-oci"
+          assets/image/image-size-budget.json
