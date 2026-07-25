@@ -1,8 +1,11 @@
 import assert from 'node:assert'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 
+import { syncDevcontainerImage } from '../scripts/sync-devcontainer-image.ts'
 import { parseJsonc } from '../src/jsonc.ts'
 
 const devcontainerPath = fileURLToPath(new URL('../assets/devcontainer/devcontainer.json', import.meta.url))
@@ -68,4 +71,24 @@ test('keeps the packaged devcontainer image policy independent of mutable image 
   const devcontainer = parseJsonc<{ image: string }>(readFileSync(devcontainerPath, 'utf8'))
 
   assert.doesNotMatch(devcontainer.image, /(?:^|[^\w])(?:latest|stable)(?:[^\w]|$)/i)
+})
+
+test('synchronizes the top-level image while preserving JSONC comments', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'boxdown-devcontainer-image-'))
+  const testPackagePath = join(directory, 'package.json')
+  const configPath = join(directory, 'devcontainer.json')
+
+  try {
+    writeFileSync(testPackagePath, '{"version":"9.8.7"}\n')
+    writeFileSync(configPath, '{\n "nested": {\n  "image":"nested"\n },\n // retain\n "image":"old",\n "name":"Keep"\n}\n')
+
+    syncDevcontainerImage(testPackagePath, configPath)
+
+    const synchronizedConfig = readFileSync(configPath, 'utf8')
+    assert.match(synchronizedConfig, /retain/)
+    assert.match(synchronizedConfig, /ghcr\.io\/lirantal\/boxdown:9\.8\.7/)
+    assert.match(synchronizedConfig, /"image":"nested"/)
+  } finally {
+    rmSync(directory, {recursive: true, force: true})
+  }
 })
