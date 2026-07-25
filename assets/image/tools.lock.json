@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "onepassword": {
+    "artifacts": {
+      "amd64": {
+        "url": "https://cache.agilebits.com/dist/1P/op2/pkg/v2.32.0/op_linux_amd64_v2.32.0.zip",
+        "sha256": "68e3141b11ad38ba5004fb40d71371b710c0bbf94733f0df9180768336f90097"
+      },
+      "arm64": {
+        "url": "https://cache.agilebits.com/dist/1P/op2/pkg/v2.32.0/op_linux_arm64_v2.32.0.zip",
+        "sha256": "6f3d571aabe7701e21ad4b0f9d30207c3dcabdb2f9c261e3651106dde0ee8946"
+      }
+    }
+  },
+  "apm": {
+    "artifacts": {
+      "amd64": {
+        "url": "https://github.com/microsoft/apm/releases/download/v0.26.0/apm-linux-x86_64.tar.gz",
+        "sha256": "3afba455c5283852ba4c392f668be7c27b65bc4a0fa60a8b53a4626c52628431"
+      }
+    },
+    "deferredPlatforms": [
+      "arm64"
+    ]
+  }
+}

@@ -55,3 +55,9 @@ test('scopes Renovate to monthly packaged Node image digest updates', () => {
   assert.equal(imageRule?.pinDigests, true)
   assert.deepEqual(imageRule?.schedule, ['* 0-3 1 * *'])
 })
+
+test('keeps the packaged devcontainer image policy independent of mutable image inputs', () => {
+  const devcontainer = parseJsonc<{ image: string }>(readFileSync(devcontainerPath, 'utf8'))
+
+  assert.doesNotMatch(devcontainer.image, /(?:^|[^\w])(?:latest|stable)(?:[^\w]|$)/i)
+})
