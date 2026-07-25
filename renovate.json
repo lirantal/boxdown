@@ -1,0 +1,30 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "enabledManagers": [
+    "dockerfile"
+  ],
+  "dockerfile": {
+    "managerFilePatterns": [
+      "/^assets\\/image\\/Dockerfile$/"
+    ]
+  },
+  "packageRules": [
+    {
+      "description": "Refresh the Boxdown Node 24 image base digest monthly",
+      "matchManagers": [
+        "dockerfile"
+      ],
+      "matchPackageNames": [
+        "node"
+      ],
+      "matchFileNames": [
+        "assets/image/Dockerfile"
+      ],
+      "versioning": "exact",
+      "pinDigests": true,
+      "schedule": [
+        "* 0-3 1 * *"
+      ]
+    }
+  ]
+}

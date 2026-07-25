@@ -12,6 +12,23 @@ const devcontainerPath = fileURLToPath(new URL('../assets/devcontainer/devcontai
 const packagePath = fileURLToPath(new URL('../package.json', import.meta.url))
 const renovatePath = fileURLToPath(new URL('../renovate.json', import.meta.url))
 
+interface RenovatePackageRule {
+  matchManagers?: string[]
+  matchPackageNames?: string[]
+  matchFileNames?: string[]
+  versioning?: string
+  pinDigests?: boolean
+  schedule?: string[]
+}
+
+interface RenovateConfig {
+  enabledManagers?: string[]
+  dockerfile?: {
+    managerFilePatterns?: string[]
+  }
+  packageRules?: RenovatePackageRule[]
+}
+
 test('uses the release-matched Boxdown image without Dev Container Features', () => {
   const devcontainer = parseJsonc<{
     image: string
@@ -25,8 +42,27 @@ test('uses the release-matched Boxdown image without Dev Container Features', ()
   assert.equal(devcontainer.overrideFeatureInstallOrder, undefined)
 })
 
-test('retires the obsolete packaged Node image Renovate policy', () => {
-  assert.equal(existsSync(renovatePath), false)
+test('scopes Renovate to monthly Dockerfile Node base image digest updates', () => {
+  assert.equal(existsSync(renovatePath), true, 'renovate.json must exist')
+
+  const renovate = JSON.parse(readFileSync(renovatePath, 'utf8')) as RenovateConfig
+  assert.deepEqual(renovate.enabledManagers, ['dockerfile'])
+  assert.deepEqual(renovate.dockerfile?.managerFilePatterns, [
+    '/^assets\\/image\\/Dockerfile$/'
+  ])
+
+  const imageRule = renovate.packageRules?.find(rule => rule.matchPackageNames?.includes('node'))
+  assert.deepEqual(imageRule?.matchManagers, ['dockerfile'])
+  assert.deepEqual(imageRule?.matchFileNames, ['assets/image/Dockerfile'])
+  assert.equal(imageRule?.versioning, 'exact')
+  assert.equal(imageRule?.pinDigests, true)
+  assert.deepEqual(imageRule?.schedule, ['* 0-3 1 * *'])
+
+  assert.equal('devcontainer' in renovate, false)
+  assert.equal(
+    renovate.packageRules?.some(rule => rule.matchManagers?.includes('devcontainer')),
+    false
+  )
 })
 
 test('keeps the packaged devcontainer image policy independent of mutable image inputs', () => {

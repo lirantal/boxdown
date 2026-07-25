@@ -422,11 +422,12 @@ git commit -m "ci: publish Boxdown image before npm release"
 - Modify: `__tests__/image-input-policy.test.ts`
 - Modify: `scripts/sync-devcontainer-image.ts`
 
-**Implementation note (added after Task 3/6 review):** Retire the obsolete
-Renovate policy for the no-longer-consumed packaged Node image digest and update
-its policy test. Fix the existing `security/detect-unsafe-regex` lint findings
-in the image policy and JSONC synchronizer without weakening lint rules; Task 7
-verification must be green.
+**Implementation note (amended after Task 7 review):** Replace the obsolete
+Dev Container packaged-image Renovate policy with Dockerfile coverage for the
+still-consumed digest-pinned Node base image, and update its policy test. Fix
+the existing `security/detect-unsafe-regex` lint findings in the image policy
+and JSONC synchronizer without weakening lint rules; Task 7 verification must
+be green.
 
 - [ ] **Step 1: Update user documentation**
 
