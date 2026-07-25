@@ -92,3 +92,43 @@ test('synchronizes the top-level image while preserving JSONC comments', () => {
     rmSync(directory, {recursive: true, force: true})
   }
 })
+
+test('rejects an image property that appears only inside a block comment', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'boxdown-devcontainer-image-'))
+  const testPackagePath = join(directory, 'package.json')
+  const configPath = join(directory, 'devcontainer.json')
+  const source = '{\n/*\n "image":"old"\n*/\n "name":"Keep"\n}\n'
+
+  try {
+    writeFileSync(testPackagePath, '{"version":"9.8.7"}\n')
+    writeFileSync(configPath, source)
+
+    assert.throws(
+      () => syncDevcontainerImage(testPackagePath, configPath),
+      new Error(`Packaged devcontainer image is missing: ${configPath}`)
+    )
+    assert.equal(readFileSync(configPath, 'utf8'), source)
+  } finally {
+    rmSync(directory, {recursive: true, force: true})
+  }
+})
+
+test('preserves an inline JSONC comment while synchronizing the image', () => {
+  const directory = mkdtempSync(join(tmpdir(), 'boxdown-devcontainer-image-'))
+  const testPackagePath = join(directory, 'package.json')
+  const configPath = join(directory, 'devcontainer.json')
+
+  try {
+    writeFileSync(testPackagePath, '{"version":"9.8.7"}\n')
+    writeFileSync(configPath, '{\n "image":"old", // retain\n "name":"Keep"\n}\n')
+
+    syncDevcontainerImage(testPackagePath, configPath)
+
+    assert.match(
+      readFileSync(configPath, 'utf8'),
+      /"image":"ghcr\.io\/lirantal\/boxdown:9\.8\.7", \/\/ retain/
+    )
+  } finally {
+    rmSync(directory, {recursive: true, force: true})
+  }
+})

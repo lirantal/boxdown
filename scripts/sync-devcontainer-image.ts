@@ -2,9 +2,9 @@ import {readFileSync, writeFileSync} from 'node:fs'
 import {fileURLToPath} from 'node:url'
 import {resolve} from 'node:path'
 
-const imageLine = /^(\s*"image"\s*:\s*)"[^"]*"(\s*,?\s*)$/gm
+const imageLine = /^(\s*"image"\s*:\s*)"[^"]*"(\s*,?(?:\s*\/\/.*)?)$/gm
 
-function jsoncObjectDepthAt(source: string, offset: number): number {
+function isTopLevelJsoncPropertyAt(source: string, offset: number): boolean {
   let depth = 0
   let inBlockComment = false
   let inLineComment = false
@@ -54,14 +54,14 @@ function jsoncObjectDepthAt(source: string, offset: number): number {
     }
   }
 
-  return depth
+  return depth === 1 && !inBlockComment && !inLineComment && !inString
 }
 
 export function syncDevcontainerImage(packageJsonPath: string, devcontainerPath: string): void {
   const {version} = JSON.parse(readFileSync(packageJsonPath, 'utf8')) as {version: string}
   const source = readFileSync(devcontainerPath, 'utf8')
   const match = [...source.matchAll(imageLine)].find(candidate =>
-    jsoncObjectDepthAt(source, candidate.index ?? 0) === 1
+    isTopLevelJsoncPropertyAt(source, candidate.index ?? 0)
   )
 
   if (match === undefined || match.index === undefined) {
