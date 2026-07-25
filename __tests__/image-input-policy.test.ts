@@ -21,7 +21,6 @@ const dockerfilePath = fileURLToPath(new URL('../assets/image/Dockerfile', impor
 const releaseWorkflowPath = fileURLToPath(new URL('../.github/workflows/release.yml', import.meta.url))
 
 const requiredNpmPackages = ['@openai/codex', '@anthropic-ai/claude-code', 'snyk'] as const
-const exactVersion = /^\d+\.\d+\.\d+(?:-[\w.]+)?$/
 const sha256 = /^[a-f0-9]{64}$/
 
 interface Artifact {
@@ -33,6 +32,26 @@ interface NativeToolLock {
   schemaVersion: number
   onepassword: { artifacts: Record<string, Artifact> }
   apm: { artifacts: Record<string, Artifact>, deferredPlatforms: string[] }
+}
+
+function isExactVersion(version: string): boolean {
+  const [baseVersion, prerelease, ...extraParts] = version.split('-')
+  const isNumeric = (value: string) =>
+    value.length > 0 && [...value].every(character => character >= '0' && character <= '9')
+  const isPrereleaseCharacter = (character: string) =>
+    (character >= '0' && character <= '9') ||
+    (character >= 'a' && character <= 'z') ||
+    (character >= 'A' && character <= 'Z') ||
+    character === '_' ||
+    character === '.'
+
+  return (
+    extraParts.length === 0 &&
+    baseVersion.split('.').length === 3 &&
+    baseVersion.split('.').every(isNumeric) &&
+    (prerelease === undefined ||
+      (prerelease.length > 0 && [...prerelease].every(isPrereleaseCharacter)))
+  )
 }
 
 function assertVersionedArtifact(artifact: Artifact): void {
@@ -60,8 +79,8 @@ test('locks image npm dependencies to exact versions with integrity metadata', (
   assert.equal(manifest.engines?.node, '>=24 <25')
   assert.equal(lock.lockfileVersion, 3)
   for (const name of requiredNpmPackages) {
-    assert.match(manifest.dependencies[name], exactVersion)
-    assert.match(lock.packages[''].dependencies?.[name] ?? '', exactVersion)
+    assert.equal(isExactVersion(manifest.dependencies[name]), true)
+    assert.equal(isExactVersion(lock.packages[''].dependencies?.[name] ?? ''), true)
     assert.match(lock.packages[`node_modules/${name}`].integrity ?? '', /^sha512-/)
   }
 })

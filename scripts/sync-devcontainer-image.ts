@@ -2,7 +2,30 @@ import {readFileSync, writeFileSync} from 'node:fs'
 import {fileURLToPath} from 'node:url'
 import {resolve} from 'node:path'
 
-const imageLine = /^(\s*"image"\s*:\s*)"[^"]*"(\s*,?(?:\s*\/\/[^\r\n]*)?)$/gm
+interface ImageProperty {
+  valueStart: number
+  valueEnd: number
+}
+
+function skipWhitespace(source: string, index: number): number {
+  while ([' ', '\t', '\r', '\n'].includes(source[index] ?? '')) index += 1
+  return index
+}
+
+function findClosingQuote(source: string, openingQuote: number): number | undefined {
+  let isEscaped = false
+
+  for (let index = openingQuote + 1; index < source.length; index += 1) {
+    const character = source[index]!
+    if (isEscaped) {
+      isEscaped = false
+    } else if (character === '\\') {
+      isEscaped = true
+    } else if (character === '"') {
+      return index
+    }
+  }
+}
 
 function isTopLevelJsoncPropertyAt(source: string, offset: number): boolean {
   let depth = 0
@@ -57,19 +80,33 @@ function isTopLevelJsoncPropertyAt(source: string, offset: number): boolean {
   return depth === 1 && !inBlockComment && !inLineComment && !inString
 }
 
+function findTopLevelImageProperty(source: string): ImageProperty | undefined {
+  let propertyStart = source.indexOf('"image"')
+
+  while (propertyStart !== -1) {
+    let index = skipWhitespace(source, propertyStart + '"image"'.length)
+    if (isTopLevelJsoncPropertyAt(source, propertyStart) && source[index] === ':') {
+      index = skipWhitespace(source, index + 1)
+      if (source[index] === '"') {
+        const valueEnd = findClosingQuote(source, index)
+        if (valueEnd !== undefined) return {valueStart: index + 1, valueEnd}
+      }
+    }
+
+    propertyStart = source.indexOf('"image"', propertyStart + '"image"'.length)
+  }
+}
+
 export function syncDevcontainerImage(packageJsonPath: string, devcontainerPath: string): void {
   const {version} = JSON.parse(readFileSync(packageJsonPath, 'utf8')) as {version: string}
   const source = readFileSync(devcontainerPath, 'utf8')
-  const match = [...source.matchAll(imageLine)].find(candidate =>
-    isTopLevelJsoncPropertyAt(source, candidate.index ?? 0)
-  )
+  const imageProperty = findTopLevelImageProperty(source)
 
-  if (match === undefined || match.index === undefined) {
+  if (imageProperty === undefined) {
     throw new Error(`Packaged devcontainer image is missing: ${devcontainerPath}`)
   }
 
-  const replacement = `${match[1]!}"ghcr.io/lirantal/boxdown:${version}"${match[2]!}`
-  const synchronizedSource = `${source.slice(0, match.index)}${replacement}${source.slice(match.index + match[0].length)}`
+  const synchronizedSource = `${source.slice(0, imageProperty.valueStart)}ghcr.io/lirantal/boxdown:${version}${source.slice(imageProperty.valueEnd)}`
   writeFileSync(devcontainerPath, synchronizedSource)
 }
 
