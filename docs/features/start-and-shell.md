@@ -41,9 +41,19 @@ launch the selected CLI directly:
 - `boxdown antigravity` installs/updates Antigravity when needed, then launches
   `agy`.
 
-Container bring-up eagerly installs only Codex and Claude Code. OpenCode and
-Antigravity are lazy installs so projects that do not use them avoid the extra
-disk usage.
+Container bring-up pulls the public release-matched image
+`ghcr.io/lirantal/boxdown:<Boxdown-version>`, which includes Codex, Claude
+Code, Snyk, 1Password, and AMD64 APM. It does not build Dev Container Features
+or shared tools locally. An uncached pull needs network access but no GHCR
+login. OpenCode and Antigravity remain lazy installs so projects that do not
+use them avoid the extra disk usage.
+
+The image contains neither workspaces nor credentials. Boxdown adds those as
+per-workspace mounts and runtime state when creating the container. Codex and
+Claude retain their throttled best-effort refreshes after startup. Snyk,
+1Password, and AMD64 APM advance only with a Boxdown release and recreation;
+APM stays deferred on ARM64 until you explicitly opt in to a Python-based
+installation.
 
 Pass agent-specific arguments after `--` so Boxdown options stay unambiguous:
 
@@ -58,7 +68,7 @@ boxdown claude -- --continue
 3. Generate a Boxdown-owned devcontainer config.
 4. Install or reuse the pinned Dev Containers CLI.
 5. Run `devcontainer up --workspace-folder <repo> --override-config <config>`.
-6. Run container lifecycle hooks, including a best-effort Codex/Claude CLI refresh.
+6. Run container lifecycle hooks, including a throttled Codex/Claude refresh.
 7. Print a dynamic port hint when the configured published port is mapped.
 8. Run `devcontainer exec ... bash` to open an interactive shell.
 
@@ -100,8 +110,13 @@ BOXDOWN_TTY_NORMALIZE=0 boxdown start
 ## Recreate
 
 `--recreate` passes `--remove-existing-container` to the Dev Containers CLI.
-Use it when changing create-time settings such as image, features, mounts, or
-Docker `runArgs`.
+Use it when changing create-time settings such as image, mounts, or Docker
+`runArgs`.
+
+Workspaces created before the release-matched image remain on their existing
+container. Switch them only with `boxdown start --recreate` or
+`boxdown setup --recreate`; the migration is one-time and does not modify the
+workspace.
 
 Existing containers created before Boxdown adopted runtime-mounted secrets
 must be recreated once. After recreation, Boxdown-provided secrets remain

@@ -36,9 +36,11 @@ interface NativeToolLock {
 }
 
 function assertVersionedArtifact(artifact: Artifact): void {
+  const urlTokens = artifact.url.toLowerCase().split(/[^a-z0-9_]+/)
+
   assert.match(artifact.url, /^https:\/\//)
-  assert.doesNotMatch(artifact.url, /\/(?:latest|stable)(?:\/|$)/i)
-  assert.doesNotMatch(artifact.url, /(?:^|[^\w])(?:latest|stable)(?:[^\w]|$)/i)
+  assert.equal(urlTokens.includes('latest'), false)
+  assert.equal(urlTokens.includes('stable'), false)
   assert.match(artifact.url, /\d+\.\d+\.\d+/)
   assert.match(artifact.sha256, sha256)
 }

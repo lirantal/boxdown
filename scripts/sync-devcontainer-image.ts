@@ -2,7 +2,7 @@ import {readFileSync, writeFileSync} from 'node:fs'
 import {fileURLToPath} from 'node:url'
 import {resolve} from 'node:path'
 
-const imageLine = /^(\s*"image"\s*:\s*)"[^"]*"(\s*,?(?:\s*\/\/.*)?)$/gm
+const imageLine = /^(\s*"image"\s*:\s*)"[^"]*"(\s*,?(?:\s*\/\/[^\r\n]*)?)$/gm
 
 function isTopLevelJsoncPropertyAt(source: string, offset: number): boolean {
   let depth = 0

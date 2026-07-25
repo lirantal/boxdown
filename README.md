@@ -59,6 +59,26 @@ npx boxdown start
 
 Boxdown ships and invokes its own `@devcontainers/cli` dependency. It does not require a host/global Dev Containers CLI install.
 
+### Published devcontainer image
+
+New containers pull the public release-matched image
+`ghcr.io/lirantal/boxdown:<Boxdown-version>` instead of building Dev Container
+Features or shared tools locally. The first uncached use needs network access,
+but does not need a GHCR login. The image contains the default Codex, Claude
+Code, Snyk, 1Password, and AMD64 APM tools; OpenCode and Antigravity remain
+lazy installs when their respective Boxdown commands run.
+
+The image never contains your workspace or credentials. Boxdown adds those only
+at container creation through mounts and runtime state. Codex and Claude keep
+their throttled best-effort refreshes after startup, so their packaged versions
+can advance between Boxdown releases.
+
+Snyk, 1Password, and AMD64 APM advance with a Boxdown release and require a
+container recreation to take effect. APM is intentionally deferred on ARM64
+until you explicitly opt in to a Python-based installation. Existing
+workspaces keep their current container until you run `boxdown start --recreate`
+or `boxdown setup --recreate`.
+
 ### Portless SSH
 
 `boxdown setup` installs an SSH alias for the current project. To only install
@@ -185,9 +205,10 @@ installed, the bundled Dev Containers CLI uses its supported classic-build
 fallback and Boxdown continues with a warning. Boxdown does not retry an actual
 Dev Containers build failure.
 
-Container bring-up installs Codex and Claude Code by default. The OpenCode and
-Antigravity commands stay available, but install/update those CLIs only when you
-launch them. Use `--` to pass arguments to the selected agent:
+Container bring-up pulls the release-matched image, which includes Codex and
+Claude Code by default. The OpenCode and Antigravity commands stay available,
+but install/update those CLIs only when you launch them. Use `--` to pass
+arguments to the selected agent:
 
 ```sh
 boxdown claude -- --continue
