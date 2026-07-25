@@ -7,6 +7,7 @@ const imageNpmPackagePath = fileURLToPath(new URL('../assets/image/npm/package.j
 const imageNpmLockPath = fileURLToPath(new URL('../assets/image/npm/package-lock.json', import.meta.url))
 const nativeToolLockPath = fileURLToPath(new URL('../assets/image/tools.lock.json', import.meta.url))
 const imageSizeBudgetPath = fileURLToPath(new URL('../assets/image/image-size-budget.json', import.meta.url))
+const dockerfilePath = fileURLToPath(new URL('../assets/image/Dockerfile', import.meta.url))
 
 const requiredNpmPackages = ['@openai/codex', '@anthropic-ai/claude-code', 'snyk'] as const
 const exactVersion = /^\d+\.\d+\.\d+(?:-[\w.]+)?$/
@@ -76,4 +77,14 @@ test('sets a 10 percent compressed image growth budget', () => {
   assert.equal(Number.isInteger(budget.compressedBytes), true)
   assert.equal(budget.compressedBytes! > 0, true)
   assert.equal(budget.allowedGrowthPercent, 10)
+})
+
+test('uses the pinned Node image and has no mutable installer or lazy tools', () => {
+  const dockerfile = readFileSync(dockerfilePath, 'utf8')
+
+  assert.match(dockerfile, /^FROM node:24-trixie-slim@sha256:[a-f0-9]{64}/m)
+  assert.match(dockerfile, /apt-get install -y --no-install-recommends/)
+  assert.match(dockerfile, /USER node/)
+  assert.doesNotMatch(dockerfile, /\b(latest|stable)\b/i)
+  assert.doesNotMatch(dockerfile, /python3|pipx|\buv\b|opencode|antigravity/)
 })

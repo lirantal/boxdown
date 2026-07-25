@@ -22,7 +22,7 @@ progress() {
 prepend_agent_bin_paths() {
   local codex_home="${CODEX_HOME:-${HOME}/.codex}"
 
-  PATH="${HOME}/.local/bin:${HOME}/.opencode/bin:${codex_home}/packages/standalone/current/bin:${PATH}"
+  PATH="${HOME}/.local/node_modules/.bin:${HOME}/.local/bin:${HOME}/.opencode/bin:${codex_home}/packages/standalone/current/bin:${PATH}"
   export PATH
 }
 
@@ -456,7 +456,28 @@ update_antigravity() {
   install_antigravity
 }
 
+image_agent_package() {
+  case "$1" in
+    codex) printf '%s\n' '@openai/codex' ;;
+    claude) printf '%s\n' '@anthropic-ai/claude-code' ;;
+    *) return 1 ;;
+  esac
+}
+
+update_image_agent_package() {
+  local agent="$1"
+  local package
+
+  package="$(image_agent_package "${agent}")" || return 1
+  npm install --omit=dev --prefix "${HOME}/.local" "${package}@latest"
+}
+
 run_agent_update() {
+  if [ -f /home/node/.local/package-lock.json ] && image_agent_package "$1" >/dev/null; then
+    update_image_agent_package "$1"
+    return
+  fi
+
   case "$1" in
     codex) update_codex ;;
     opencode) update_opencode ;;
