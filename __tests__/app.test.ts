@@ -41,35 +41,6 @@ function tempDir (name: string): string {
   return mkdtempSync(join(tmpdir(), `boxdown-${name}-`))
 }
 
-function runOnePasswordInstallForArchitecture (arch: string): { status: number | null, stderr: string, downloads: string } {
-  const postCreatePath = join(assetsDevcontainerDir, 'hooks', 'post-create.sh')
-  const curlLogPath = join(tempDir('onepassword-curl-log'), 'calls.log')
-  const script = [
-    'source "$1"',
-    'uname() { printf "%s\\n" "$BOXDOWN_TEST_ARCH"; }',
-    'curl() { printf "%s\\n" "$*" >> "$BOXDOWN_TEST_CURL_LOG"; }',
-    'python3() { :; }',
-    'sudo() { :; }',
-    'chmod() { :; }',
-    'rm() { :; }',
-    'install_1password_cli'
-  ].join('\n')
-  const result = spawnSync('bash', ['-c', script, 'bash', postCreatePath], {
-    encoding: 'utf8',
-    env: {
-      ...process.env,
-      BOXDOWN_TEST_ARCH: arch,
-      BOXDOWN_TEST_CURL_LOG: curlLogPath
-    }
-  })
-
-  return {
-    status: result.status,
-    stderr: result.stderr,
-    downloads: existsSync(curlLogPath) ? readFileSync(curlLogPath, 'utf8') : ''
-  }
-}
-
 function readGitConfig (configPath: string, key: string): string | undefined {
   try {
     return execFileSync('git', ['config', '--file', configPath, '--get', key]).toString('utf8').trim()
@@ -5321,34 +5292,6 @@ describe('devcontainer git config hooks', () => {
     assert.strictEqual(execFileSync('git', ['config', '--local', '--get', 'core.pager'], { cwd: workspace }).toString('utf8').trim(), 'less -R')
   })
 
-  for (const arch of ['x86_64', 'amd64']) {
-    test(`1Password installer selects the amd64 archive on ${arch}`, () => {
-      const result = runOnePasswordInstallForArchitecture(arch)
-
-      assert.strictEqual(result.status, 0)
-      assert.match(result.downloads, /op_linux_amd64_v2\.32\.1\.zip/)
-      assert.doesNotMatch(result.downloads, /op_linux_arm64/)
-    })
-  }
-
-  for (const arch of ['aarch64', 'arm64']) {
-    test(`1Password installer selects the arm64 archive on ${arch}`, () => {
-      const result = runOnePasswordInstallForArchitecture(arch)
-
-      assert.strictEqual(result.status, 0)
-      assert.match(result.downloads, /op_linux_arm64_v2\.32\.1\.zip/)
-      assert.doesNotMatch(result.downloads, /op_linux_amd64/)
-    })
-  }
-
-  test('1Password installer skips unsupported architectures', () => {
-    const result = runOnePasswordInstallForArchitecture('riscv64')
-
-    assert.strictEqual(result.status, 0)
-    assert.strictEqual(result.downloads, '')
-    assert.match(result.stderr, /skipping 1Password CLI \(unsupported arch: riscv64\)/)
-  })
-
   test('git signing bootstrap preserves an explicit user signing configuration without an agent', () => {
     const bootstrapPath = join(assetsDevcontainerDir, 'utils', 'git-signing-bootstrap.sh')
     const targetPath = join(tempDir('git-signing-target'), '.gitconfig')
@@ -7145,25 +7088,33 @@ describe('packaged assets', () => {
     assert.strictEqual(readFileSync(configPath, 'utf8'), overlapping)
   })
 
-  test('refreshes coding-agent CLIs from lifecycle hooks through updater utility', () => {
+  test('post-create configures workspace state without installing image-owned tools', () => {
     const postCreate = readFileSync(join(assetsDevcontainerDir, 'hooks', 'post-create.sh'), 'utf8')
-    const postStart = readFileSync(join(assetsDevcontainerDir, 'hooks', 'post-start.sh'), 'utf8')
     const gitConfigBootstrap = readFileSync(join(assetsDevcontainerDir, 'utils', 'git-config-bootstrap.sh'), 'utf8')
-    const updater = readFileSync(join(assetsDevcontainerDir, 'utils', 'coding-agent-cli-update.sh'), 'utf8')
-    const codexWrapper = readFileSync(join(assetsDevcontainerDir, 'utils', 'codex-cli-update.sh'), 'utf8')
 
     assert.match(postCreate, /configure_global_git/)
-    assert.ok(postCreate.indexOf('configure_global_git') < postCreate.indexOf('install_or_update_coding_agent_clis'))
     assert.match(postCreate, /git-config-bootstrap\.sh/)
-    assert.match(postCreate, /install_or_update_coding_agent_clis/)
-    assert.match(postCreate, /coding-agent-cli-update\.sh" install/)
+    assert.match(postCreate, /configure_git_signing/)
+    assert.match(postCreate, /configure_local_git/)
+    assert.match(postCreate, /configure_runtime_secret_environment/)
+    assert.match(postCreate, /ssh-bootstrap\.sh" runtime/)
+    assert.match(postCreate, /deps-install\.sh/)
+    assert.doesNotMatch(postCreate, /install_(openssh_server|python_runtime|apm|1password_cli|snyk_cli)/)
+    assert.doesNotMatch(postCreate, /coding-agent-cli-update\.sh" install/)
     assert.match(postCreate, /BOXDOWN_PROGRESS: %s\\n/)
-    assert.match(postCreate, /run_step "Installing coding-agent CLIs"/)
-    assert.match(postStart, /coding-agent-cli-update\.sh" maybe-update/)
-    assert.match(postStart, /run_step "Refreshing coding-agent CLIs"/)
     assert.match(gitConfigBootstrap, /url\.git@github\.com:\.insteadOf/)
     assert.match(gitConfigBootstrap, /credential\.https:\/\/github\.com\.helper/)
     assert.match(gitConfigBootstrap, /Preparing writable Git config/)
+  })
+
+  test('keeps coding-agent refresh throttled in post-start', () => {
+    const postStart = readFileSync(join(assetsDevcontainerDir, 'hooks', 'post-start.sh'), 'utf8')
+    const updater = readFileSync(join(assetsDevcontainerDir, 'utils', 'coding-agent-cli-update.sh'), 'utf8')
+    const codexWrapper = readFileSync(join(assetsDevcontainerDir, 'utils', 'codex-cli-update.sh'), 'utf8')
+
+    assert.match(postStart, /ssh-bootstrap\.sh" runtime/)
+    assert.match(postStart, /coding-agent-cli-update\.sh" maybe-update/)
+    assert.match(postStart, /run_step "Refreshing coding-agent CLIs"/)
     assert.match(updater, /DEFAULT_AGENTS=\(codex claude\)/)
     assert.match(updater, /BOXDOWN_PROGRESS: %s\\n/)
     assert.match(updater, /codex update/)
@@ -7199,36 +7150,6 @@ describe('packaged assets', () => {
     assert.match(startScript, /stdout is reserved for SSH traffic/)
   })
 
-  test('downloads the APM installer before executing it', () => {
-    const postCreate = readFileSync(join(assetsDevcontainerDir, 'hooks', 'post-create.sh'), 'utf8')
-
-    assert.match(postCreate, /install_apm\(\)/)
-    assert.match(postCreate, /curl -fsSL https:\/\/aka\.ms\/apm-unix -o "\$\{installer\}"/)
-    assert.match(postCreate, /could not download APM installer; skipping APM/)
-    assert.doesNotMatch(postCreate, /curl -sSL https:\/\/aka\.ms\/apm-unix \| sh/)
-  })
-
-  test('installs baseline Python from apt instead of the Python feature', () => {
-    const pythonFeatureRef = 'ghcr.io/devcontainers/features/python@sha256:fbcad6955caeecc5ad3f7886baf652e25cba5225a6c4c2287c536de2e5607511'
-    const devcontainerJson = readFileSync(join(assetsDevcontainerDir, 'devcontainer.json'), 'utf8')
-    const devcontainerConfig = parseJsonc<{
-      features?: Record<string, unknown>
-      overrideFeatureInstallOrder?: string[]
-    }>(devcontainerJson)
-    const postCreate = readFileSync(join(assetsDevcontainerDir, 'hooks', 'post-create.sh'), 'utf8')
-    const pythonBootstrap = readFileSync(join(assetsDevcontainerDir, 'utils', 'python-bootstrap.sh'), 'utf8')
-
-    assert.match(devcontainerJson, /roughly 900MB/)
-    assert.match(devcontainerJson, /heavy Dev Containers Python feature layer/)
-    assert.ok(!Object.keys(devcontainerConfig.features ?? {}).includes(pythonFeatureRef))
-    assert.ok(!(devcontainerConfig.overrideFeatureInstallOrder ?? []).includes(pythonFeatureRef))
-    assert.match(postCreate, /install_python_runtime/)
-    assert.ok(postCreate.indexOf('install_openssh_server') < postCreate.indexOf('install_python_runtime'))
-    assert.ok(postCreate.indexOf('install_python_runtime') < postCreate.indexOf('install_1password_cli'))
-    assert.match(postCreate, /python-bootstrap\.sh" install/)
-    assert.match(pythonBootstrap, /python3 python3-venv python3-pip pipx/)
-    assert.match(pythonBootstrap, /apt-get install -y --no-install-recommends/)
-  })
 
   test('installs only eager coding-agent CLIs by default', () => {
     const updaterPath = join(assetsDevcontainerDir, 'utils', 'coding-agent-cli-update.sh')

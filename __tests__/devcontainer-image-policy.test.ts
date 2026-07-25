@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 import { parseJsonc } from '../src/jsonc.ts'
 
 const devcontainerPath = fileURLToPath(new URL('../assets/devcontainer/devcontainer.json', import.meta.url))
+const packagePath = fileURLToPath(new URL('../package.json', import.meta.url))
 const renovatePath = fileURLToPath(new URL('../renovate.json', import.meta.url))
 
 interface RenovatePackageRule {
@@ -28,10 +29,17 @@ interface RenovateConfig {
   packageRules?: RenovatePackageRule[]
 }
 
-test('pins the packaged Node 24 devcontainer image to a SHA-256 digest', () => {
-  const devcontainer = parseJsonc<{ image: string }>(readFileSync(devcontainerPath, 'utf8'))
+test('uses the release-matched Boxdown image without Dev Container Features', () => {
+  const devcontainer = parseJsonc<{
+    image: string
+    features?: Record<string, unknown>
+    overrideFeatureInstallOrder?: string[]
+  }>(readFileSync(devcontainerPath, 'utf8'))
+  const packageJson = JSON.parse(readFileSync(packagePath, 'utf8')) as { version: string }
 
-  assert.match(devcontainer.image, /^node:24-trixie-slim@sha256:[a-f0-9]{64}$/)
+  assert.equal(devcontainer.image, `ghcr.io/lirantal/boxdown:${packageJson.version}`)
+  assert.equal(devcontainer.features, undefined)
+  assert.equal(devcontainer.overrideFeatureInstallOrder, undefined)
 })
 
 test('scopes Renovate to monthly packaged Node image digest updates', () => {
