@@ -10,6 +10,7 @@ import {
   validateReleaseIdentity
 } from '../scripts/check-image-release.ts'
 import {
+  compressedLayerBytes,
   registryPlatformReference,
   verifyImageManifest
 } from '../scripts/verify-image-manifest.ts'
@@ -205,6 +206,20 @@ test('rejects compressed images beyond the allowed growth budget', () => {
     }),
     /size budget/
   )
+})
+
+test('rejects missing, malformed, empty, non-integer, and negative layer sizes', () => {
+  for (const layers of [
+    undefined,
+    [],
+    [{}],
+    [{size: ''}],
+    [{size: 1.5}],
+    [{size: -1}],
+    [{size: Number.MAX_SAFE_INTEGER}, {size: 1}]
+  ]) {
+    assert.throws(() => compressedLayerBytes(layers), /invalid image layer size/)
+  }
 })
 
 test('accepts a dual-platform image with release labels within the size budget', () => {

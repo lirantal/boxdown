@@ -22,7 +22,7 @@ interface Descriptor {
 
 interface ImageManifest {
   config?: {digest?: string}
-  layers?: Array<{size?: number}>
+  layers?: unknown
 }
 
 interface ManifestIndex {
@@ -98,6 +98,26 @@ export function verifyImageManifest(options: VerifyImageManifestOptions): void {
   }
 }
 
+export function compressedLayerBytes(layers: unknown): number {
+  if (!Array.isArray(layers) || layers.length === 0) {
+    throw new Error('invalid image layer size')
+  }
+
+  return layers.reduce((total, layer) => {
+    const size = typeof layer === 'object' && layer !== null
+      ? (layer as {size?: unknown}).size
+      : undefined
+    if (!Number.isSafeInteger(size) || size < 0) {
+      throw new Error('invalid image layer size')
+    }
+    const nextTotal = total + size
+    if (!Number.isSafeInteger(nextTotal)) {
+      throw new Error('invalid image layer size')
+    }
+    return nextTotal
+  }, 0)
+}
+
 function readJson<T>(path: string): T {
   return JSON.parse(readFileSync(path, 'utf8')) as T
 }
@@ -145,7 +165,7 @@ function verifyOciLayout(
     platformLabels.push(imageConfig.config?.Labels ?? {})
     compressedBytes = Math.max(
       compressedBytes,
-      (imageManifest.layers ?? []).reduce((total, layer) => total + (layer.size ?? 0), 0)
+      compressedLayerBytes(imageManifest.layers)
     )
   }
 
@@ -208,7 +228,7 @@ function verifyRegistryImage(
     )
     compressedBytes = Math.max(
       compressedBytes,
-      (imageManifest.layers ?? []).reduce((total, layer) => total + (layer.size ?? 0), 0)
+      compressedLayerBytes(imageManifest.layers)
     )
     platformLabels.push(imageConfig.config?.Labels ?? {})
     verifyImageManifest({

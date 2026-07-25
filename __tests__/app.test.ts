@@ -5173,7 +5173,7 @@ describe('git signing selection', () => {
 
 describe('SSH-agent proxy asset', () => {
   test('forwards node SSH-agent connections', async () => {
-    const root = mkdtempSync('/private/tmp/boxdown-ssh-agent-proxy-')
+    const root = mkdtempSync('/tmp/boxdown-ssh-agent-proxy-')
     const sourcePath = join(root, 'source.sock')
     const targetPath = join(root, 'target.sock')
     const proxyPath = join(assetsDevcontainerDir, 'utils', 'ssh-agent-proxy.mjs')
