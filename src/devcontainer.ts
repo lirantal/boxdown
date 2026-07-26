@@ -81,7 +81,7 @@ export function parseContainerIdFromUpOutput (output: string): string | undefine
   return /"containerId"\s*:\s*"([^"]+)"/.exec(output)?.[1]
 }
 
-export async function findWorkspaceContainer (context: WorkspaceContext, options: { logger?: WorkspaceCommandLogger } = {}): Promise<ContainerSummary | undefined> {
+export async function findWorkspaceContainer (context: WorkspaceContext, options: { logger?: WorkspaceCommandLogger, resourceName?: string } = {}): Promise<ContainerSummary | undefined> {
   const result = await runBuffered('docker', [
     'ps',
     '-a',
@@ -96,7 +96,7 @@ export async function findWorkspaceContainer (context: WorkspaceContext, options
   })
 
   if (result.code !== 0) {
-    throw new Error(`Could not inspect devcontainer for ${context.workspaceFolder}`)
+    throw new Error(`Could not inspect ${options.resourceName ?? 'devcontainer'} for ${context.workspaceFolder}`)
   }
 
   return parseDockerPsJsonLines(result.stdout)[0]
@@ -167,7 +167,7 @@ export function parseDockerInspectImage (output: string, containerId: string): D
   }
 }
 
-export async function inspectContainerImage (containerId: string, options: { logger?: WorkspaceCommandLogger } = {}): Promise<DockerImageInfo | undefined> {
+export async function inspectContainerImage (containerId: string, options: { logger?: WorkspaceCommandLogger, resourceName?: string } = {}): Promise<DockerImageInfo | undefined> {
   const result = await runBuffered('docker', [
     'inspect',
     '--format',
@@ -180,7 +180,7 @@ export async function inspectContainerImage (containerId: string, options: { log
   })
 
   if (result.code !== 0) {
-    throw new Error(`Could not inspect devcontainer image for ${containerId}`)
+    throw new Error(`Could not inspect ${options.resourceName ?? 'devcontainer'} image for ${containerId}`)
   }
 
   return parseDockerInspectImage(result.stdout, containerId)
@@ -241,7 +241,7 @@ export async function removeWorkspaceContainer (context: WorkspaceContext, optio
   process.stdout.write(`Removed devcontainer: ${container.id}\n`)
 }
 
-export async function removeContainerById (containerId: string, options: { volumes?: boolean, logger?: WorkspaceCommandLogger } = {}): Promise<void> {
+export async function removeContainerById (containerId: string, options: { volumes?: boolean, logger?: WorkspaceCommandLogger, resourceName?: string } = {}): Promise<void> {
   const result = await runBuffered('docker', [
     'rm',
     '-f',
@@ -254,7 +254,7 @@ export async function removeContainerById (containerId: string, options: { volum
   })
 
   if (result.code !== 0) {
-    throw new Error(`Could not remove devcontainer ${containerId}`)
+    throw new Error(`Could not remove ${options.resourceName ?? 'devcontainer'} ${containerId}`)
   }
 }
 

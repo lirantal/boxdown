@@ -13,7 +13,7 @@ import { readPackageVersion } from './package-info.ts'
 import { createWorkspaceContext, createWorkspaceContextFromIdentity, defaultDataRoot, type WorkspaceContext } from './paths.ts'
 import { createProgress, resolveProgressMode, type ProgressReporter, type ProgressOutputTarget, type ProgressStepDefinition } from './progress.ts'
 import { runBuffered } from './process.ts'
-import { purgeWorkspace, removeWorkspaceRuntimeState } from './purge.ts'
+import { createPurgePlan, formatPurgePlanDetails, formatPurgePlanText, purgeWorkspace, removeWorkspaceRuntimeState, type PurgePlan } from './purge.ts'
 import { defaultSshAlias, installSshConfig, uninstallSshConfig, validateSshAlias } from './ssh-config.ts'
 import { dedupeSshInstallTargets, installSshInstallTarget, isSshConfigInstallTarget, SSH_INSTALL_TARGETS, sshInstallTargetFlagHintsText, supportedSshInstallTargetsText, uninstallSshInstallTarget, type SshConfigInstallTarget } from './ssh-install-targets.ts'
 import { createStatusInfo, formatStatusText, statusIsHealthy } from './status.ts'
@@ -701,35 +701,53 @@ async function resolvePurgeTargets (
 async function confirmPurgeTargets (
   resolved: ResolvedPurgeTargets,
   parsed: ParsedCli,
-  options: RunCliOptions
+  options: RunCliOptions,
+  plans: PurgePlan[]
 ): Promise<boolean> {
-  if (!resolved.batch) {
-    const target = resolved.targets[0]
+  const input = options.promptInput ?? process.stdin
+  const output = options.promptOutput ?? process.stdout
+  const env = options.env ?? process.env
 
-    if (target === undefined) {
-      return false
+  if (!canPromptInteractively(input, output, env)) {
+    if (parsed.workspace !== undefined) {
+      output.write(`${plans.map(formatPurgePlanText).join('\n\n')}\n`)
     }
 
-    return confirmPurgeWorkspace(target.context, parsed, options)
+    return true
+  }
+
+  const details = plans.flatMap((plan, index) => [
+    ...(index === 0 ? [] : ['']),
+    ...formatPurgePlanDetails(plan)
+  ])
+
+  if (!resolved.batch) {
+    const result = await promptConfirm({
+      title: 'Purge Boxdown workspace?',
+      details,
+      confirmLabel: 'Purge',
+      cancelLabel: 'Cancel',
+      summaryLabel: 'Purge',
+      input,
+      output,
+      env
+    })
+
+    return result.status === 'confirmed'
   }
 
   const result = await promptConfirm({
     title: 'Purge selected Boxdown workspaces?',
-    details: [
-      `${resolved.targets.length} workspaces selected:`,
-      ...resolved.targets.map((target) => `Workspace: ${target.context.workspaceFolder}`),
-      'Removes devcontainers, recorded images, SSH/Codex entries, cache, and data.',
-      parsed.alias === undefined ? 'Alias: default and recorded aliases' : `Alias: ${parsed.alias}, default, and recorded aliases`
-    ],
+    details,
     confirmLabel: 'Purge selected',
     cancelLabel: 'Cancel',
     summaryLabel: 'Purge workspaces',
-    input: options.promptInput,
-    output: options.promptOutput,
-    env: options.env
+    input,
+    output,
+    env
   })
 
-  return result.status === 'confirmed' || result.status === 'non-interactive'
+  return result.status === 'confirmed'
 }
 
 async function runPurgeCommand (parsed: ParsedCli, argv: string[], options: RunCliOptions): Promise<number> {
@@ -745,7 +763,11 @@ async function runPurgeCommand (parsed: ParsedCli, argv: string[], options: RunC
     return 1
   }
 
-  if (!await confirmPurgeTargets(resolved, parsed, options)) {
+  const plans = await Promise.all(resolved.targets.map((target) => createPurgePlan(target.context, {
+    alias: parsed.alias
+  })))
+
+  if (!await confirmPurgeTargets(resolved, parsed, options, plans)) {
     process.stderr.write('Canceled purge.\n')
     return 1
   }
@@ -918,29 +940,6 @@ async function resolveTunnelPorts (
     tunnelPorts: [],
     cancelled: result.status === 'cancelled'
   }
-}
-
-async function confirmPurgeWorkspace (
-  context: ReturnType<typeof createWorkspaceContext>,
-  parsed: ParsedCli,
-  options: RunCliOptions
-): Promise<boolean> {
-  const result = await promptConfirm({
-    title: 'Purge Boxdown workspace?',
-    details: [
-      `Workspace: ${context.workspaceFolder}`,
-      'Removes devcontainer, recorded image, SSH/Codex entries, cache, and data.',
-      parsed.alias === undefined ? 'Alias: default and recorded aliases' : `Alias: ${parsed.alias}, default, and recorded aliases`
-    ],
-    confirmLabel: 'Purge',
-    cancelLabel: 'Cancel',
-    summaryLabel: 'Purge',
-    input: options.promptInput,
-    output: options.promptOutput,
-    env: options.env
-  })
-
-  return result.status === 'confirmed' || result.status === 'non-interactive'
 }
 
 async function resolveSshInstallTargets (

@@ -15,6 +15,12 @@ export interface PurgeOptions {
   logger?: WorkspaceCommandLogger
 }
 
+export interface PurgePlan {
+  workspaceFolder: string
+  removals: string[]
+  kept: string[]
+}
+
 function errorMessage (error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
@@ -31,6 +37,103 @@ async function runPurgeStep (label: string, action: () => Promise<void> | void):
 
 function uniqueAliases (aliases: Array<string | undefined>): string[] {
   return [...new Set(aliases.filter((alias): alias is string => alias !== undefined))]
+}
+
+function planStatePath (label: string, path: string, description: string): string {
+  return existsSync(path)
+    ? `${label}: ${path} (${description})`
+    : `${label} absent: ${path}`
+}
+
+function formatPurgePlanImage (id: string, name?: string): string {
+  return name === undefined ? id : `${name} (${id})`
+}
+
+export async function createPurgePlan (
+  context: WorkspaceContext,
+  options: Pick<PurgeOptions, 'alias'> = {}
+): Promise<PurgePlan> {
+  const removals: string[] = []
+  let metadata: WorkspaceMetadata | undefined
+
+  try {
+    metadata = readWorkspaceMetadata(context)
+  } catch {
+    removals.push('Boxdown workspace metadata could not be read; purge will retry during removal')
+  }
+
+  const aliases = uniqueAliases([
+    options.alias,
+    metadata?.sshAlias,
+    defaultSshAlias(context.workspaceBasename)
+  ])
+  let inspectedImageId: string | undefined
+
+  try {
+    const container = await findWorkspaceContainer(context)
+
+    if (container === undefined) {
+      removals.push('No Boxdown Docker container currently exists')
+    } else {
+      removals.push(`Docker container: ${container.name ?? container.id} (${container.state ?? 'unknown'})`)
+      removals.push('Docker volumes attached only to that container')
+
+      try {
+        const image = await inspectContainerImage(container.id)
+
+        if (image === undefined) {
+          removals.push('Docker image used by this workspace could not be inspected')
+        } else {
+          inspectedImageId = image.id
+          removals.push(`Docker image used by this workspace: ${formatPurgePlanImage(image.id, image.name)}`)
+        }
+      } catch {
+        removals.push('Docker image used by this workspace could not be inspected; purge will retry during removal')
+      }
+    }
+  } catch {
+    removals.push('Docker container state could not be inspected; purge will retry during removal')
+  }
+
+  if (metadata?.dockerImageId !== undefined && inspectedImageId === undefined) {
+    removals.push(`Recorded Docker image used by this workspace: ${formatPurgePlanImage(metadata.dockerImageId, metadata.dockerImageName)}`)
+  }
+
+  removals.push(`SSH connection: ${aliases.join(', ')}`)
+  removals.push('Codex remote project and Claude remote connection for those SSH connections, when installed')
+  removals.push(planStatePath('Generated Boxdown configuration', context.workspaceCacheDir, 'generated configuration and cache'))
+  removals.push(planStatePath('Boxdown workspace data', context.workspaceDataDir, 'workspace SSH key, command log, metadata, and Git-config snapshot'))
+  removals.push(planStatePath('Temporary runtime state', context.workspaceRuntimeDir, 'runtime-only secret files'))
+
+  return {
+    workspaceFolder: context.workspaceFolder,
+    removals,
+    kept: [
+      `Your repository and files: ${context.workspaceFolder}`,
+      'Your Git history and original host Git configuration',
+      'Other Docker containers, images, volumes, and Boxdown workspaces'
+    ]
+  }
+}
+
+export function formatPurgePlanDetails (plan: PurgePlan): string[] {
+  return [
+    `Workspace: ${plan.workspaceFolder}`,
+    'This will remove:',
+    ...plan.removals.map((item) => `• ${item}`),
+    'This will keep:',
+    ...plan.kept.map((item) => `• ${item}`)
+  ]
+}
+
+export function formatPurgePlanText (plan: PurgePlan): string {
+  return [
+    `Purge plan: ${plan.workspaceFolder}`,
+    'This will remove:',
+    ...plan.removals.map((item) => `- ${item}`),
+    'This will keep:',
+    ...plan.kept.map((item) => `- ${item}`)
+  ].join('\n')
 }
 
 function pathIsInsideOrSame (parent: string, candidate: string): boolean {
@@ -156,13 +259,13 @@ export async function purgeWorkspace (context: WorkspaceContext, options: PurgeO
     failed = await purgeAliasIntegrations(context, alias) || failed
   }
 
-  failed = await runPurgeStep('workspace devcontainer lookup', async () => {
-    container = await findWorkspaceContainer(context, { logger: options.logger })
+  failed = await runPurgeStep('workspace Docker container lookup', async () => {
+    container = await findWorkspaceContainer(context, { logger: options.logger, resourceName: 'Docker container' })
 
     if (container === undefined) {
-      process.stdout.write(`Devcontainer absent: ${context.workspaceFolder}\n`)
+      process.stdout.write(`Docker container absent: ${context.workspaceFolder}\n`)
     } else {
-      process.stdout.write(`Found devcontainer: ${container.id}\n`)
+      process.stdout.write(`Found Docker container: ${container.id}\n`)
     }
   }) || failed
 
@@ -170,7 +273,7 @@ export async function purgeWorkspace (context: WorkspaceContext, options: PurgeO
 
   if (currentContainer !== undefined) {
     failed = await runPurgeStep(`Docker image inspect for ${currentContainer.id}`, async () => {
-      const image = await inspectContainerImage(currentContainer.id, { logger: options.logger })
+      const image = await inspectContainerImage(currentContainer.id, { logger: options.logger, resourceName: 'Docker container' })
 
       if (image === undefined) {
         process.stdout.write(`Docker image not recorded by container inspect: ${currentContainer.id}\n`)
@@ -183,9 +286,9 @@ export async function purgeWorkspace (context: WorkspaceContext, options: PurgeO
         : `Resolved Docker image: ${image.id} (${image.name})\n`)
     }) || failed
 
-    failed = await runPurgeStep(`devcontainer ${currentContainer.id}`, async () => {
-      await removeContainerById(currentContainer.id, { volumes: true, logger: options.logger })
-      process.stdout.write(`Removed devcontainer with volumes: ${currentContainer.id}\n`)
+    failed = await runPurgeStep(`Docker container ${currentContainer.id}`, async () => {
+      await removeContainerById(currentContainer.id, { volumes: true, logger: options.logger, resourceName: 'Docker container' })
+      process.stdout.write(`Removed Docker container with volumes: ${currentContainer.id}\n`)
     }) || failed
   }
 

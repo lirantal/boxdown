@@ -27,6 +27,7 @@ import { commandRequiresContainerRuntime, commandWritesWorkspaceMetadata, parseC
 import { listWorkspaceMetadata, readWorkspaceMetadata, recordLegacyImageMigrationNotice, recordWorkspaceDockerImage, workspaceMetadataPath, writeWorkspaceMetadata } from '../src/metadata.ts'
 import { readPackageVersion } from '../src/package-info.ts'
 import { createWorkspaceContext } from '../src/paths.ts'
+import { createPurgePlan, formatPurgePlanText } from '../src/purge.ts'
 import { promptConfirm, promptMultiSelect, promptText, type PromptInput, type PromptOutput } from '../src/interactive-prompts.ts'
 import { buildHostToolPath, runBuffered, runInteractive } from '../src/process.ts'
 import { createProgress, formatCommandFailure, resolveProgressMode, runProgressCommand } from '../src/progress.ts'
@@ -2257,6 +2258,180 @@ describe('CLI execution', () => {
     assert.deepStrictEqual(listWorkspaceMetadata(dataDir), [])
   })
 
+  test('purge plan describes concrete resources and retained workspace files', async () => {
+    const workspace = tempDir('purge-plan-workspace')
+    const env = {
+      HOME: tempDir('purge-plan-home'),
+      BOXDOWN_CACHE_HOME: tempDir('purge-plan-cache'),
+      BOXDOWN_DATA_HOME: tempDir('purge-plan-data'),
+      BOXDOWN_RUNTIME_HOME: tempDir('purge-plan-runtime')
+    }
+    const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+
+    mkdirSync(context.workspaceCacheDir, { recursive: true })
+    mkdirSync(context.workspaceRuntimeDir, { recursive: true })
+    writeFileSync(context.generatedConfigPath, '{}\n')
+    writeWorkspaceMetadata(context, 'recorded-devcontainer')
+    recordWorkspaceDockerImage(context, { id: 'sha256:stale-recorded-image', name: 'boxdown-stale:latest' })
+
+    await withFakeDocker([
+      {
+        workspace,
+        id: 'purge-plan-container',
+        containerState: 'running',
+        imageId: 'sha256:purge-plan-image',
+        imageName: 'boxdown-plan:latest'
+      }
+    ], async (_logPath, dockerEnv) => {
+      await withProcessEnv({ ...dockerEnv, ...env }, async () => {
+        const text = formatPurgePlanText(await createPurgePlan(context, { alias: 'provided-devcontainer' }))
+
+        assert.match(text, /Docker container: purge-plan-container \(running\)/)
+        assert.match(text, /Docker image used by this workspace: boxdown-plan:latest \(sha256:purge-plan-image\)/)
+        assert.doesNotMatch(text, /Recorded Docker image used by this workspace: boxdown-stale:latest/)
+        assert.match(text, /Docker volumes attached only to that container/)
+        assert.match(text, new RegExp(`SSH connection: provided-devcontainer, recorded-devcontainer, ${defaultSshAlias(context.workspaceBasename)}`))
+        assert.ok(text.includes(context.workspaceCacheDir))
+        assert.ok(text.includes(context.workspaceDataDir))
+        assert.ok(text.includes(context.workspaceRuntimeDir))
+        assert.match(text, new RegExp(`Your repository and files: ${context.workspaceFolder}`))
+        assert.match(text, /Other Docker containers, images, volumes, and Boxdown workspaces/)
+      })
+    })
+  })
+
+  test('purge plan marks absent resources without promising removal', async () => {
+    const workspace = tempDir('purge-plan-absent-workspace')
+    const env = {
+      HOME: tempDir('purge-plan-absent-home'),
+      BOXDOWN_CACHE_HOME: tempDir('purge-plan-absent-cache'),
+      BOXDOWN_DATA_HOME: tempDir('purge-plan-absent-data'),
+      BOXDOWN_RUNTIME_HOME: tempDir('purge-plan-absent-runtime')
+    }
+    const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+
+    await withFakeDocker([], async (_logPath, dockerEnv) => {
+      await withProcessEnv({ ...dockerEnv, ...env }, async () => {
+        const text = formatPurgePlanText(await createPurgePlan(context))
+
+        assert.match(text, /No Boxdown Docker container currently exists/)
+        assert.match(text, new RegExp(`Generated Boxdown configuration absent: ${context.workspaceCacheDir}`))
+        assert.match(text, new RegExp(`Boxdown workspace data absent: ${context.workspaceDataDir}`))
+        assert.match(text, new RegExp(`Temporary runtime state absent: ${context.workspaceRuntimeDir}`))
+        assert.doesNotMatch(text, /Docker volumes attached only to that container/)
+      })
+    })
+  })
+
+  test('purge plan remains informative when workspace metadata cannot be read', async () => {
+    const workspace = tempDir('purge-plan-invalid-metadata-workspace')
+    const env = {
+      HOME: tempDir('purge-plan-invalid-metadata-home'),
+      BOXDOWN_CACHE_HOME: tempDir('purge-plan-invalid-metadata-cache'),
+      BOXDOWN_DATA_HOME: tempDir('purge-plan-invalid-metadata-data'),
+      BOXDOWN_RUNTIME_HOME: tempDir('purge-plan-invalid-metadata-runtime')
+    }
+    const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+
+    writeWorkspaceMetadata(context, defaultSshAlias(context.workspaceBasename))
+    writeFileSync(workspaceMetadataPath(context), '{invalid json\n')
+
+    await withFakeDocker([], async (_logPath, dockerEnv) => {
+      await withProcessEnv({ ...dockerEnv, ...env }, async () => {
+        const text = formatPurgePlanText(await createPurgePlan(context))
+
+        assert.match(text, /Boxdown workspace metadata could not be read; purge will retry during removal/)
+        assert.match(text, /No Boxdown Docker container currently exists/)
+      })
+    })
+  })
+
+  test('interactive purge shows its resource plan before confirmation', async () => {
+    const workspace = tempDir('purge-preview-prompt-workspace')
+    const env = {
+      HOME: tempDir('purge-preview-prompt-home'),
+      BOXDOWN_CACHE_HOME: tempDir('purge-preview-prompt-cache'),
+      BOXDOWN_DATA_HOME: tempDir('purge-preview-prompt-data'),
+      BOXDOWN_RUNTIME_HOME: tempDir('purge-preview-prompt-runtime')
+    }
+    const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+    const { input, output, outputText } = fakePromptStreams()
+
+    mkdirSync(context.workspaceCacheDir, { recursive: true })
+    mkdirSync(context.workspaceRuntimeDir, { recursive: true })
+    writeFileSync(context.generatedConfigPath, '{}\n')
+    writeWorkspaceMetadata(context, defaultSshAlias(context.workspaceBasename))
+
+    await withFakeDocker([
+      {
+        workspace,
+        id: 'purge-preview-prompt-container',
+        containerState: 'running',
+        imageId: 'sha256:purge-preview-prompt-image',
+        imageName: 'boxdown-preview:latest'
+      }
+    ], async (logPath, dockerEnv) => {
+      const codePromise = withProcessEnv({ ...dockerEnv, ...env }, async () => runCli(['purge', '--workspace', workspace], {
+        promptInput: input,
+        promptOutput: output,
+        env: { ...process.env, CI: 'false' }
+      }))
+
+      await waitForPromptOutput(outputText, /Purge Boxdown workspace\?/)
+      assert.match(outputText(), /This will remove:/)
+      assert.match(outputText(), /Docker container: purge-preview-prompt-container \(running\)/)
+      assert.match(outputText(), /Docker image used by this workspace: boxdown-preview:latest \(sha256:purge-preview-prompt-image\)/)
+      assert.ok(outputText().includes(context.workspaceCacheDir))
+      assert.ok(outputText().includes(context.workspaceDataDir))
+      assert.ok(outputText().includes(context.workspaceRuntimeDir))
+      assert.match(outputText(), /This will keep:/)
+      assert.ok(outputText().includes(`Your repository and files: ${context.workspaceFolder}`))
+
+      input.write('\r')
+
+      assert.strictEqual(await codePromise, 1)
+      assert.ok(!fakeDockerCalls(logPath).some((line) => line.startsWith('rm -f') || line.startsWith('image rm -f')))
+      assert.strictEqual(existsSync(context.workspaceCacheDir), true)
+      assert.strictEqual(existsSync(context.workspaceDataDir), true)
+      assert.strictEqual(existsSync(context.workspaceRuntimeDir), true)
+      assert.strictEqual(existsSync(context.workspaceLogPath), false)
+    })
+  })
+
+  test('non-interactive targeted purge prints a plain resource plan before removal', async () => {
+    const workspace = tempDir('purge-preview-ci-workspace')
+    const env = {
+      HOME: tempDir('purge-preview-ci-home'),
+      BOXDOWN_CACHE_HOME: tempDir('purge-preview-ci-cache'),
+      BOXDOWN_DATA_HOME: tempDir('purge-preview-ci-data'),
+      BOXDOWN_RUNTIME_HOME: tempDir('purge-preview-ci-runtime')
+    }
+    const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+
+    mkdirSync(context.workspaceCacheDir, { recursive: true })
+    writeFileSync(context.generatedConfigPath, '{}\n')
+    writeWorkspaceMetadata(context, defaultSshAlias(context.workspaceBasename))
+
+    await withFakeDocker([
+      {
+        workspace,
+        id: 'purge-preview-ci-container',
+        imageId: 'sha256:purge-preview-ci-image',
+        imageName: 'boxdown-preview-ci:latest'
+      }
+    ], async (_logPath, dockerEnv) => {
+      const result = runCliProcess(['purge', '--workspace', workspace], { ...dockerEnv, ...env, CI: 'true' })
+
+      assert.strictEqual(result.code, 0)
+      assert.match(result.stdout, new RegExp(`Purge plan: ${context.workspaceFolder}`))
+      assert.match(result.stdout, /Docker container: purge-preview-ci-container \(running\)/)
+      assert.match(result.stdout, /Docker image used by this workspace: boxdown-preview-ci:latest \(sha256:purge-preview-ci-image\)/)
+      assert.ok(result.stdout.includes(context.workspaceCacheDir))
+      assert.doesNotMatch(result.stdout, /\u001B/)
+      assert.doesNotMatch(result.stdout, /Purge Boxdown workspace\?/)
+    })
+  })
+
   test('purges workspace container image state and managed integrations', async () => {
     const workspace = tempDir('purge-workspace')
     const env = {
@@ -2666,6 +2841,11 @@ describe('CLI execution', () => {
       assert.ok(outputText().includes(`${color(' - ', 'dim')}${color('(absent)', 'red')}${color(` ${alphaContext.workspaceFolder}`, 'dim')}`))
       input.write('\r')
       await waitForPromptOutput(outputText, /Purge selected Boxdown workspaces\?/)
+      assert.strictEqual((outputText().match(/This will remove:/g) ?? []).length, 2)
+      assert.ok(outputText().includes(`Workspace: ${missingContext.workspaceFolder}`))
+      assert.ok(outputText().includes(`Workspace: ${betaContext.workspaceFolder}`))
+      assert.match(outputText(), /No Boxdown Docker container currently exists/)
+      assert.match(outputText(), /Docker container: purge-batch-beta-container \(running\)/)
       input.write('\u001B[C')
       input.write('\r')
 
@@ -2859,6 +3039,11 @@ describe('CLI execution', () => {
       input.write(' ')
       input.write('\r')
       await waitForPromptOutput(outputText, /Purge selected Boxdown workspaces\?/)
+      assert.strictEqual((outputText().match(/This will remove:/g) ?? []).length, 2)
+      assert.ok(outputText().includes(`Workspace: ${alphaContext.workspaceFolder}`))
+      assert.ok(outputText().includes(`Workspace: ${betaContext.workspaceFolder}`))
+      assert.match(outputText(), /Docker container: purge-batch-alpha-container \(running\)/)
+      assert.match(outputText(), /Docker container: purge-batch-beta-container \(running\)/)
       input.write('\u001B[C')
       input.write('\r')
 
@@ -2946,7 +3131,7 @@ describe('CLI execution', () => {
       assert.strictEqual(result.code, 1)
       assert.ok(calls.includes('rm -f -v failing-container'))
       assert.ok(calls.includes('image rm -f sha256:failing-image'))
-      assert.match(result.stderr, /Failed devcontainer failing-container/)
+      assert.match(result.stderr, /Failed Docker container failing-container: Could not remove Docker container failing-container/)
       assert.match(result.stderr, /Failed Docker image sha256:failing-image/)
       assert.strictEqual(existsSync(context.workspaceCacheDir), false)
       assert.strictEqual(existsSync(context.workspaceDataDir), false)
@@ -2987,7 +3172,9 @@ describe('CLI execution', () => {
       const calls = fakeDockerCalls(logPath)
 
       assert.strictEqual(code, 1)
-      assert.deepStrictEqual(calls, [])
+      assert.ok(calls.some((line) => line.startsWith('ps -a --filter label=devcontainer.local_folder=')))
+      assert.ok(calls.some((line) => line.startsWith('inspect --format {{json .Image}}|{{json .Config.Image}}')))
+      assert.ok(!calls.some((line) => line.startsWith('rm -f') || line.startsWith('image rm -f')))
       assert.strictEqual(existsSync(context.workspaceCacheDir), true)
       assert.strictEqual(existsSync(context.workspaceDataDir), true)
       assert.strictEqual(existsSync(context.workspaceLogPath), false)
