@@ -114,10 +114,11 @@ integration records only when you select or explicitly request those targets.
 The `stop`, `down`, and `purge` commands define the cleanup boundary.
 
 `boxdown stop` keeps the container and all Boxdown state. `boxdown down`
-removes the container but keeps Boxdown state. `boxdown purge` removes the
-workspace's Boxdown-managed container, recorded image, generated state,
-command log, and managed SSH/app integrations; it never removes repository
-files.
+removes the container and per-workspace runtime-secret state. It retains
+persistent cache/data state: metadata, SSH keys, generated config, and command
+log. `boxdown purge` removes the workspace's Boxdown-managed container,
+recorded image, generated state, command log, and managed SSH/app integrations;
+it never removes repository files.
 
 For lifecycle details, see [Container lifecycle](./docs/features/lifecycle.md).
 

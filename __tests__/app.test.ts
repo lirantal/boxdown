@@ -740,6 +740,7 @@ describe('CLI parsing', () => {
     assert.match(readme, /CI and non-interactive contexts stream\s+raw managed-command output/)
     assert.match(readme, /metadata, SSH keys, and redacted command log live under its data\s+roots/)
     assert.match(readme, /per-workspace runtime root for runtime-secret state/)
+    assert.match(readme, /`boxdown down`\s+removes the container and per-workspace runtime-secret state\.\s+It retains\s+persistent cache\/data state: metadata, SSH keys, generated config, and command\s+log\./)
     assert.match(readme, /`stop`.*`down`.*`purge`/is)
   })
 
