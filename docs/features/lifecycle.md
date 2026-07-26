@@ -66,12 +66,15 @@ and is not required for a healthy status exit.
 `stop` stops the workspace devcontainer when it is running. If the container is
 already stopped or absent, it prints a short message and exits 0.
 
-`down` removes the workspace devcontainer with Docker. It does not remove
-Boxdown cache, generated config, data directories, or SSH keys.
+`down` removes the workspace devcontainer with Docker and removes its
+per-workspace runtime-secret state. It does not remove persistent Boxdown
+cache, generated config, data directories, or SSH keys.
 
 Lifecycle commands append managed output to the workspace command log under the
-workspace data directory. `--verbose` only controls terminal streaming; it does
-not disable or enable log persistence. Foreground interactive shell, agent, and
+workspace data directory. In an interactive terminal, `--verbose` displays the
+detailed lifecycle trace without streaming raw child output. CI and non-TTY
+contexts use raw managed-command output streaming. These output modes do not
+disable or enable log persistence. Foreground interactive shell, agent, and
 tunnel session bytes are not tee'd into the log.
 
 `purge` removes the workspace devcontainer with Docker, force-removes the exact

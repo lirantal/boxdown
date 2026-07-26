@@ -750,8 +750,19 @@ describe('CLI parsing', () => {
     assert.match(readme, /`~\/\.agents`.*read-only.*`\/home\/node\/\.agents`/is)
     assert.match(readme, /`~\/\.codex\/auth\.json`.*read-only.*`\/home\/node\/\.codex\/auth\.json`/is)
     assert.match(readme, /SSH-agent socket.*`\/run\/boxdown\/ssh-agent\.sock`.*signing-key state.*read-only/is)
+    assert.match(readme, /Recreate the container.*mount configuration.*SSH-agent\s+socket path/is)
+    assert.match(readme, /contents.*already mounted.*without recreation/is)
     assert.match(readme, /`boxdown down`\s+removes the container and per-workspace runtime-secret state\.\s+It retains\s+persistent cache\/data state: metadata, SSH keys, generated config, and command\s+log\./)
     assert.match(readme, /`stop`.*`down`.*`purge`/is)
+  })
+
+  test('lifecycle docs preserve down cleanup and context-sensitive verbosity semantics', () => {
+    const lifecycle = readFileSync(fileURLToPath(new URL('../docs/features/lifecycle.md', import.meta.url)), 'utf8')
+
+    assert.match(lifecycle, /`down` removes the workspace devcontainer.*per-workspace runtime-secret state/is)
+    assert.match(lifecycle, /does not remove.*cache.*generated config.*data directories.*SSH keys/is)
+    assert.match(lifecycle, /interactive.*`--verbose`.*detailed lifecycle trace/is)
+    assert.match(lifecycle, /CI.*non-TTY.*raw .*output/is)
   })
 
   test('feature docs distinguish interactive detailed traces from non-interactive raw streaming', () => {
@@ -4699,6 +4710,30 @@ describe('progress output', () => {
     assert.strictEqual(result.code, 0)
     assert.ok(lines.includes('Configuring global Git'))
     assert.ok(!lines.some((line) => line.includes('hidden raw')))
+  })
+
+  test('buffers split stdout and stderr lifecycle markers independently', async () => {
+    const lines: string[] = []
+    const progress = createProgress({
+      mode: 'detailed',
+      write: (_target, message) => lines.push(message)
+    })
+    const result = await runProgressCommand('interleaved markers', 'bash', [
+      '-c',
+      [
+        'printf "BOXDOWN_PROGRESS: stdout"',
+        'sleep 0.05',
+        'printf "BOXDOWN_PROGRESS: stderr marker\\n" >&2',
+        'sleep 0.05',
+        'printf " marker\\n"'
+      ].join('; ')
+    ], { progress })
+
+    assert.strictEqual(result.code, 0)
+    assert.deepStrictEqual(lines, [
+      'stderr marker',
+      'stdout marker'
+    ])
   })
 
   test('raw progress still mirrors stdout and stderr to its requested targets', async () => {

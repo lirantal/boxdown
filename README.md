@@ -118,7 +118,9 @@ Optional create-time mounts are also explicit:
   at `/run/boxdown/ssh-agent.sock` and mounts public signing-key state read-only
   at `/opt/boxdown/state/git-signing`. Private signing keys remain on the host.
 
-Recreate the container after these optional inputs appear or change.
+Recreate the container when its optional mount configuration or host SSH-agent
+socket path changes. Changes to contents inside an already mounted source are
+visible without recreation.
 `boxdown status` reports the exact generated paths for a workspace.
 
 ### Host integrations

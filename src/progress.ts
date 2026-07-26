@@ -648,7 +648,8 @@ export async function runProgressCommand (
 ): Promise<CommandResult> {
   const progress = options.progress
   const rawOutput = progress?.rawOutput ?? true
-  const markerSink = progress !== undefined && !rawOutput ? createMarkerSink(progress) : undefined
+  const stdoutMarkerSink = progress !== undefined && !rawOutput ? createMarkerSink(progress) : undefined
+  const stderrMarkerSink = progress !== undefined && !rawOutput ? createMarkerSink(progress) : undefined
   const checklistStepId = progress !== undefined && options.stepId !== undefined && progress.hasStep(options.stepId)
     ? options.stepId
     : undefined
@@ -667,11 +668,12 @@ export async function runProgressCommand (
       logger: options.logger,
       mirrorStdout: rawOutput ? (options.verboseStdout ?? 'stdout') : false,
       mirrorStderr: rawOutput ? (options.verboseStderr ?? 'stderr') : false,
-      onStdout: markerSink?.write,
-      onStderr: markerSink?.write
+      onStdout: stdoutMarkerSink?.write,
+      onStderr: stderrMarkerSink?.write
     })
 
-    markerSink?.flush()
+    stdoutMarkerSink?.flush()
+    stderrMarkerSink?.flush()
     if (checklistStepId !== undefined) {
       if (result.code === 0) {
         progress?.completeStep(checklistStepId)
@@ -683,7 +685,8 @@ export async function runProgressCommand (
     }
     return result
   } catch (error) {
-    markerSink?.flush()
+    stdoutMarkerSink?.flush()
+    stderrMarkerSink?.flush()
     if (checklistStepId !== undefined) {
       progress?.failStep(checklistStepId)
     } else {
