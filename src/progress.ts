@@ -2,7 +2,7 @@ import { runBuffered, type BufferedCommandOptions, type CommandResult } from './
 import { color, formatPromptEnd, formatPromptTitle, promptRail, selectedMark } from './cli-style.ts'
 
 export type ProgressOutputTarget = 'stdout' | 'stderr'
-export type ProgressMode = 'interactive' | 'verbose' | 'none'
+export type ProgressMode = 'interactive' | 'detailed' | 'verbose' | 'none'
 export type ProgressWriter = (target: ProgressOutputTarget, message: string) => void
 export type ProgressRawWriter = (target: ProgressOutputTarget, message: string) => void
 
@@ -82,27 +82,21 @@ function normalizeMessage (message: string): string {
 }
 
 export function resolveProgressMode (options: ResolveProgressModeOptions = {}): ProgressMode {
-  if (options.json === true) {
-    return 'none'
-  }
-
-  if (options.verbose === true) {
-    return 'verbose'
-  }
-
-  if (isCiEnvironment(options.env ?? process.env)) {
-    return 'verbose'
-  }
+  if (options.json === true) return 'none'
 
   const target = options.target ?? 'stdout'
   const isTTY = options.isTTY ?? targetIsTTY(target)
 
-  return isTTY ? 'interactive' : 'verbose'
+  if (isCiEnvironment(options.env ?? process.env) || !isTTY) return 'verbose'
+  if (options.verbose === true) return 'detailed'
+  return 'interactive'
 }
 
 export class ProgressReporter {
   readonly mode: ProgressMode
   readonly verbose: boolean
+  readonly rawOutput: boolean
+  readonly detailed: boolean
   readonly target: ProgressOutputTarget
   readonly #write: ProgressWriter
   readonly #writeRaw: ProgressRawWriter
@@ -119,7 +113,9 @@ export class ProgressReporter {
 
   constructor (options: ProgressReporterOptions = {}) {
     this.mode = options.mode ?? (options.verbose === true ? 'verbose' : 'interactive')
-    this.verbose = this.mode === 'verbose'
+    this.rawOutput = this.mode === 'verbose'
+    this.detailed = this.mode === 'detailed'
+    this.verbose = this.rawOutput
     this.target = options.target ?? 'stdout'
     this.#write = options.write ?? writeLine
     this.#writeRaw = options.writeRaw ?? writeRaw
@@ -129,7 +125,12 @@ export class ProgressReporter {
   }
 
   section (title: string): void {
-    if (this.mode !== 'interactive') {
+    if (!this.#isStructured()) {
+      return
+    }
+
+    if (this.detailed) {
+      this.#write(this.target, title)
       return
     }
 
@@ -163,7 +164,13 @@ export class ProgressReporter {
   }
 
   item (message: string): void {
-    if (this.mode !== 'interactive') {
+    if (!this.#isStructured()) {
+      return
+    }
+
+    if (this.detailed) {
+      const normalized = normalizeMessage(message)
+      if (normalized.length > 0) this.#write(this.target, normalized)
       return
     }
 
@@ -171,7 +178,12 @@ export class ProgressReporter {
   }
 
   detail (message: string): void {
-    if (this.mode !== 'interactive') {
+    if (!this.#isStructured()) {
+      return
+    }
+
+    if (this.detailed) {
+      this.#write(this.target, `  ${message}`)
       return
     }
 
@@ -182,6 +194,12 @@ export class ProgressReporter {
     if (this.mode === 'none') return
     if (this.mode === 'verbose') {
       this.#write(this.target, message)
+      return
+    }
+
+    if (this.detailed) {
+      const normalized = normalizeMessage(message)
+      if (normalized.length > 0) this.#write(this.target, normalized)
       return
     }
 
@@ -198,10 +216,21 @@ export class ProgressReporter {
       return
     }
 
+    if (this.detailed) {
+      this.#write(this.target, `Warning: ${message}`)
+      return
+    }
+
     this.#writeInteractiveLine(`${promptRail()}  ${color('!', 'dim')} ${message}`)
   }
 
   marker (message: string): void {
+    if (this.detailed) {
+      const normalized = normalizeMessage(message)
+      if (normalized.length > 0) this.#write(this.target, normalized)
+      return
+    }
+
     if (this.#steps.length > 0) {
       return
     }
@@ -229,7 +258,11 @@ export class ProgressReporter {
   }
 
   startStep (id: string): void {
-    this.#updateStep(id, 'running')
+    const step = this.#updateStep(id, 'running')
+    if (this.detailed && step?.state === 'pending') {
+      const normalized = normalizeMessage(step.label)
+      if (normalized.length > 0) this.#write(this.target, normalized)
+    }
     this.#startStepTimer()
   }
 
@@ -239,12 +272,18 @@ export class ProgressReporter {
   }
 
   failStep (id: string): void {
-    this.#updateStep(id, 'failed')
+    const step = this.#updateStep(id, 'failed')
+    if (this.detailed && step !== undefined) {
+      this.#write(this.target, `Failed: ${step.label}`)
+    }
     this.#stopStepTimerIfIdle()
   }
 
   skipStep (id: string): void {
-    this.#updateStep(id, 'skipped')
+    const step = this.#updateStep(id, 'skipped')
+    if (this.detailed && step !== undefined) {
+      this.#write(this.target, `Skipped: ${step.label}`)
+    }
     this.#stopStepTimerIfIdle()
   }
 
@@ -253,12 +292,17 @@ export class ProgressReporter {
   }
 
   startSpinner (message: string): void {
-    if (this.mode !== 'interactive') {
+    if (!this.#isStructured()) {
       return
     }
 
     const normalized = normalizeMessage(message)
     if (normalized.length === 0) {
+      return
+    }
+
+    if (this.detailed) {
+      this.#write(this.target, normalized)
       return
     }
 
@@ -282,6 +326,10 @@ export class ProgressReporter {
   }
 
   tickSpinner (): void {
+    if (this.mode !== 'interactive') {
+      return
+    }
+
     if (this.#steps.some((step) => step.state === 'running')) {
       this.#stepFrameIndex += 1
       this.#renderChecklist()
@@ -321,9 +369,13 @@ export class ProgressReporter {
   commandEnv (env?: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
     return {
       ...(env ?? {}),
-      BOXDOWN_VERBOSE: this.verbose ? '1' : '0',
-      BOXDOWN_PROGRESS: this.mode === 'interactive' ? '1' : '0'
+      BOXDOWN_VERBOSE: this.rawOutput ? '1' : '0',
+      BOXDOWN_PROGRESS: this.mode === 'interactive' || this.mode === 'detailed' ? '1' : '0'
     }
+  }
+
+  #isStructured (): boolean {
+    return this.mode === 'interactive' || this.mode === 'detailed'
   }
 
   #writeLine (message: string): void {
@@ -365,16 +417,16 @@ export class ProgressReporter {
     this.#writeRaw(this.target, '\r\u001B[2K')
   }
 
-  #updateStep (id: string, state: ProgressStepState): void {
+  #updateStep (id: string, state: ProgressStepState): ProgressStep | undefined {
     const index = this.#steps.findIndex((step) => step.id === id)
 
     if (index === -1) {
-      return
+      return undefined
     }
 
     const step = this.#steps[index]
     if (step === undefined) {
-      return
+      return undefined
     }
 
     this.#steps[index] = {
@@ -383,6 +435,7 @@ export class ProgressReporter {
     }
 
     this.#renderChecklist()
+    return step
   }
 
   #renderChecklist (): void {
@@ -561,8 +614,12 @@ export function formatCommandFailure (label: string, result: CommandResult, opti
   const stdoutTail = stdoutBudget === 0 ? [] : specificStdout.slice(-stdoutBudget)
   const lines = [
     `${label} failed with exit code ${result.code}.`,
-    'Rerun with --verbose to see full command output.'
+    'Inspect the command log for full redacted command output.'
   ]
+
+  if (options.logPath === undefined) {
+    lines.push('Rerun in a non-interactive terminal with --verbose to stream raw command output.')
+  }
 
   if (stderrTail.length > 0) {
     lines.push('', 'stderr tail:', ...stderrTail.map((line) => `  ${line}`))
@@ -590,15 +647,16 @@ export async function runProgressCommand (
   options: ProgressCommandOptions = {}
 ): Promise<CommandResult> {
   const progress = options.progress
-  const verbose = progress?.verbose ?? true
-  const markerSink = progress !== undefined && !verbose ? createMarkerSink(progress) : undefined
+  const rawOutput = progress?.rawOutput ?? true
+  const stdoutMarkerSink = progress !== undefined && !rawOutput ? createMarkerSink(progress) : undefined
+  const stderrMarkerSink = progress !== undefined && !rawOutput ? createMarkerSink(progress) : undefined
   const checklistStepId = progress !== undefined && options.stepId !== undefined && progress.hasStep(options.stepId)
     ? options.stepId
     : undefined
 
-  if (progress !== undefined && !verbose && checklistStepId !== undefined) {
+  if (progress !== undefined && !rawOutput && checklistStepId !== undefined) {
     progress.startStep(checklistStepId)
-  } else if (progress !== undefined && !verbose && options.spinnerLabel !== undefined) {
+  } else if (progress !== undefined && !rawOutput && options.spinnerLabel !== undefined) {
     progress.startSpinner(options.spinnerLabel)
   }
 
@@ -608,13 +666,14 @@ export async function runProgressCommand (
       env: progress?.commandEnv(options.env) ?? options.env,
       input: options.input,
       logger: options.logger,
-      mirrorStdout: verbose ? (options.verboseStdout ?? 'stdout') : false,
-      mirrorStderr: verbose ? (options.verboseStderr ?? 'stderr') : false,
-      onStdout: markerSink?.write,
-      onStderr: markerSink?.write
+      mirrorStdout: rawOutput ? (options.verboseStdout ?? 'stdout') : false,
+      mirrorStderr: rawOutput ? (options.verboseStderr ?? 'stderr') : false,
+      onStdout: stdoutMarkerSink?.write,
+      onStderr: stderrMarkerSink?.write
     })
 
-    markerSink?.flush()
+    stdoutMarkerSink?.flush()
+    stderrMarkerSink?.flush()
     if (checklistStepId !== undefined) {
       if (result.code === 0) {
         progress?.completeStep(checklistStepId)
@@ -626,7 +685,8 @@ export async function runProgressCommand (
     }
     return result
   } catch (error) {
-    markerSink?.flush()
+    stdoutMarkerSink?.flush()
+    stderrMarkerSink?.flush()
     if (checklistStepId !== undefined) {
       progress?.failStep(checklistStepId)
     } else {

@@ -683,7 +683,13 @@ describe('CLI parsing', () => {
     const usageLines = USAGE.split(/\r?\n/)
 
     assert.match(USAGE, /Commands:/)
-    assert.match(USAGE, /boxdown setup \[--workspace <path>\] \[--alias <name>\] \[--recreate\] \[--target <name>\]\.\.\./)
+    assert.match(USAGE, /boxdown setup \[--workspace <path>\] \[--alias <name>\] \[--recreate\] \[--target <name>\]\.\.\. \[--verbose\]/)
+    assert.match(USAGE, /boxdown start \[--workspace <path>\] \[--recreate\] \[--verbose\]/)
+    assert.match(USAGE, /boxdown codex \[--workspace <path>\] \[--recreate\] \[--verbose\] \[-- <codex args\.\.\.>\]/)
+    assert.match(USAGE, /boxdown claude \[--workspace <path>\] \[--recreate\] \[--verbose\] \[-- <claude args\.\.\.>\]/)
+    assert.match(USAGE, /boxdown opencode \[--workspace <path>\] \[--recreate\] \[--verbose\] \[-- <opencode args\.\.\.>\]/)
+    assert.match(USAGE, /boxdown antigravity \[--workspace <path>\] \[--recreate\] \[--verbose\] \[-- <agy args\.\.\.>\]/)
+    assert.match(USAGE, /boxdown tunnel \[--port <port>\] \[--port <local:remote>\] \[--workspace <path>\] \[--alias <name>\] \[--verbose\]/)
     assert.match(USAGE, /boxdown ssh uninstall \[--workspace <path>\] \[--alias <name>\] \[--target <name>\]\.\.\./)
     assert.match(USAGE, /boxdown list \[--details\] \[--json\|--format json\]/)
     assert.match(USAGE, /boxdown status \[--workspace <path>\] \[--alias <name>\] \[--json\|--format json\]/)
@@ -706,7 +712,7 @@ describe('CLI parsing', () => {
     assert.match(USAGE, /--json\s+Print JSON output\. Supported by status and list\./)
     assert.match(USAGE, /--format json\s+Print JSON output\. Equivalent to --json\./)
     assert.match(USAGE, /--details\s+Print detailed human list output\. Supported by list\./)
-    assert.match(USAGE, /--verbose\s+Stream raw Docker, devcontainer, and hook command output\.[\s\S]*per-workspace command log either way\./)
+    assert.match(USAGE, /--verbose\s+Show a detailed lifecycle trace in an interactive terminal\.[\s\S]*Streams raw Docker, devcontainer, and hook output in CI\s+or non-interactive output\./)
     assert.match(USAGE, /--version, -v\s+Show version\./)
     assert.match(USAGE, /doctor\s+Check required host tools/)
     assert.doesNotMatch(USAGE, /Alias:/)
@@ -729,6 +735,49 @@ describe('CLI parsing', () => {
     assert.match(USAGE, /--port <port>\s+Tunnel a local port/)
     assert.match(USAGE, /refresh-gh-token\s+Start or reuse the devcontainer/)
     assert.match(USAGE, /refresh-gh-token-running\s+Refresh GitHub CLI auth only if/)
+  })
+
+  test('README documents Boxdown resource ownership and verbosity modes', () => {
+    const readme = readFileSync(fileURLToPath(new URL('../README.md', import.meta.url)), 'utf8')
+    assert.match(readme, /## What Boxdown manages/)
+    assert.match(readme, /outside the target repository/)
+    assert.match(readme, /interactive `--verbose`.*detailed lifecycle trace/is)
+    assert.match(readme, /CI and non-interactive contexts stream\s+raw managed-command output/)
+    assert.match(readme, /metadata, SSH keys, and redacted command log live under its data\s+roots/)
+    assert.match(readme, /per-workspace runtime root for runtime-secret state/)
+    assert.match(readme, /host checkout.*\/workspaces\/<repo-name>.*writable/is)
+    assert.match(readme, /packaged assets, public SSH key, host Git-config\s+snapshot, and runtime-secret directory read-only/is)
+    assert.match(readme, /host Git-config\s+snapshot.*writable `\/home\/node\/\.gitconfig`/is)
+    assert.match(readme, /`~\/\.agents`.*read-only.*`\/home\/node\/\.agents`/is)
+    assert.match(readme, /`~\/\.codex\/auth\.json`.*read-only.*`\/home\/node\/\.codex\/auth\.json`/is)
+    assert.match(readme, /SSH-agent socket.*`\/run\/boxdown\/ssh-agent\.sock`.*signing-key state.*read-only/is)
+    assert.match(readme, /Recreate the container.*mount configuration.*SSH-agent\s+socket path/is)
+    assert.match(readme, /contents.*already mounted.*without recreation/is)
+    assert.match(readme, /`boxdown down`\s+removes the container and per-workspace runtime-secret state\.\s+It retains\s+persistent cache\/data state: metadata, SSH keys, generated config, and command\s+log\./)
+    assert.match(readme, /`stop`.*`down`.*`purge`/is)
+  })
+
+  test('lifecycle docs preserve down cleanup and context-sensitive verbosity semantics', () => {
+    const lifecycle = readFileSync(fileURLToPath(new URL('../docs/features/lifecycle.md', import.meta.url)), 'utf8')
+
+    assert.match(lifecycle, /`down` removes the workspace devcontainer.*per-workspace runtime-secret state/is)
+    assert.match(lifecycle, /does not remove.*cache.*generated config.*data directories.*SSH keys/is)
+    assert.match(lifecycle, /interactive.*`--verbose`.*detailed lifecycle trace/is)
+    assert.match(lifecycle, /CI.*non-TTY.*raw .*output/is)
+  })
+
+  test('feature docs distinguish interactive detailed traces from non-interactive raw streaming', () => {
+    const docs = [
+      '../docs/features/setup.md',
+      '../docs/features/start-and-shell.md',
+      '../docs/features/github-auth-refresh.md'
+    ].map((relativePath) => readFileSync(fileURLToPath(new URL(relativePath, import.meta.url)), 'utf8'))
+
+    for (const document of docs) {
+      assert.match(document, /interactive.*`--verbose`.*detailed lifecycle trace/is)
+      assert.match(document, /CI|non-interactive/is)
+      assert.match(document, /raw .*output/is)
+    }
   })
 
   test('help aligns wrapped command descriptions', () => {
@@ -1096,6 +1145,93 @@ describe('interactive install target prompt', () => {
 })
 
 describe('CLI execution', () => {
+  test('setup interactive output explains generated state outside this repository', async () => {
+    const workspace = tempDir('setup-ownership-workspace')
+    const dataHome = tempDir('setup-ownership-data')
+    const cacheHome = tempDir('setup-ownership-cache')
+    const stdout: string[] = []
+    const originalWrite = process.stdout.write
+    const originalIsTTY = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY')
+
+    process.stdout.write = ((chunk: string | Uint8Array) => {
+      stdout.push(Buffer.isBuffer(chunk) ? chunk.toString('utf8') : chunk)
+      return true
+    }) as typeof process.stdout.write
+    Object.defineProperty(process.stdout, 'isTTY', { configurable: true, value: true })
+
+    try {
+      const code = await withProcessEnv({
+        BOXDOWN_DATA_HOME: dataHome,
+        BOXDOWN_CACHE_HOME: cacheHome,
+        CI: 'false'
+      }, async () => await withCwd(workspace, async () => runCli(['setup'], {
+          env: { CI: 'false', BOXDOWN_DATA_HOME: dataHome, BOXDOWN_CACHE_HOME: cacheHome },
+          waitForContainerRuntime: async () => ({ state: 'ready', mode: 'buildx', warnings: [] }),
+          runDoctorChecks: async () => [],
+          setupWorkspace: async () => {}
+        })))
+
+      assert.strictEqual(code, 0)
+    } finally {
+      process.stdout.write = originalWrite
+      if (originalIsTTY === undefined) {
+        delete (process.stdout as NodeJS.WriteStream & { isTTY?: boolean }).isTTY
+      } else {
+        Object.defineProperty(process.stdout, 'isTTY', originalIsTTY)
+      }
+    }
+
+    assert.ok(stdout.join('').includes('Boxdown keeps generated state outside this repository.'))
+    assert.ok(stdout.join('').includes('Run `boxdown status` to inspect managed paths and the command log.'))
+  })
+
+  test('successful detailed setup prints the concrete workspace command log path', async () => {
+    const workspace = tempDir('setup-detailed-log-workspace')
+    const dataHome = tempDir('setup-detailed-log-data')
+    const cacheHome = tempDir('setup-detailed-log-cache')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        BOXDOWN_DATA_HOME: dataHome,
+        BOXDOWN_CACHE_HOME: cacheHome
+      },
+      assetsDevcontainerDir
+    })
+    const stdout: string[] = []
+    const originalWrite = process.stdout.write
+    const originalIsTTY = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY')
+
+    process.stdout.write = ((chunk: string | Uint8Array) => {
+      stdout.push(Buffer.isBuffer(chunk) ? chunk.toString('utf8') : chunk)
+      return true
+    }) as typeof process.stdout.write
+    Object.defineProperty(process.stdout, 'isTTY', { configurable: true, value: true })
+
+    try {
+      const code = await withProcessEnv({
+        BOXDOWN_DATA_HOME: dataHome,
+        BOXDOWN_CACHE_HOME: cacheHome,
+        CI: 'false'
+      }, async () => await withCwd(workspace, async () => runCli(['setup', '--target', 'codex', '--verbose'], {
+          env: { CI: 'false', BOXDOWN_DATA_HOME: dataHome, BOXDOWN_CACHE_HOME: cacheHome },
+          waitForContainerRuntime: async () => ({ state: 'ready', mode: 'buildx', warnings: [] }),
+          runDoctorChecks: async () => [],
+          setupWorkspace: async () => {}
+        })))
+
+      assert.strictEqual(code, 0)
+    } finally {
+      process.stdout.write = originalWrite
+      if (originalIsTTY === undefined) {
+        delete (process.stdout as NodeJS.WriteStream & { isTTY?: boolean }).isTTY
+      } else {
+        Object.defineProperty(process.stdout, 'isTTY', originalIsTTY)
+      }
+    }
+
+    assert.ok(stdout.join('').includes(`Command log: ${context.workspaceLogPath}`))
+  })
+
   test('setup preflight stops before prompts or state writes when runtime readiness fails', async () => {
     const workspace = tempDir('setup-preflight-failure-workspace')
     const dataHome = tempDir('setup-preflight-failure-data')
@@ -1452,6 +1588,55 @@ describe('CLI execution', () => {
     assert.ok(lines.includes(`stdout:${promptRail()}  ${selectedMark()} Installing SSH alias`))
     assert.ok(lines.includes(`stdout:${promptRail()}  ${color('demo-devcontainer', 'dim')}`))
     assert.ok(lines.includes(`stdout:${promptRail()}  ${selectedMark()} Installing codex SSH target`))
+  })
+
+  test('setup workflow uses structured progress and quiet installs in detailed mode', async () => {
+    const workspace = tempDir('setup-detailed-progress-workspace')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('setup-detailed-progress-cache'),
+        BOXDOWN_DATA_HOME: tempDir('setup-detailed-progress-data')
+      },
+      assetsDevcontainerDir
+    })
+    const alias = 'demo-devcontainer'
+    const lines: string[] = []
+    const progress = createProgress({
+      mode: 'detailed',
+      write: (_target, message) => {
+        lines.push(message)
+      }
+    })
+    progress.setSteps([
+      { id: 'ssh-alias', label: 'Installing SSH alias' },
+      { id: 'ssh-target:codex', label: 'Installing Codex SSH target' }
+    ])
+    const calls: string[] = []
+
+    await setupWorkspace(context, alias, {
+      progress,
+      targets: ['codex'],
+      start: async () => {
+        calls.push('start')
+        return 'setup-container'
+      },
+      installSsh: async (_receivedContext, _receivedAlias, installOptions) => {
+        assert.deepStrictEqual(installOptions, { quiet: true })
+        calls.push('ssh')
+      },
+      installTarget: async (_receivedContext, _receivedAlias, target, installOptions) => {
+        assert.strictEqual(target, 'codex')
+        assert.deepStrictEqual(installOptions, { quiet: true })
+        calls.push('codex')
+      }
+    })
+
+    assert.deepStrictEqual(calls, ['start', 'ssh', 'codex'])
+    assert.deepStrictEqual(lines, [
+      'Installing SSH alias',
+      'Installing Codex SSH target'
+    ])
   })
 
   test('removes each requested down workspace', async () => {
@@ -4171,11 +4356,69 @@ describe('progress output', () => {
   test('resolves progress modes from terminal and output context', () => {
     assert.strictEqual(resolveProgressMode({ isTTY: true, env: { CI: 'false' } }), 'interactive')
     assert.strictEqual(resolveProgressMode({ target: 'stderr', isTTY: true, env: { CI: 'false' } }), 'interactive')
-    assert.strictEqual(resolveProgressMode({ isTTY: true, verbose: true, env: { CI: 'false' } }), 'verbose')
+    assert.strictEqual(resolveProgressMode({ isTTY: true, verbose: true, env: { CI: 'false' } }), 'detailed')
     assert.strictEqual(resolveProgressMode({ isTTY: true, env: { CI: 'true' } }), 'verbose')
-    assert.strictEqual(resolveProgressMode({ isTTY: true, env: { CI: '1' } }), 'verbose')
     assert.strictEqual(resolveProgressMode({ isTTY: false, env: { CI: 'false' } }), 'verbose')
     assert.strictEqual(resolveProgressMode({ json: true, isTTY: true, env: { CI: 'false' } }), 'none')
+  })
+
+  test('detailed progress enables lifecycle markers without raw command mode', () => {
+    const progress = createProgress({ mode: 'detailed' })
+    assert.strictEqual(progress.detailed, true)
+    assert.strictEqual(progress.rawOutput, false)
+    assert.deepStrictEqual(progress.commandEnv(), {
+      BOXDOWN_VERBOSE: '0',
+      BOXDOWN_PROGRESS: '1'
+    })
+  })
+
+  test('raw progress preserves raw command mode', () => {
+    const progress = createProgress({ mode: 'verbose' })
+    assert.strictEqual(progress.detailed, false)
+    assert.strictEqual(progress.rawOutput, true)
+    assert.deepStrictEqual(progress.commandEnv(), {
+      BOXDOWN_VERBOSE: '1',
+      BOXDOWN_PROGRESS: '0'
+    })
+  })
+
+  test('detailed progress appends normalized lifecycle output without redraws', () => {
+    const lines: string[] = []
+    const raw: string[] = []
+    const progress = createProgress({
+      mode: 'detailed',
+      isTTY: true,
+      write: (_target, message) => lines.push(message),
+      writeRaw: (_target, message) => raw.push(message)
+    })
+
+    progress.section('Boxdown setup')
+    progress.detail('Workspace: /tmp/demo')
+    progress.item('  Preparing   workspace  ')
+    progress.status('  Waiting for Docker daemon  ')
+    progress.marker('  configuring runtime  ')
+    progress.setSteps([{ id: 'demo', label: 'Running demo command' }])
+    progress.startStep('demo')
+    progress.completeStep('demo')
+    progress.failStep('demo')
+    progress.skipStep('demo')
+    progress.startSpinner('  Running fallback command  ')
+    progress.warn('Docker Buildx is unavailable')
+    progress.end()
+
+    assert.deepStrictEqual(lines, [
+      'Boxdown setup',
+      '  Workspace: /tmp/demo',
+      'Preparing workspace',
+      'Waiting for Docker daemon',
+      'configuring runtime',
+      'Running demo command',
+      'Failed: Running demo command',
+      'Skipped: Running demo command',
+      'Running fallback command',
+      'Warning: Docker Buildx is unavailable'
+    ])
+    assert.deepStrictEqual(raw, [])
   })
 
   test('none progress mode keeps output fully silent for JSON callers', () => {
@@ -4640,28 +4883,68 @@ describe('progress output', () => {
     assert.match(sshKeySource, /Writing Boxdown SSH public key/)
   })
 
-  test('verbose progress commands do not emit marker summaries', async () => {
+  test('detailed progress renders lifecycle markers without mirroring child output', async () => {
     const lines: string[] = []
     const progress = createProgress({
-      verbose: true,
-      write: (target, message) => {
-        lines.push(`${target}:${message}`)
-      }
+      mode: 'detailed',
+      write: (_target, message) => lines.push(message)
     })
-    const result = await runProgressCommand('demo command', 'bash', [
+    const result = await runProgressCommand('detailed demo', 'bash', [
       '-c',
-      'printf "BOXDOWN_PROGRESS: raw marker\\n"; printf "%s/%s\\n" "$BOXDOWN_PROGRESS" "$BOXDOWN_VERBOSE"'
-    ], {
-      progress,
-      spinnerLabel: 'Running verbose demo command',
-      verboseStdout: false,
-      verboseStderr: false
-    })
+      'printf "BOXDOWN_PROGRESS: Configuring global Git\\n"; printf "hidden raw stdout\\n"; printf "hidden raw stderr\\n" >&2'
+    ], { progress })
 
     assert.strictEqual(result.code, 0)
-    assert.match(result.stdout, /BOXDOWN_PROGRESS: raw marker/)
-    assert.match(result.stdout, /0\/1/)
-    assert.deepStrictEqual(lines, [])
+    assert.ok(lines.includes('Configuring global Git'))
+    assert.ok(!lines.some((line) => line.includes('hidden raw')))
+  })
+
+  test('buffers split stdout and stderr lifecycle markers independently', async () => {
+    const lines: string[] = []
+    const progress = createProgress({
+      mode: 'detailed',
+      write: (_target, message) => lines.push(message)
+    })
+    const result = await runProgressCommand('interleaved markers', 'bash', [
+      '-c',
+      [
+        'printf "BOXDOWN_PROGRESS: stdout"',
+        'sleep 0.05',
+        'printf "BOXDOWN_PROGRESS: stderr marker\\n" >&2',
+        'sleep 0.05',
+        'printf " marker\\n"'
+      ].join('; ')
+    ], { progress })
+
+    assert.strictEqual(result.code, 0)
+    assert.deepStrictEqual(lines, [
+      'stderr marker',
+      'stdout marker'
+    ])
+  })
+
+  test('raw progress still mirrors stdout and stderr to its requested targets', async () => {
+    const stdout: string[] = []
+    const stderr: string[] = []
+    const progress = createProgress({ mode: 'verbose' })
+    const originalStdoutWrite = process.stdout.write
+    const originalStderrWrite = process.stderr.write
+    process.stdout.write = ((chunk: string | Uint8Array) => {
+      if (String(chunk) === 'raw stdout\n') stdout.push(String(chunk))
+      return originalStdoutWrite.call(process.stdout, chunk)
+    }) as typeof process.stdout.write
+    process.stderr.write = ((chunk: string | Uint8Array) => {
+      if (String(chunk) === 'raw stderr\n') stderr.push(String(chunk))
+      return originalStderrWrite.call(process.stderr, chunk)
+    }) as typeof process.stderr.write
+    try {
+      await runProgressCommand('raw demo', 'bash', ['-c', 'printf "raw stdout\\n"; printf "raw stderr\\n" >&2'], { progress })
+    } finally {
+      process.stdout.write = originalStdoutWrite
+      process.stderr.write = originalStderrWrite
+    }
+    assert.deepStrictEqual(stdout, ['raw stdout\n'])
+    assert.deepStrictEqual(stderr, ['raw stderr\n'])
   })
 
   test('progress commands log raw output while surfacing markers', async () => {
@@ -4755,7 +5038,8 @@ describe('progress output', () => {
     })
 
     assert.match(message, /demo command failed with exit code 42\./)
-    assert.match(message, /Rerun with --verbose/)
+    assert.match(message, /Inspect the command log for full redacted command output\./)
+    assert.match(message, /Rerun in a non-interactive terminal with --verbose to stream raw command output\./)
     assert.match(message, /stderr tail:/)
     assert.match(message, /stderr two/)
     assert.match(message, /stdout tail:/)
@@ -4787,6 +5071,7 @@ describe('progress output', () => {
 
     assert.match(message, /registry authentication failed/)
     assert.doesNotMatch(message, /docker buildx build --load/)
+    assert.doesNotMatch(message, /Rerun in a non-interactive terminal/)
     assert.match(message, /Command log: \/tmp\/workspace\/boxdown\.log/)
   })
 

@@ -78,8 +78,10 @@ opening `bash`.
 
 Startup progress is concise by default. Raw Docker, Dev Containers CLI,
 lifecycle hook, and coding-agent install/update logs are captured; on failure,
-Boxdown prints the failed step and a short output tail. Pass `--verbose` to
-stream the full startup output before the interactive shell or agent takes over.
+Boxdown prints the failed step and a short output tail. In an interactive
+terminal, `--verbose` shows a detailed lifecycle trace before the interactive
+shell or agent takes over. In CI or non-interactive output, Boxdown streams raw
+startup output.
 
 ## Terminal Width
 
