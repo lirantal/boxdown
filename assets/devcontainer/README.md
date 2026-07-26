@@ -215,9 +215,12 @@ If an older version left a service-account token in `.env.development` or
   `~/.codex/auth.json` read-only at `/home/node/.codex/auth.json` when that file
   exists. Recreate the devcontainer after creating or removing it so the mount
   set is refreshed.
-- **Other agent config on the host** — Uncomment the `mounts` entries in
-  `devcontainer.json` to bind directories such as `~/.claude` or `~/.gemini`
-  into the container so coding agents see your existing settings.
+- **Claude Code credentials on the host** — On supported platforms, Boxdown
+  automatically forwards the documented Claude credential file. Recreate the
+  devcontainer after creating or removing it so the mount set is refreshed.
+- **Other agent config on the host** — Uncomment the generic `mounts` entries
+  in `devcontainer.json` to bind other agent configuration directories such as
+  `~/.gemini` into the container.
 - **Coding-agent defaults** — The published image provides Codex and Claude
   Code. OpenCode and Antigravity remain available through `boxdown opencode`
   and `boxdown antigravity`, but install lazily only when those commands run.

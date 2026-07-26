@@ -113,6 +113,9 @@ BOXDOWN_TTY_NORMALIZE=0 boxdown start
 Use it when changing create-time settings such as image, mounts, or Docker
 `runArgs`.
 
+After creating a supported host Claude credential, recover it in an existing
+container with `boxdown start --recreate`.
+
 Workspaces created before the release-matched image remain on their existing
 container. Switch them only with `boxdown start --recreate` or
 `boxdown setup --recreate`; the migration is one-time and does not modify the

@@ -79,7 +79,7 @@ Docker image ID Boxdown can inspect or has recorded for the workspace, removes
 Boxdown-managed SSH/Codex/Claude entries for the computed, recorded, and
 provided aliases, and deletes the workspace's Boxdown cache/data directories,
 including the per-workspace command log. It does not delete the target
-repository directory or files inside it.
+repository directory or files inside it. It does not remove host Claude credentials.
 
 `purge --workspace <value>` first treats `<value>` as a filesystem path. If that
 path does not exist, it looks for an exact `PATH`, then `SSH ALIAS`, then `REPO`

@@ -749,6 +749,16 @@ describe('CLI parsing', () => {
   })
 })
 
+test('documents narrow host Claude credential forwarding', () => {
+  const stateDocs = readFileSync(join(process.cwd(), 'docs/features/generated-config-and-state.md'), 'utf8')
+  const lifecycleDocs = readFileSync(join(process.cwd(), 'docs/features/lifecycle.md'), 'utf8')
+
+  assert.match(stateDocs, /\.claude\/\.credentials\.json/)
+  assert.match(stateDocs, /does not mount.*~\/\.claude.*~\/\.claude\.json/is)
+  assert.match(stateDocs, /macOS.*Keychain/is)
+  assert.match(lifecycleDocs, /does not remove host Claude credentials/is)
+})
+
 describe('interactive install target prompt', () => {
   test('uses the shared prompt style primitives', () => {
     assert.strictEqual(formatPromptTitle('Install optional SSH targets?'), '\u001B[36m◆\u001B[0m  \u001B[1mInstall optional SSH targets?\u001B[0m')

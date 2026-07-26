@@ -41,8 +41,7 @@
 
     "mounts": [
         // mount host user home directories for agents:
-        // "source=${localEnv:HOME}/.claude,target=/home/node/.claude,type=bind,consistency=cached",
-        // "source=${localEnv:HOME}/.gemini,target=/home/node/.claude,type=bind,consistency=cached"
+        // "source=${localEnv:HOME}/.gemini,target=/home/node/.gemini,type=bind,consistency=cached"
         // Codex auth.json is mounted automatically by Boxdown's generated config when present.
     ],
 
