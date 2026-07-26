@@ -99,9 +99,26 @@ For generated-state details, see [Generated configuration and state](./docs/feat
 
 ### Container inputs
 
-Boxdown mounts its packaged assets, public SSH key, host Git-config snapshot,
-and runtime-secret directory for the container lifecycle. It only adds
-optional host agent configuration mounts when documented prerequisites exist;
+The host checkout is the Dev Container workspace: the Dev Containers CLI
+bind-mounts it writable at `/workspaces/<repo-name>`, so edits made inside the
+container are edits to the host checkout.
+
+Boxdown additionally mounts its packaged assets, public SSH key, host Git-config
+snapshot, and runtime-secret directory read-only. The Git-config snapshot is
+copied to a writable `/home/node/.gitconfig` during container creation; the host
+file is never edited.
+
+Optional create-time mounts are also explicit:
+
+- If host `~/.agents` exists, Boxdown mounts it read-only at
+  `/home/node/.agents`.
+- If host `~/.codex/auth.json` exists and no custom Codex mount supersedes it,
+  Boxdown mounts that file read-only at `/home/node/.codex/auth.json`.
+- When SSH commit signing is enabled, Boxdown mounts the host SSH-agent socket
+  at `/run/boxdown/ssh-agent.sock` and mounts public signing-key state read-only
+  at `/opt/boxdown/state/git-signing`. Private signing keys remain on the host.
+
+Recreate the container after these optional inputs appear or change.
 `boxdown status` reports the exact generated paths for a workspace.
 
 ### Host integrations

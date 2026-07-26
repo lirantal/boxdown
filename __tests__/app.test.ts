@@ -684,6 +684,10 @@ describe('CLI parsing', () => {
     assert.match(USAGE, /Commands:/)
     assert.match(USAGE, /boxdown setup \[--workspace <path>\] \[--alias <name>\] \[--recreate\] \[--target <name>\]\.\.\. \[--verbose\]/)
     assert.match(USAGE, /boxdown start \[--workspace <path>\] \[--recreate\] \[--verbose\]/)
+    assert.match(USAGE, /boxdown codex \[--workspace <path>\] \[--recreate\] \[--verbose\] \[-- <codex args\.\.\.>\]/)
+    assert.match(USAGE, /boxdown claude \[--workspace <path>\] \[--recreate\] \[--verbose\] \[-- <claude args\.\.\.>\]/)
+    assert.match(USAGE, /boxdown opencode \[--workspace <path>\] \[--recreate\] \[--verbose\] \[-- <opencode args\.\.\.>\]/)
+    assert.match(USAGE, /boxdown antigravity \[--workspace <path>\] \[--recreate\] \[--verbose\] \[-- <agy args\.\.\.>\]/)
     assert.match(USAGE, /boxdown tunnel \[--port <port>\] \[--port <local:remote>\] \[--workspace <path>\] \[--alias <name>\] \[--verbose\]/)
     assert.match(USAGE, /boxdown ssh uninstall \[--workspace <path>\] \[--alias <name>\] \[--target <name>\]\.\.\./)
     assert.match(USAGE, /boxdown list \[--details\] \[--json\|--format json\]/)
@@ -740,8 +744,28 @@ describe('CLI parsing', () => {
     assert.match(readme, /CI and non-interactive contexts stream\s+raw managed-command output/)
     assert.match(readme, /metadata, SSH keys, and redacted command log live under its data\s+roots/)
     assert.match(readme, /per-workspace runtime root for runtime-secret state/)
+    assert.match(readme, /host checkout.*\/workspaces\/<repo-name>.*writable/is)
+    assert.match(readme, /packaged assets, public SSH key, host Git-config\s+snapshot, and runtime-secret directory read-only/is)
+    assert.match(readme, /host Git-config\s+snapshot.*writable `\/home\/node\/\.gitconfig`/is)
+    assert.match(readme, /`~\/\.agents`.*read-only.*`\/home\/node\/\.agents`/is)
+    assert.match(readme, /`~\/\.codex\/auth\.json`.*read-only.*`\/home\/node\/\.codex\/auth\.json`/is)
+    assert.match(readme, /SSH-agent socket.*`\/run\/boxdown\/ssh-agent\.sock`.*signing-key state.*read-only/is)
     assert.match(readme, /`boxdown down`\s+removes the container and per-workspace runtime-secret state\.\s+It retains\s+persistent cache\/data state: metadata, SSH keys, generated config, and command\s+log\./)
     assert.match(readme, /`stop`.*`down`.*`purge`/is)
+  })
+
+  test('feature docs distinguish interactive detailed traces from non-interactive raw streaming', () => {
+    const docs = [
+      '../docs/features/setup.md',
+      '../docs/features/start-and-shell.md',
+      '../docs/features/github-auth-refresh.md'
+    ].map((relativePath) => readFileSync(fileURLToPath(new URL(relativePath, import.meta.url)), 'utf8'))
+
+    for (const document of docs) {
+      assert.match(document, /interactive.*`--verbose`.*detailed lifecycle trace/is)
+      assert.match(document, /CI|non-interactive/is)
+      assert.match(document, /raw .*output/is)
+    }
   })
 
   test('help aligns wrapped command descriptions', () => {
@@ -1149,6 +1173,53 @@ describe('CLI execution', () => {
     assert.ok(stdout.join('').includes('Run `boxdown status` to inspect managed paths and the command log.'))
   })
 
+  test('successful detailed setup prints the concrete workspace command log path', async () => {
+    const workspace = tempDir('setup-detailed-log-workspace')
+    const dataHome = tempDir('setup-detailed-log-data')
+    const cacheHome = tempDir('setup-detailed-log-cache')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        BOXDOWN_DATA_HOME: dataHome,
+        BOXDOWN_CACHE_HOME: cacheHome
+      },
+      assetsDevcontainerDir
+    })
+    const stdout: string[] = []
+    const originalWrite = process.stdout.write
+    const originalIsTTY = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY')
+
+    process.stdout.write = ((chunk: string | Uint8Array) => {
+      stdout.push(Buffer.isBuffer(chunk) ? chunk.toString('utf8') : chunk)
+      return true
+    }) as typeof process.stdout.write
+    Object.defineProperty(process.stdout, 'isTTY', { configurable: true, value: true })
+
+    try {
+      const code = await withProcessEnv({
+        BOXDOWN_DATA_HOME: dataHome,
+        BOXDOWN_CACHE_HOME: cacheHome,
+        CI: 'false'
+      }, async () => await withCwd(workspace, async () => runCli(['setup', '--target', 'codex', '--verbose'], {
+          env: { CI: 'false', BOXDOWN_DATA_HOME: dataHome, BOXDOWN_CACHE_HOME: cacheHome },
+          waitForContainerRuntime: async () => ({ state: 'ready', mode: 'buildx', warnings: [] }),
+          runDoctorChecks: async () => [],
+          setupWorkspace: async () => {}
+        })))
+
+      assert.strictEqual(code, 0)
+    } finally {
+      process.stdout.write = originalWrite
+      if (originalIsTTY === undefined) {
+        delete (process.stdout as NodeJS.WriteStream & { isTTY?: boolean }).isTTY
+      } else {
+        Object.defineProperty(process.stdout, 'isTTY', originalIsTTY)
+      }
+    }
+
+    assert.ok(stdout.join('').includes(`Command log: ${context.workspaceLogPath}`))
+  })
+
   test('setup preflight stops before prompts or state writes when runtime readiness fails', async () => {
     const workspace = tempDir('setup-preflight-failure-workspace')
     const dataHome = tempDir('setup-preflight-failure-data')
@@ -1505,6 +1576,55 @@ describe('CLI execution', () => {
     assert.ok(lines.includes(`stdout:${promptRail()}  ${selectedMark()} Installing SSH alias`))
     assert.ok(lines.includes(`stdout:${promptRail()}  ${color('demo-devcontainer', 'dim')}`))
     assert.ok(lines.includes(`stdout:${promptRail()}  ${selectedMark()} Installing codex SSH target`))
+  })
+
+  test('setup workflow uses structured progress and quiet installs in detailed mode', async () => {
+    const workspace = tempDir('setup-detailed-progress-workspace')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('setup-detailed-progress-cache'),
+        BOXDOWN_DATA_HOME: tempDir('setup-detailed-progress-data')
+      },
+      assetsDevcontainerDir
+    })
+    const alias = 'demo-devcontainer'
+    const lines: string[] = []
+    const progress = createProgress({
+      mode: 'detailed',
+      write: (_target, message) => {
+        lines.push(message)
+      }
+    })
+    progress.setSteps([
+      { id: 'ssh-alias', label: 'Installing SSH alias' },
+      { id: 'ssh-target:codex', label: 'Installing Codex SSH target' }
+    ])
+    const calls: string[] = []
+
+    await setupWorkspace(context, alias, {
+      progress,
+      targets: ['codex'],
+      start: async () => {
+        calls.push('start')
+        return 'setup-container'
+      },
+      installSsh: async (_receivedContext, _receivedAlias, installOptions) => {
+        assert.deepStrictEqual(installOptions, { quiet: true })
+        calls.push('ssh')
+      },
+      installTarget: async (_receivedContext, _receivedAlias, target, installOptions) => {
+        assert.strictEqual(target, 'codex')
+        assert.deepStrictEqual(installOptions, { quiet: true })
+        calls.push('codex')
+      }
+    })
+
+    assert.deepStrictEqual(calls, ['start', 'ssh', 'codex'])
+    assert.deepStrictEqual(lines, [
+      'Installing SSH alias',
+      'Installing Codex SSH target'
+    ])
   })
 
   test('removes each requested down workspace', async () => {

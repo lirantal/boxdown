@@ -68,10 +68,10 @@ export interface RunCliOptions {
 export const USAGE = `Usage:
   boxdown setup [--workspace <path>] [--alias <name>] [--recreate] [--target <name>]... [--verbose]
   boxdown start [--workspace <path>] [--recreate] [--verbose]
-  boxdown codex [--workspace <path>] [--recreate] [-- <codex args...>] [--verbose]
-  boxdown claude [--workspace <path>] [--recreate] [-- <claude args...>] [--verbose]
-  boxdown opencode [--workspace <path>] [--recreate] [-- <opencode args...>] [--verbose]
-  boxdown antigravity [--workspace <path>] [--recreate] [-- <agy args...>] [--verbose]
+  boxdown codex [--workspace <path>] [--recreate] [--verbose] [-- <codex args...>]
+  boxdown claude [--workspace <path>] [--recreate] [--verbose] [-- <claude args...>]
+  boxdown opencode [--workspace <path>] [--recreate] [--verbose] [-- <opencode args...>]
+  boxdown antigravity [--workspace <path>] [--recreate] [--verbose] [-- <agy args...>]
   boxdown list [--details] [--json|--format json]
   boxdown status [--workspace <path>] [--alias <name>] [--json|--format json]
   boxdown stop [--workspace <path>]
@@ -1002,24 +1002,26 @@ export async function setupWorkspace (
     ...(options.progress === undefined ? {} : { progress: options.progress })
   })
 
-  const hasSshAliasStep = options.progress?.hasStep('ssh-alias') === true
+  const progress = options.progress
+  const structuredProgress = progress !== undefined && (progress.mode === 'interactive' || progress.mode === 'detailed')
+  const hasSshAliasStep = progress?.hasStep('ssh-alias') === true
 
-  if (options.progress?.mode === 'interactive') {
+  if (structuredProgress && progress !== undefined) {
     if (hasSshAliasStep) {
-      options.progress.startStep('ssh-alias')
+      progress.startStep('ssh-alias')
     } else {
-      options.progress.item('Installing SSH alias')
-      options.progress.detail(alias)
+      progress.item('Installing SSH alias')
+      progress.detail(alias)
     }
 
     try {
       await (options.installSsh ?? installSshConfig)(context, alias, { quiet: true })
       if (hasSshAliasStep) {
-        options.progress.completeStep('ssh-alias')
+        progress.completeStep('ssh-alias')
       }
     } catch (error) {
       if (hasSshAliasStep) {
-        options.progress.failStep('ssh-alias')
+        progress.failStep('ssh-alias')
       }
       throw error
     }
@@ -1030,24 +1032,24 @@ export async function setupWorkspace (
   const installTarget = options.installTarget ?? installSshInstallTarget
   for (const target of options.targets ?? []) {
     const stepId = `ssh-target:${target}`
-    const hasTargetStep = options.progress?.hasStep(stepId) === true
+    const hasTargetStep = progress?.hasStep(stepId) === true
 
     if (hasTargetStep) {
-      options.progress?.startStep(stepId)
-    } else if (options.progress?.mode === 'interactive') {
-      options.progress.item(`Installing ${target} SSH target`)
+      progress?.startStep(stepId)
+    } else if (structuredProgress && progress !== undefined) {
+      progress.item(`Installing ${target} SSH target`)
     }
 
     try {
       await installTarget(context, alias, target, {
-        quiet: options.progress?.mode === 'interactive'
+        quiet: structuredProgress
       })
       if (hasTargetStep) {
-        options.progress?.completeStep(stepId)
+        progress?.completeStep(stepId)
       }
     } catch (error) {
       if (hasTargetStep) {
-        options.progress?.failStep(stepId)
+        progress?.failStep(stepId)
       }
       throw error
     }
@@ -1119,6 +1121,15 @@ function setupPreflightFailureMessage (checks: DoctorCheck[]): string {
     .map((check) => `- ${check.name}: ${check.message}`)
 
   return `Setup preflight failed:\n${failures.join('\n')}`
+}
+
+function showDetailedCommandLogPath (
+  progress: ProgressReporter,
+  context: WorkspaceContext
+): void {
+  if (progress.detailed) {
+    progress.detail(`Command log: ${context.workspaceLogPath}`)
+  }
 }
 
 function runtimeTransitionMessage (probe: ContainerRuntimeProbe): string | undefined {
@@ -1396,6 +1407,7 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
             progress,
             logger
           })
+          showDetailedCommandLogPath(progress, context)
         })
       })
 
@@ -1436,6 +1448,7 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
           })
           await refreshContainerCodingAgentClis(context, true, [], { progress, logger })
           await ensureContainerSshRuntime(context, { progress, logger })
+          showDetailedCommandLogPath(progress, context)
           return startedContainerId
         })
         return runSshdProxy(containerId, { logger })
@@ -1477,6 +1490,7 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
             logger,
             reuseRunning: true
           })
+          showDetailedCommandLogPath(progress, context)
         })
 
         const forwards = tunnelPorts
@@ -1504,6 +1518,7 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
           progress.startStep('devcontainer-running')
           progress.completeStep('devcontainer-running')
           await refreshContainerGhAuth(context, { progress, logger })
+          showDetailedCommandLogPath(progress, context)
         })
         return 0
       })
@@ -1519,6 +1534,7 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
           await (options.prepareContainerLifecycle ?? prepareContainerLifecycle)(context, alias, progress, options, logger)
           await startDevcontainer(context, { progress, logger })
           await refreshContainerGhAuth(context, { progress, logger })
+          showDetailedCommandLogPath(progress, context)
         })
         return 0
       })
@@ -1543,6 +1559,7 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
             logger
           })
           await ensureContainerCodingAgentCli(context, agent, { progress, logger })
+          showDetailedCommandLogPath(progress, context)
         })
         return openCodingAgentCli(context, agent, parsed.agentArgs ?? [], { logger })
       })
@@ -1561,6 +1578,7 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
           logger
         })
       })
+      showDetailedCommandLogPath(progress, context)
       await printPortHint(context, containerId, { logger })
       return openShell(context, { logger })
     })

@@ -42,9 +42,10 @@ per-workspace mounts and runtime state.
 5. Install or update the Boxdown-managed SSH alias.
 6. Optionally install selected SSH targets such as Codex or Claude.
 
-`setup` prints plain progress sections by default. Docker, Dev Containers CLI,
-and lifecycle hook output is captured and only summarized if a command fails.
-Pass `--verbose` to stream the raw build and hook logs to the terminal.
+`setup` prints concise progress by default. In an interactive terminal,
+`--verbose` shows a detailed lifecycle trace without streaming raw child
+output. In CI or non-interactive output, Boxdown streams raw Docker, Dev
+Containers CLI, and lifecycle-hook output.
 
 Boxdown also appends the managed setup output to the workspace command log at:
 
@@ -52,8 +53,8 @@ Boxdown also appends the managed setup output to the workspace command log at:
 ~/.local/share/boxdown/workspaces/<workspace-hash>/boxdown.log
 ```
 
-The log is written regardless of `--verbose`; the flag only changes terminal
-streaming.
+The log is written in every mode. Interactive `--verbose` prints its concrete
+path when setup completes.
 
 When `--target codex` is provided, Boxdown writes the Codex app config entry for
 the same alias and container-side project path used by:
