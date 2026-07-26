@@ -48,11 +48,10 @@ generated configuration and SSH keys under user cache/data directories instead
 of copying `.devcontainer/` into the project.
 
 Startup commands print concise progress by default. With interactive `--verbose`,
-Boxdown shows a detailed lifecycle trace. In CI and non-interactive output,
-`--verbose` streams raw command output for managed commands. Boxdown also keeps one
-append-only per-workspace command log under its data directory; `boxdown status`
-shows the exact path. Interactive shell, agent, and tunnel session bytes are not
-tee'd into the log.
+Boxdown shows a detailed lifecycle trace. CI and non-interactive contexts stream
+raw managed-command output. Boxdown also keeps one append-only per-workspace
+command log under its data directory; `boxdown status` shows the exact path.
+Interactive shell, agent, and tunnel session bytes are not tee'd into the log.
 
 Open an interactive shell inside the container when you need one:
 
@@ -90,9 +89,10 @@ or `boxdown setup --recreate`.
 
 ### Outside your repository
 
-Boxdown stores generated devcontainer configuration under its cache root and
-per-workspace metadata, SSH keys, runtime state, and redacted command log
-under its data roots. It does not copy a `.devcontainer` directory into the
+Boxdown stores generated devcontainer configuration under its cache root.
+Per-workspace metadata, SSH keys, and redacted command log live under its data
+roots. It keeps a per-workspace runtime root for runtime-secret state separate
+from persistent data. It does not copy a `.devcontainer` directory into the
 target repository; all generated state remains outside the target repository.
 
 For generated-state details, see [Generated configuration and state](./docs/features/generated-config-and-state.md).

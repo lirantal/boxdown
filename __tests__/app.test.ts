@@ -737,7 +737,9 @@ describe('CLI parsing', () => {
     assert.match(readme, /## What Boxdown manages/)
     assert.match(readme, /outside the target repository/)
     assert.match(readme, /interactive `--verbose`.*detailed lifecycle trace/is)
-    assert.match(readme, /CI and non-interactive.*raw command output/is)
+    assert.match(readme, /CI and non-interactive contexts stream\s+raw managed-command output/)
+    assert.match(readme, /metadata, SSH keys, and redacted command log live under its data\s+roots/)
+    assert.match(readme, /per-workspace runtime root for runtime-secret state/)
     assert.match(readme, /`stop`.*`down`.*`purge`/is)
   })
 
