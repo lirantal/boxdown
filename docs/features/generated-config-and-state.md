@@ -80,8 +80,8 @@ Boxdown does not use or modify project `.env.development` files.
 On Linux and WSL, Boxdown forwards the host credential file
 `~/.claude/.credentials.json`, or `$CLAUDE_CONFIG_DIR/.credentials.json` when
 `CLAUDE_CONFIG_DIR` is set. On Windows, it forwards
-`%USERPROFILE%\\.claude.credentials.json`, or
-`%CLAUDE_CONFIG_DIR%\\.credentials.json` when `CLAUDE_CONFIG_DIR` is set.
+`%USERPROFILE%\.claude.credentials.json`, or
+`%CLAUDE_CONFIG_DIR%\.credentials.json` when `CLAUDE_CONFIG_DIR` is set.
 The supported host file is mounted read-write at
 `/home/node/.claude/.credentials.json` so Claude Code can refresh it.
 
