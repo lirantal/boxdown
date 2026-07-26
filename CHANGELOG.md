@@ -1,5 +1,11 @@
 # boxdown
 
+## 2.0.0
+
+### Major Changes
+
+- [`4898f3c`](https://github.com/lirantal/boxdown/commit/4898f3c8630362ef25e4817796facb1806647b33) Thanks [@lirantal](https://github.com/lirantal)! - feat: refactoring boxdown to use upstream container base image
+
 ## 1.3.0
 
 ### Minor Changes
