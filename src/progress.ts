@@ -614,8 +614,12 @@ export function formatCommandFailure (label: string, result: CommandResult, opti
   const stdoutTail = stdoutBudget === 0 ? [] : specificStdout.slice(-stdoutBudget)
   const lines = [
     `${label} failed with exit code ${result.code}.`,
-    'Rerun with --verbose to see full command output.'
+    'Inspect the command log for full redacted command output.'
   ]
+
+  if (options.logPath === undefined) {
+    lines.push('Rerun in a non-interactive terminal with --verbose to stream raw command output.')
+  }
 
   if (stderrTail.length > 0) {
     lines.push('', 'stderr tail:', ...stderrTail.map((line) => `  ${line}`))
@@ -643,15 +647,15 @@ export async function runProgressCommand (
   options: ProgressCommandOptions = {}
 ): Promise<CommandResult> {
   const progress = options.progress
-  const verbose = progress?.verbose ?? true
-  const markerSink = progress !== undefined && !verbose ? createMarkerSink(progress) : undefined
+  const rawOutput = progress?.rawOutput ?? true
+  const markerSink = progress !== undefined && !rawOutput ? createMarkerSink(progress) : undefined
   const checklistStepId = progress !== undefined && options.stepId !== undefined && progress.hasStep(options.stepId)
     ? options.stepId
     : undefined
 
-  if (progress !== undefined && !verbose && checklistStepId !== undefined) {
+  if (progress !== undefined && !rawOutput && checklistStepId !== undefined) {
     progress.startStep(checklistStepId)
-  } else if (progress !== undefined && !verbose && options.spinnerLabel !== undefined) {
+  } else if (progress !== undefined && !rawOutput && options.spinnerLabel !== undefined) {
     progress.startSpinner(options.spinnerLabel)
   }
 
@@ -661,8 +665,8 @@ export async function runProgressCommand (
       env: progress?.commandEnv(options.env) ?? options.env,
       input: options.input,
       logger: options.logger,
-      mirrorStdout: verbose ? (options.verboseStdout ?? 'stdout') : false,
-      mirrorStderr: verbose ? (options.verboseStderr ?? 'stderr') : false,
+      mirrorStdout: rawOutput ? (options.verboseStdout ?? 'stdout') : false,
+      mirrorStderr: rawOutput ? (options.verboseStderr ?? 'stderr') : false,
       onStdout: markerSink?.write,
       onStderr: markerSink?.write
     })

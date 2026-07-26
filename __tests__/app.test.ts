@@ -4511,28 +4511,44 @@ describe('progress output', () => {
     assert.match(sshKeySource, /Writing Boxdown SSH public key/)
   })
 
-  test('verbose progress commands do not emit marker summaries', async () => {
+  test('detailed progress renders lifecycle markers without mirroring child output', async () => {
     const lines: string[] = []
     const progress = createProgress({
-      verbose: true,
-      write: (target, message) => {
-        lines.push(`${target}:${message}`)
-      }
+      mode: 'detailed',
+      write: (_target, message) => lines.push(message)
     })
-    const result = await runProgressCommand('demo command', 'bash', [
+    const result = await runProgressCommand('detailed demo', 'bash', [
       '-c',
-      'printf "BOXDOWN_PROGRESS: raw marker\\n"; printf "%s/%s\\n" "$BOXDOWN_PROGRESS" "$BOXDOWN_VERBOSE"'
-    ], {
-      progress,
-      spinnerLabel: 'Running verbose demo command',
-      verboseStdout: false,
-      verboseStderr: false
-    })
+      'printf "BOXDOWN_PROGRESS: Configuring global Git\\n"; printf "hidden raw stdout\\n"; printf "hidden raw stderr\\n" >&2'
+    ], { progress })
 
     assert.strictEqual(result.code, 0)
-    assert.match(result.stdout, /BOXDOWN_PROGRESS: raw marker/)
-    assert.match(result.stdout, /0\/1/)
-    assert.deepStrictEqual(lines, [])
+    assert.ok(lines.includes('Configuring global Git'))
+    assert.ok(!lines.some((line) => line.includes('hidden raw')))
+  })
+
+  test('raw progress still mirrors stdout and stderr to its requested targets', async () => {
+    const stdout: string[] = []
+    const stderr: string[] = []
+    const progress = createProgress({ mode: 'verbose' })
+    const originalStdoutWrite = process.stdout.write
+    const originalStderrWrite = process.stderr.write
+    process.stdout.write = ((chunk: string | Uint8Array) => {
+      if (String(chunk) === 'raw stdout\n') stdout.push(String(chunk))
+      return originalStdoutWrite.call(process.stdout, chunk)
+    }) as typeof process.stdout.write
+    process.stderr.write = ((chunk: string | Uint8Array) => {
+      if (String(chunk) === 'raw stderr\n') stderr.push(String(chunk))
+      return originalStderrWrite.call(process.stderr, chunk)
+    }) as typeof process.stderr.write
+    try {
+      await runProgressCommand('raw demo', 'bash', ['-c', 'printf "raw stdout\\n"; printf "raw stderr\\n" >&2'], { progress })
+    } finally {
+      process.stdout.write = originalStdoutWrite
+      process.stderr.write = originalStderrWrite
+    }
+    assert.deepStrictEqual(stdout, ['raw stdout\n'])
+    assert.deepStrictEqual(stderr, ['raw stderr\n'])
   })
 
   test('progress commands log raw output while surfacing markers', async () => {
@@ -4626,7 +4642,8 @@ describe('progress output', () => {
     })
 
     assert.match(message, /demo command failed with exit code 42\./)
-    assert.match(message, /Rerun with --verbose/)
+    assert.match(message, /Inspect the command log for full redacted command output\./)
+    assert.match(message, /Rerun in a non-interactive terminal with --verbose to stream raw command output\./)
     assert.match(message, /stderr tail:/)
     assert.match(message, /stderr two/)
     assert.match(message, /stdout tail:/)
@@ -4658,6 +4675,7 @@ describe('progress output', () => {
 
     assert.match(message, /registry authentication failed/)
     assert.doesNotMatch(message, /docker buildx build --load/)
+    assert.doesNotMatch(message, /Rerun in a non-interactive terminal/)
     assert.match(message, /Command log: \/tmp\/workspace\/boxdown\.log/)
   })
 
