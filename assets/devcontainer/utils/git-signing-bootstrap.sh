@@ -20,19 +20,35 @@ git_global_value() {
   git_global --get "$1" 2>/dev/null || true
 }
 
+is_git_boolean_true() {
+  case "$1" in
+    1 | [Tt][Rr][Uu][Ee] | [Yy][Ee][Ss] | [Oo][Nn]) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 preserve_user_signing_preference() {
-  local local_commit global_commit local_format global_format local_program global_program
+  local local_commit global_commit local_format global_format local_program global_program local_signing_key global_signing_key
   local_commit="$(git_local_value commit.gpgsign)"
   global_commit="$(git_global_value commit.gpgsign)"
   local_format="$(git_local_value gpg.format)"
   global_format="$(git_global_value gpg.format)"
   local_program="$(git_local_value gpg.program)"
   global_program="$(git_global_value gpg.program)"
+  local_signing_key="$(git_local_value user.signingkey)"
+  global_signing_key="$(git_global_value user.signingkey)"
 
   [[ "${local_commit}" == "false" || "${global_commit}" == "false" ]] && return 0
   [[ -n "${local_program}" || -n "${global_program}" ]] && return 0
   [[ -n "${local_format}" && "${local_format}" != "ssh" ]] && return 0
   [[ -n "${global_format}" && "${global_format}" != "ssh" ]] && return 0
+  if [[ -z "${local_format}" && -z "${global_format}" ]] && {
+    [[ -n "${local_signing_key}" || -n "${global_signing_key}" ]] ||
+      is_git_boolean_true "${local_commit}" ||
+      is_git_boolean_true "${global_commit}"
+  }; then
+    return 0
+  fi
   return 1
 }
 

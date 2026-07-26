@@ -9,7 +9,7 @@ import {
 import { resolveDevcontainerCli } from './devcontainer-cli.ts'
 import { buildGeneratedDevcontainerConfig, type DevcontainerConfig } from './config.ts'
 import { BOXDOWN_SECRET_ENV_NAMES } from './constants.ts'
-import { resolveConfiguredSshSigningKey, selectGitSigningKey, type GitSigningReason } from './git-signing.ts'
+import { hasExplicitNonSshSigningPreference, readGitSigningConfigValue, resolveConfiguredSshSigningKey, selectGitSigningKey, type GitSigningReason } from './git-signing.ts'
 import type { WorkspaceContext } from './paths.ts'
 import { runBuffered } from './process.ts'
 
@@ -103,16 +103,27 @@ export async function runDoctorChecks (context: WorkspaceContext, options: RunDo
     `Node ${nodeVersion}; expected >=24.0.0`
   ))
 
-  const sshAgent = await runCommand('ssh-add', ['-L'])
-  const identityLines = sshAgent.code === 0
+  const format = await readGitSigningConfigValue(context.workspaceFolder, runCommand, 'gpg.format')
+  const program = hasExplicitNonSshSigningPreference(format)
+    ? undefined
+    : await readGitSigningConfigValue(context.workspaceFolder, runCommand, 'gpg.program')
+  const formatIsSsh = format.code === 0 && format.stdout.trim() === 'ssh'
+  const defaultSigningKey = formatIsSsh || hasExplicitNonSshSigningPreference(format, program)
+    ? undefined
+    : await readGitSigningConfigValue(context.workspaceFolder, runCommand, 'user.signingkey')
+  const defaultCommitSign = formatIsSsh || hasExplicitNonSshSigningPreference(format, program, defaultSigningKey)
+    ? undefined
+    : await readGitSigningConfigValue(context.workspaceFolder, runCommand, 'commit.gpgsign')
+  const preservesExistingSigning = hasExplicitNonSshSigningPreference(format, program, defaultSigningKey, defaultCommitSign)
+  const sshAgent = preservesExistingSigning ? undefined : await runCommand('ssh-add', ['-L'])
+  const identityLines = sshAgent?.code === 0
     ? sshAgent.stdout.split(/\r?\n/).filter((line) => line.trim().startsWith('ssh-'))
     : []
   const identities = identityLines.length
   let configuredKey: string | undefined
   let configuredFailure: { reason: GitSigningReason, detail?: string } | undefined
-  const format = await runCommand('git', ['config', '--global', '--get', 'gpg.format'])
-  if (format.code === 0 && format.stdout.trim() === 'ssh') {
-    const signingKey = await runCommand('git', ['config', '--global', '--get', 'user.signingkey'])
+  if (!preservesExistingSigning && formatIsSsh) {
+    const signingKey = await readGitSigningConfigValue(context.workspaceFolder, runCommand, 'user.signingkey')
     if (signingKey.code === 0 && signingKey.stdout.trim().length > 0) {
       const resolved = resolveConfiguredSshSigningKey(signingKey.stdout.trim(), {
         homeDir: dirname(context.hostGitconfigPath),
@@ -149,10 +160,13 @@ export async function runDoctorChecks (context: WorkspaceContext, options: RunDo
     }
   }
 
-  const selected: { key?: string, reason?: GitSigningReason } = configuredFailure ?? selectGitSigningKey(identityLines, configuredKey, githubAuthKeys)
-  const selectedByConfiguration = selected.key !== undefined && configuredKey !== undefined
-  const selectedByGithub = selected.key !== undefined && configuredKey === undefined && identities > 1
+  const selected: { key?: string, reason?: GitSigningReason } | undefined = preservesExistingSigning
+    ? undefined
+    : configuredFailure ?? selectGitSigningKey(identityLines, configuredKey, githubAuthKeys)
+  const selectedByConfiguration = selected?.key !== undefined && configuredKey !== undefined
+  const selectedByGithub = selected?.key !== undefined && configuredKey === undefined && identities > 1
   const signingMessages: Record<GitSigningReason, string> = {
+    'user-signing-preference': 'Existing non-SSH Git signing configuration detected; Boxdown SSH signing is skipped',
     'agent-unavailable': 'SSH agent is unavailable; Boxdown commits will remain unsigned',
     'no-identities': 'SSH agent has no identities; Boxdown commits will remain unsigned',
     'ambiguous-identities': 'SSH agent has multiple identities; Boxdown will not guess a signing key and commits will remain unsigned',
@@ -165,16 +179,18 @@ export async function runDoctorChecks (context: WorkspaceContext, options: RunDo
   }
   checks.push({
     name: 'git-signing-agent',
-    level: sshAgent.code === 0 && selected.key !== undefined ? 'ok' : 'warn',
-    message: sshAgent.code !== 0
-      ? signingMessages['agent-unavailable']
-      : selected.key === undefined
-        ? signingMessages[selected.reason ?? 'ambiguous-identities']
-        : selectedByConfiguration
-          ? 'Configured SSH signing key is loaded in the agent'
-          : selectedByGithub
-            ? 'GitHub authentication keys identify one SSH agent identity for Boxdown commit signing'
-            : 'One SSH agent identity is available for Boxdown commit signing'
+    level: preservesExistingSigning || (sshAgent?.code === 0 && selected?.key !== undefined) ? 'ok' : 'warn',
+    message: preservesExistingSigning
+      ? 'Existing non-SSH Git signing configuration detected; Boxdown SSH signing is skipped'
+      : sshAgent?.code !== 0
+        ? signingMessages['agent-unavailable']
+        : selected?.key === undefined
+          ? signingMessages[selected?.reason ?? 'ambiguous-identities']
+          : selectedByConfiguration
+            ? 'Configured SSH signing key is loaded in the agent'
+            : selectedByGithub
+              ? 'GitHub authentication keys identify one SSH agent identity for Boxdown commit signing'
+              : 'One SSH agent identity is available for Boxdown commit signing'
   })
 
   checks.push(check(
@@ -259,7 +275,7 @@ export async function runDoctorChecks (context: WorkspaceContext, options: RunDo
         level: ghAuth ? 'ok' : 'warn',
         message: ghAuth ? 'GitHub CLI auth is available' : 'GitHub CLI is available but not authenticated'
       })
-      if (ghAuth && selected.key !== undefined) {
+      if (ghAuth && selected?.key !== undefined) {
         if (githubLogin === undefined) {
           const user = await runCommand('gh', ['api', 'user', '--jq', '.login'])
           githubLogin = user.code === 0 && user.stdout.trim().length > 0 ? user.stdout.trim() : undefined

@@ -3991,6 +3991,100 @@ describe('workspace list output', () => {
 })
 
 describe('doctor output', () => {
+  test('skips SSH signing checks for the default GPG signing preference', async () => {
+    const context = createWorkspaceContext({
+      workspace: tempDir('doctor-gpg-signing-workspace'),
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('doctor-gpg-signing-cache'),
+        BOXDOWN_DATA_HOME: tempDir('doctor-gpg-signing-data')
+      },
+      assetsDevcontainerDir
+    })
+    const calls: string[] = []
+
+    const checks = await runDoctorChecks(context, {
+      includeOptional: false,
+      includeDockerMountProbe: false,
+      runCommand: async (command, args) => {
+        calls.push(`${command} ${args.join(' ')}`)
+        if (command === 'git' && args.includes('gpg.format')) return { code: 1, stdout: '', stderr: '' }
+        if (command === 'git' && args.includes('gpg.program')) return { code: 1, stdout: '', stderr: '' }
+        if (command === 'git' && args.includes('user.signingkey')) return { code: 0, stdout: '0123456789ABCDEF\n', stderr: '' }
+        if (command === 'ssh-add') return { code: 1, stdout: '', stderr: 'agent unavailable\n' }
+        return { code: 0, stdout: '', stderr: '' }
+      }
+    })
+
+    assert.deepStrictEqual(checks.find((check) => check.name === 'git-signing-agent'), {
+      name: 'git-signing-agent',
+      level: 'ok',
+      message: 'Existing non-SSH Git signing configuration detected; Boxdown SSH signing is skipped'
+    })
+    assert.ok(!calls.some((call) => call.startsWith('ssh-add ')))
+  })
+
+  test('skips SSH signing checks for a repository-local GPG signing preference', async () => {
+    const workspace = tempDir('doctor-local-gpg-signing-workspace')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('doctor-local-gpg-signing-cache'),
+        BOXDOWN_DATA_HOME: tempDir('doctor-local-gpg-signing-data')
+      },
+      assetsDevcontainerDir
+    })
+    const calls: string[] = []
+
+    const checks = await runDoctorChecks(context, {
+      includeOptional: false,
+      includeDockerMountProbe: false,
+      runCommand: async (command, args) => {
+        calls.push(`${command} ${args.join(' ')}`)
+        if (command === 'git' && args.includes('--local') && args.includes('gpg.format')) return { code: 0, stdout: 'openpgp\n', stderr: '' }
+        if (command === 'ssh-add') return { code: 1, stdout: '', stderr: 'agent unavailable\n' }
+        return { code: 1, stdout: '', stderr: '' }
+      }
+    })
+
+    assert.deepStrictEqual(checks.find((check) => check.name === 'git-signing-agent'), {
+      name: 'git-signing-agent',
+      level: 'ok',
+      message: 'Existing non-SSH Git signing configuration detected; Boxdown SSH signing is skipped'
+    })
+    assert.ok(!calls.some((call) => call.startsWith('ssh-add ')))
+  })
+
+  test('skips SSH signing checks for a Git boolean alias that enables default GPG signing', async () => {
+    const workspace = tempDir('doctor-gpg-signing-boolean-workspace')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('doctor-gpg-signing-boolean-cache'),
+        BOXDOWN_DATA_HOME: tempDir('doctor-gpg-signing-boolean-data')
+      },
+      assetsDevcontainerDir
+    })
+    const calls: string[] = []
+
+    const checks = await runDoctorChecks(context, {
+      includeOptional: false,
+      includeDockerMountProbe: false,
+      runCommand: async (command, args) => {
+        calls.push(`${command} ${args.join(' ')}`)
+        if (command === 'git' && args.includes('commit.gpgsign')) return { code: 0, stdout: 'yes\n', stderr: '' }
+        if (command === 'ssh-add') return { code: 1, stdout: '', stderr: 'agent unavailable\n' }
+        return { code: 1, stdout: '', stderr: '' }
+      }
+    })
+
+    assert.deepStrictEqual(checks.find((check) => check.name === 'git-signing-agent'), {
+      name: 'git-signing-agent',
+      level: 'ok',
+      message: 'Existing non-SSH Git signing configuration detected; Boxdown SSH signing is skipped'
+    })
+    assert.ok(!calls.some((call) => call.startsWith('ssh-add ')))
+  })
+
   test('runs required checks without optional diagnostics when requested', async () => {
     const workspace = tempDir('doctor-required-workspace')
     const context = createWorkspaceContext({
@@ -5788,6 +5882,114 @@ describe('git signing selection', () => {
     assert.match(readFileSync(context.workspaceLogPath, 'utf8'), /reason=agent-unavailable/)
   })
 
+  test('preserves the default GPG signing preference without probing the SSH agent', async () => {
+    const context = createWorkspaceContext({
+      workspace: tempDir('git-signing-gpg-preference-workspace'),
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('git-signing-gpg-preference-cache'),
+        BOXDOWN_DATA_HOME: tempDir('git-signing-gpg-preference-data')
+      },
+      assetsDevcontainerDir
+    })
+    const calls: string[] = []
+
+    const plan = await resolveGitSigningPlan(context, {
+      runCommand: async (command, args) => {
+        calls.push(`${command} ${args.join(' ')}`)
+        if (command === 'git' && args.includes('gpg.format')) return { code: 1, stdout: '', stderr: '' }
+        if (command === 'git' && args.includes('gpg.program')) return { code: 1, stdout: '', stderr: '' }
+        if (command === 'git' && args.includes('user.signingkey')) return { code: 0, stdout: '0123456789ABCDEF\n', stderr: '' }
+        if (command === 'ssh-add') return { code: 1, stdout: '', stderr: 'agent unavailable\n' }
+        throw new Error(`unexpected command: ${command} ${args.join(' ')}`)
+      }
+    })
+
+    assert.deepStrictEqual(plan, {
+      enabled: false,
+      reason: 'user-signing-preference'
+    })
+    assert.ok(!calls.some((call) => call.startsWith('ssh-add ')))
+  })
+
+  test('preserves a repository-local GPG signing preference without probing the SSH agent', async () => {
+    const workspace = tempDir('git-signing-local-gpg-preference-workspace')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('git-signing-local-gpg-preference-cache'),
+        BOXDOWN_DATA_HOME: tempDir('git-signing-local-gpg-preference-data')
+      },
+      assetsDevcontainerDir
+    })
+    const calls: string[] = []
+
+    const plan = await resolveGitSigningPlan(context, {
+      runCommand: async (command, args) => {
+        calls.push(`${command} ${args.join(' ')}`)
+        if (command === 'git' && args.includes('--local') && args.includes('gpg.format')) return { code: 0, stdout: 'openpgp\n', stderr: '' }
+        if (command === 'ssh-add') return { code: 1, stdout: '', stderr: 'agent unavailable\n' }
+        return { code: 1, stdout: '', stderr: '' }
+      }
+    })
+
+    assert.deepStrictEqual(plan, {
+      enabled: false,
+      reason: 'user-signing-preference'
+    })
+    assert.ok(!calls.some((call) => call.startsWith('ssh-add ')))
+  })
+
+  test('preserves a Git boolean alias that enables default GPG signing without probing the SSH agent', async () => {
+    const workspace = tempDir('git-signing-gpg-boolean-workspace')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('git-signing-gpg-boolean-cache'),
+        BOXDOWN_DATA_HOME: tempDir('git-signing-gpg-boolean-data')
+      },
+      assetsDevcontainerDir
+    })
+    const calls: string[] = []
+
+    const plan = await resolveGitSigningPlan(context, {
+      runCommand: async (command, args) => {
+        calls.push(`${command} ${args.join(' ')}`)
+        if (command === 'git' && args.includes('commit.gpgsign')) return { code: 0, stdout: 'yes\n', stderr: '' }
+        if (command === 'ssh-add') return { code: 1, stdout: '', stderr: 'agent unavailable\n' }
+        return { code: 1, stdout: '', stderr: '' }
+      }
+    })
+
+    assert.deepStrictEqual(plan, {
+      enabled: false,
+      reason: 'user-signing-preference'
+    })
+    assert.ok(!calls.some((call) => call.startsWith('ssh-add ')))
+  })
+
+  test('reports an explicit signing preference without claiming commits are unsigned', () => {
+    const workspace = tempDir('git-signing-preference-report-workspace')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('git-signing-preference-report-cache'),
+        BOXDOWN_DATA_HOME: tempDir('git-signing-preference-report-data')
+      },
+      assetsDevcontainerDir
+    })
+    const messages: string[] = []
+
+    reportGitSigningPlan({ enabled: false, reason: 'user-signing-preference' }, {
+      logger: createWorkspaceCommandLogger(context),
+      writeWarning: (message) => messages.push(message)
+    })
+
+    assert.deepStrictEqual(messages, [
+      'boxdown: preserving your existing Git signing configuration; Boxdown SSH signing is skipped.\n'
+    ])
+    assert.match(readFileSync(context.workspaceLogPath, 'utf8'), /reason=user-signing-preference/)
+  })
+
   test('full preflight resolves an explicit public-key path without GitHub fallback', async () => {
     const workspace = tempDir('git-signing-preflight-workspace')
     const home = tempDir('git-signing-preflight-home')
@@ -5811,6 +6013,7 @@ describe('git signing selection', () => {
         calls.push(`${command} ${args.join(' ')}`)
         if (command === 'ssh-add') return { code: 0, stdout: `${first}\n${second}\n`, stderr: '' }
         if (command === 'git' && args.includes('gpg.format')) return { code: 0, stdout: 'ssh\n', stderr: '' }
+        if (command === 'git' && args.includes('gpg.program')) return { code: 1, stdout: '', stderr: '' }
         if (command === 'git' && args.includes('user.signingkey')) return { code: 0, stdout: `${signingKeyPath}\n`, stderr: '' }
         if (command === 'docker' && args[0] === 'image') return { code: 0, stdout: 'example:latest\n', stderr: '' }
         if (command === 'docker' && args[0] === 'create') return { code: 0, stdout: 'probe-container\n', stderr: '' }
@@ -5845,6 +6048,7 @@ describe('git signing selection', () => {
         unreadableCalls.push(`${command} ${args.join(' ')}`)
         if (command === 'ssh-add') return { code: 0, stdout: `${first}\n`, stderr: '' }
         if (command === 'git' && args.includes('gpg.format')) return { code: 0, stdout: 'ssh\n', stderr: '' }
+        if (command === 'git' && args.includes('gpg.program')) return { code: 1, stdout: '', stderr: '' }
         if (command === 'git' && args.includes('user.signingkey')) return { code: 0, stdout: 'missing.pub\n', stderr: '' }
         throw new Error(`unexpected command: ${command} ${args.join(' ')}`)
       }
@@ -6019,7 +6223,7 @@ describe('devcontainer git config hooks', () => {
     assert.strictEqual(readGitConfig(targetPath, 'url.ssh://git@github.com/.insteadOf'), undefined)
     assert.deepStrictEqual(readGitConfigAll(targetPath, 'credential.helper'), ['cache'])
     assert.deepStrictEqual(readGitConfigAll(targetPath, 'credential.https://github.com.helper'), ['', '!gh auth git-credential'])
-    assert.strictEqual(readGitConfig(targetPath, 'commit.gpgsign'), 'true')
+    assert.strictEqual(readGitConfig(targetPath, 'commit.gpgsign'), 'yes')
     assert.strictEqual(readGitConfig(targetPath, 'tag.gpgsign'), 'true')
   })
 
@@ -6070,6 +6274,31 @@ describe('devcontainer git config hooks', () => {
 
     assert.strictEqual(readGitConfig(targetPath, 'commit.gpgsign'), 'true')
     assert.strictEqual(readGitConfig(targetPath, 'gpg.program'), '/opt/homebrew/bin/gpg')
+  })
+
+  test('git signing bootstrap preserves the default GPG signing configuration without an agent', () => {
+    const bootstrapPath = join(assetsDevcontainerDir, 'utils', 'git-signing-bootstrap.sh')
+    const targetPath = join(tempDir('git-signing-default-gpg-target'), '.gitconfig')
+    writeFileSync(targetPath, '[user]\n\tsigningkey = 0123456789ABCDEF\n[commit]\n\tgpgsign = true\n')
+
+    execFileSync('bash', [bootstrapPath], {
+      env: { ...process.env, BOXDOWN_GITCONFIG_TARGET_PATH: targetPath, BOXDOWN_GIT_SIGNING_ENABLED: '0' }
+    })
+
+    assert.strictEqual(readGitConfig(targetPath, 'user.signingkey'), '0123456789ABCDEF')
+    assert.strictEqual(readGitConfig(targetPath, 'commit.gpgsign'), 'true')
+  })
+
+  test('git signing bootstrap preserves a Git boolean alias for default GPG signing', () => {
+    const bootstrapPath = join(assetsDevcontainerDir, 'utils', 'git-signing-bootstrap.sh')
+    const targetPath = join(tempDir('git-signing-default-gpg-boolean-target'), '.gitconfig')
+    writeFileSync(targetPath, '[commit]\n\tgpgsign = yes\n')
+
+    execFileSync('bash', [bootstrapPath], {
+      env: { ...process.env, BOXDOWN_GITCONFIG_TARGET_PATH: targetPath, BOXDOWN_GIT_SIGNING_ENABLED: '0' }
+    })
+
+    assert.strictEqual(readGitConfig(targetPath, 'commit.gpgsign'), 'yes')
   })
 
   test('git signing bootstrap reports the host preflight reason', () => {

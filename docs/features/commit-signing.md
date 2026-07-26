@@ -81,6 +81,34 @@ Git can require `gpg.ssh.allowedSignersFile` for trust-aware local verification
 such as `git log --show-signature`. It is not required to create SSH signatures
 or for GitHub to verify a commit.
 
+## GPG and WSL
+
+Boxdown's automatic signing integration supports SSH signing through the host
+SSH agent. It does not install GnuPG, mount `~/.gnupg`, or forward a GPG agent
+into the container. When Boxdown detects a non-SSH Git signing configuration,
+such as GPG/OpenPGP, it preserves that configuration and reports that its SSH
+signing setup was skipped. It does not present an unavailable SSH agent as a
+failure of the existing GPG configuration.
+
+Detection respects repository-local Git configuration as well as global
+configuration. It also recognizes the standard Git boolean spellings for
+`commit.gpgsign`, including `true`, `yes`, `on`, and `1`.
+
+GPG signing inside a Boxdown container therefore requires a custom devcontainer
+configuration today. Boxdown never copies a private GPG key into its workspace
+state or image.
+
+For the supported SSH-signing path in WSL, confirm that the WSL environment can
+reach a running SSH agent and that the intended identity is loaded:
+
+```bash
+ssh-add -l
+printf '%s\n' "$SSH_AUTH_SOCK"
+```
+
+After correcting SSH-agent availability or identity selection, recreate the
+container so its create-time SSH-agent mount can be updated.
+
 ## Troubleshooting
 
 Signing failures remain non-blocking. User-facing lifecycle commands print a

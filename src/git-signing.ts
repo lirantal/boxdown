@@ -5,7 +5,7 @@ import type { WorkspaceCommandLogger } from './logging.ts'
 import type { WorkspaceContext } from './paths.ts'
 import { runBuffered, type CommandResult } from './process.ts'
 
-export type GitSigningReason = 'agent-unavailable' | 'no-identities' | 'ambiguous-identities' | 'configured-key-unreadable' | 'configured-key-invalid' | 'configured-key-not-loaded' | 'agent-socket-unavailable' | 'docker-probe-image-unavailable' | 'agent-mount-unavailable'
+export type GitSigningReason = 'user-signing-preference' | 'agent-unavailable' | 'no-identities' | 'ambiguous-identities' | 'configured-key-unreadable' | 'configured-key-invalid' | 'configured-key-not-loaded' | 'agent-socket-unavailable' | 'docker-probe-image-unavailable' | 'agent-mount-unavailable'
 
 export interface GitSigningPlan {
   enabled: boolean
@@ -16,6 +16,7 @@ export interface GitSigningPlan {
 }
 
 const GIT_SIGNING_REASON_MESSAGES: Record<GitSigningReason, string> = {
+  'user-signing-preference': 'your existing Git signing configuration is being preserved',
   'agent-unavailable': 'the host SSH agent is unavailable',
   'no-identities': 'the host SSH agent has no loaded identities',
   'ambiguous-identities': 'multiple SSH identities are loaded and no signing key could be selected safely',
@@ -25,6 +26,31 @@ const GIT_SIGNING_REASON_MESSAGES: Record<GitSigningReason, string> = {
   'agent-socket-unavailable': 'the host SSH-agent socket is unavailable',
   'docker-probe-image-unavailable': 'no local Docker image is available to probe the SSH-agent mount',
   'agent-mount-unavailable': 'Docker could not mount the host SSH-agent socket'
+}
+
+export function hasExplicitNonSshSigningPreference (
+  format: Pick<CommandResult, 'code' | 'stdout'>,
+  program?: Pick<CommandResult, 'code' | 'stdout'>,
+  signingKey?: Pick<CommandResult, 'code' | 'stdout'>,
+  commitSign?: Pick<CommandResult, 'code' | 'stdout'>
+): boolean {
+  if (format.code === 0 && format.stdout.trim().length > 0 && format.stdout.trim() !== 'ssh') {
+    return true
+  }
+
+  if (program?.code === 0 && program.stdout.trim().length > 0) {
+    return true
+  }
+
+  const formatIsSsh = format.code === 0 && format.stdout.trim() === 'ssh'
+  return !formatIsSsh && (
+    (signingKey?.code === 0 && signingKey.stdout.trim().length > 0) ||
+    (commitSign?.code === 0 && isGitBooleanTrue(commitSign.stdout))
+  )
+}
+
+function isGitBooleanTrue (value: string): boolean {
+  return ['1', 'true', 'yes', 'on'].includes(value.trim().toLowerCase())
 }
 
 function compactDiagnosticDetail (detail: string): string {
@@ -55,7 +81,11 @@ export function reportGitSigningPlan (
 
   if (options.quiet !== true) {
     const writeWarning = options.writeWarning ?? ((message: string) => process.stderr.write(message))
-    writeWarning(`boxdown: commit signing disabled: ${GIT_SIGNING_REASON_MESSAGES[reason]}; commits will remain unsigned.\n`)
+    if (reason === 'user-signing-preference') {
+      writeWarning('boxdown: preserving your existing Git signing configuration; Boxdown SSH signing is skipped.\n')
+    } else {
+      writeWarning(`boxdown: commit signing disabled: ${GIT_SIGNING_REASON_MESSAGES[reason]}; commits will remain unsigned.\n`)
+    }
   }
 }
 
@@ -146,7 +176,7 @@ export function writeGitSigningPublicKey (context: WorkspaceContext, key: string
   writeFileSync(join(context.gitSigningStateDir, 'signing-key.pub'), `${parseSshPublicKey(key) ?? key}\n`, { mode: 0o644 })
 }
 
-type GitSigningCommandRunner = (command: string, args: string[]) => Promise<CommandResult>
+export type GitSigningCommandRunner = (command: string, args: string[]) => Promise<CommandResult>
 
 interface ResolveGitSigningPlanOptions {
   env?: NodeJS.ProcessEnv
@@ -160,6 +190,19 @@ type AgentMountProbeResult =
 
 async function runGitSigningCommand (command: string, args: string[]): Promise<CommandResult> {
   return runBuffered(command, args, { mirrorStdout: false, mirrorStderr: false })
+}
+
+export async function readGitSigningConfigValue (
+  workspaceFolder: string,
+  runCommand: GitSigningCommandRunner,
+  key: string
+): Promise<CommandResult> {
+  const local = await runCommand('git', ['-C', workspaceFolder, 'config', '--local', '--get', key])
+  if (local.code === 0 && local.stdout.trim().length > 0) {
+    return local
+  }
+
+  return runCommand('git', ['config', '--global', '--get', key])
 }
 
 function failedCommandDetail (label: string, result: CommandResult): string {
@@ -202,6 +245,31 @@ async function probeDockerAgentMount (source: string, runCommand: GitSigningComm
 
 export async function resolveGitSigningPlan (context: WorkspaceContext, options: ResolveGitSigningPlanOptions = {}): Promise<GitSigningPlan> {
   const runCommand = options.runCommand ?? runGitSigningCommand
+  const format = await readGitSigningConfigValue(context.workspaceFolder, runCommand, 'gpg.format')
+  if (hasExplicitNonSshSigningPreference(format)) {
+    return { enabled: false, reason: 'user-signing-preference' }
+  }
+
+  const program = await readGitSigningConfigValue(context.workspaceFolder, runCommand, 'gpg.program')
+  if (hasExplicitNonSshSigningPreference(format, program)) {
+    return { enabled: false, reason: 'user-signing-preference' }
+  }
+
+  const formatIsSsh = format.code === 0 && format.stdout.trim() === 'ssh'
+  const defaultSigningKey = formatIsSsh
+    ? undefined
+    : await readGitSigningConfigValue(context.workspaceFolder, runCommand, 'user.signingkey')
+  if (hasExplicitNonSshSigningPreference(format, program, defaultSigningKey)) {
+    return { enabled: false, reason: 'user-signing-preference' }
+  }
+
+  const defaultCommitSign = formatIsSsh
+    ? undefined
+    : await readGitSigningConfigValue(context.workspaceFolder, runCommand, 'commit.gpgsign')
+  if (hasExplicitNonSshSigningPreference(format, program, defaultSigningKey, defaultCommitSign)) {
+    return { enabled: false, reason: 'user-signing-preference' }
+  }
+
   const result = await runCommand('ssh-add', ['-L'])
   if (result.code !== 0) {
     return {
@@ -212,10 +280,9 @@ export async function resolveGitSigningPlan (context: WorkspaceContext, options:
   }
 
   const identities = result.stdout.split(/\r?\n/)
-  const format = await runCommand('git', ['config', '--global', '--get', 'gpg.format'])
   let configuredKey: string | undefined
-  if (format.code === 0 && format.stdout.trim() === 'ssh') {
-    const signingKey = await runCommand('git', ['config', '--global', '--get', 'user.signingkey'])
+  if (formatIsSsh) {
+    const signingKey = await readGitSigningConfigValue(context.workspaceFolder, runCommand, 'user.signingkey')
     if (signingKey.code === 0 && signingKey.stdout.trim().length > 0) {
       const resolvedKey = resolveConfiguredSshSigningKey(signingKey.stdout.trim(), {
         homeDir: options.env?.HOME ?? process.env.HOME,
