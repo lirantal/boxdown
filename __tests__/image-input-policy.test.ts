@@ -392,3 +392,12 @@ test('validates and attests the immutable digest before moving release tags', ()
   assert.match(movingTagStep, /IMAGE_REFERENCE: ghcr\.io\/lirantal\/boxdown@\$\{\{ steps\.image\.outputs\.digest \}\}/)
   assert.match(movingTagStep, /"\$\{IMAGE_REFERENCE\}"/)
 })
+
+test('keeps retry image identity anchored to the version-introducing merge commit', () => {
+  const workflow = readFileSync(releaseWorkflowPath, 'utf8')
+
+  assert.match(workflow, /fetch-depth: 0/)
+  assert.match(workflow, /release_revision="\$\(\s+git log --first-parent -G/)
+  assert.match(workflow, /RELEASE_REVISION: \$\{\{ steps\.release-state\.outputs\.release_revision \}\}/)
+  assert.match(workflow, /org\.opencontainers\.image\.revision=\$\{\{ steps\.release-state\.outputs\.release_revision \}\}/)
+})

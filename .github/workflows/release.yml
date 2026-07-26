@@ -22,6 +22,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
       - uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093 # v6.0.8
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
@@ -42,6 +44,13 @@ jobs:
           package_name="$(node -p "require('./package.json').name")"
           version="$(node -p "require('./package.json').version")"
           tool_lock_sha256="$(sha256sum assets/image/tools.lock.json | cut -d' ' -f1)"
+          release_revision="$(
+            git log --first-parent -G "\"version\": \"${version}\"" --format=%H -1 -- package.json
+          )"
+          if [[ ! "${release_revision}" =~ ^[a-f0-9]{40}$ ]]; then
+            echo "could not resolve the commit that introduced release ${version}" >&2
+            exit 1
+          fi
           env \
             RELEASE_PACKAGE_NAME="${package_name}" \
             RELEASE_VERSION="${version}" \
@@ -50,6 +59,7 @@ jobs:
           echo "package_name=${package_name}" >> "${GITHUB_OUTPUT}"
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
           echo "tool_lock_sha256=${tool_lock_sha256}" >> "${GITHUB_OUTPUT}"
+          echo "release_revision=${release_revision}" >> "${GITHUB_OUTPUT}"
 
           if npm view "${package_name}@${version}" version >/dev/null 2>"${RUNNER_TEMP}/npm-view-error"; then
             echo "publish=false" >> "${GITHUB_OUTPUT}"
@@ -95,7 +105,7 @@ jobs:
         env:
           RELEASE_PACKAGE_NAME: ${{ steps.release-state.outputs.package_name }}
           RELEASE_VERSION: ${{ steps.release-state.outputs.version }}
-          RELEASE_REVISION: ${{ github.sha }}
+          RELEASE_REVISION: ${{ steps.release-state.outputs.release_revision }}
         run: |
           decision="$(
             node --import tsx scripts/check-image-release.ts check-image
@@ -114,7 +124,7 @@ jobs:
           tags: boxdown-release:${{ github.sha }}
           labels: |
             org.opencontainers.image.source=https://github.com/lirantal/boxdown
-            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.revision=${{ steps.release-state.outputs.release_revision }}
             org.opencontainers.image.version=${{ steps.release-state.outputs.version }}
             io.boxdown.tools-lock.sha256=${{ steps.release-state.outputs.tool_lock_sha256 }}
           provenance: false
@@ -150,7 +160,7 @@ jobs:
           tags: ghcr.io/lirantal/boxdown:${{ steps.release-state.outputs.version }}
           labels: |
             org.opencontainers.image.source=https://github.com/lirantal/boxdown
-            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.revision=${{ steps.release-state.outputs.release_revision }}
             org.opencontainers.image.version=${{ steps.release-state.outputs.version }}
             io.boxdown.tools-lock.sha256=${{ steps.release-state.outputs.tool_lock_sha256 }}
           provenance: mode=max
@@ -185,7 +195,7 @@ jobs:
           node --import tsx scripts/verify-image-manifest.ts
           registry "${IMAGE_REFERENCE}"
           assets/image/image-size-budget.json
-          "${{ github.sha }}"
+          "${{ steps.release-state.outputs.release_revision }}"
           "${{ steps.release-state.outputs.version }}"
           "${{ steps.release-state.outputs.tool_lock_sha256 }}"
       - name: Verify BuildKit provenance and SBOM attestations
