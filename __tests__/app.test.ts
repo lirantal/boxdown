@@ -732,6 +732,15 @@ describe('CLI parsing', () => {
     assert.match(USAGE, /refresh-gh-token-running\s+Refresh GitHub CLI auth only if/)
   })
 
+  test('README documents Boxdown resource ownership and verbosity modes', () => {
+    const readme = readFileSync(fileURLToPath(new URL('../README.md', import.meta.url)), 'utf8')
+    assert.match(readme, /## What Boxdown manages/)
+    assert.match(readme, /outside the target repository/)
+    assert.match(readme, /interactive `--verbose`.*detailed lifecycle trace/is)
+    assert.match(readme, /CI and non-interactive.*raw command output/is)
+    assert.match(readme, /`stop`.*`down`.*`purge`/is)
+  })
+
   test('help aligns wrapped command descriptions', () => {
     const usageLines = USAGE.split(/\r?\n/)
     const commandsStart = usageLines.indexOf('Commands:')

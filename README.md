@@ -47,12 +47,12 @@ an SSH alias for remote tools. The target repository stays clean; Boxdown writes
 generated configuration and SSH keys under user cache/data directories instead
 of copying `.devcontainer/` into the project.
 
-Startup commands print concise progress by default and hide raw Docker,
-Dev Containers, and lifecycle hook logs unless a step fails. Add `--verbose` to
-stream the full command output while setup/start work runs. Boxdown also keeps
-one append-only per-workspace command log under its data directory; `boxdown
-status` shows the exact path. Interactive shell, agent, and tunnel session bytes
-are not tee'd into the log.
+Startup commands print concise progress by default. With interactive `--verbose`,
+Boxdown shows a detailed lifecycle trace. In CI and non-interactive output,
+`--verbose` streams raw command output for managed commands. Boxdown also keeps one
+append-only per-workspace command log under its data directory; `boxdown status`
+shows the exact path. Interactive shell, agent, and tunnel session bytes are not
+tee'd into the log.
 
 Open an interactive shell inside the container when you need one:
 
@@ -85,6 +85,41 @@ container recreation to take effect. APM is intentionally deferred on ARM64
 until you explicitly opt in to a Python-based installation. Existing
 workspaces keep their current container until you run `boxdown start --recreate`
 or `boxdown setup --recreate`.
+
+## What Boxdown manages
+
+### Outside your repository
+
+Boxdown stores generated devcontainer configuration under its cache root and
+per-workspace metadata, SSH keys, runtime state, and redacted command log
+under its data roots. It does not copy a `.devcontainer` directory into the
+target repository; all generated state remains outside the target repository.
+
+For generated-state details, see [Generated configuration and state](./docs/features/generated-config-and-state.md).
+
+### Container inputs
+
+Boxdown mounts its packaged assets, public SSH key, host Git-config snapshot,
+and runtime-secret directory for the container lifecycle. It only adds
+optional host agent configuration mounts when documented prerequisites exist;
+`boxdown status` reports the exact generated paths for a workspace.
+
+### Host integrations
+
+`boxdown setup` manages a workspace SSH alias. It writes Codex or Claude app
+integration records only when you select or explicitly request those targets.
+
+### Cleanup boundary
+
+The `stop`, `down`, and `purge` commands define the cleanup boundary.
+
+`boxdown stop` keeps the container and all Boxdown state. `boxdown down`
+removes the container but keeps Boxdown state. `boxdown purge` removes the
+workspace's Boxdown-managed container, recorded image, generated state,
+command log, and managed SSH/app integrations; it never removes repository
+files.
+
+For lifecycle details, see [Container lifecycle](./docs/features/lifecycle.md).
 
 ### Portless SSH
 
