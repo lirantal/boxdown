@@ -141,8 +141,8 @@ Options:
   --format json       Print JSON output. Equivalent to --json.
   --details           Print detailed human list output. Supported by list.
   --verbose           Show a detailed lifecycle trace in an interactive terminal.
-                      Streams raw Docker, devcontainer, and hook output in CI or non-interactive output.
-                      Managed output is appended to
+                      Streams raw Docker, devcontainer, and hook output in CI
+                      or non-interactive output. Managed output is appended to
                       the per-workspace command log either way.
   --help, -h          Show help.
   --version, -v       Show version.

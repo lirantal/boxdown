@@ -707,7 +707,7 @@ describe('CLI parsing', () => {
     assert.match(USAGE, /--json\s+Print JSON output\. Supported by status and list\./)
     assert.match(USAGE, /--format json\s+Print JSON output\. Equivalent to --json\./)
     assert.match(USAGE, /--details\s+Print detailed human list output\. Supported by list\./)
-    assert.match(USAGE, /--verbose\s+Show a detailed lifecycle trace in an interactive terminal\.[\s\S]*Streams raw Docker, devcontainer, and hook output in CI or non-interactive output\./)
+    assert.match(USAGE, /--verbose\s+Show a detailed lifecycle trace in an interactive terminal\.[\s\S]*Streams raw Docker, devcontainer, and hook output in CI\s+or non-interactive output\./)
     assert.match(USAGE, /--version, -v\s+Show version\./)
     assert.match(USAGE, /doctor\s+Check required host tools/)
     assert.doesNotMatch(USAGE, /Alias:/)
