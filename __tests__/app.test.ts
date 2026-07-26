@@ -3435,7 +3435,7 @@ describe('status output', () => {
     }
     const sshConfigPath = join(tempDir('status-claude-missing-config'), 'config')
     const status = createStatusInfo(context, 'demo-devcontainer', undefined,
-      () => false, { sshConfigPath })
+      () => false, { sshConfigPath, isFile: () => false })
 
     assert.deepStrictEqual(status.claude.credentials, {
       state: 'missing',
