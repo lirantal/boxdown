@@ -3341,7 +3341,7 @@ describe('status output', () => {
 
   test('formats status for running and absent containers', () => {
     const workspace = tempDir('status-workspace')
-    const context = createWorkspaceContext({
+    const baseContext = createWorkspaceContext({
       workspace,
       env: {
         BOXDOWN_CACHE_HOME: tempDir('status-cache'),
@@ -3349,6 +3349,10 @@ describe('status output', () => {
       },
       assetsDevcontainerDir
     })
+    const context = {
+      ...baseContext,
+      hostClaudeCredentialsPath: '/home/demo/.claude/.credentials.json'
+    }
     const sshConfigPath = join(tempDir('status-config'), 'config')
     writeFileSync(sshConfigPath, buildSshConfigBlock(context, 'demo-devcontainer'))
     const exists = (path: string): boolean => [
@@ -3365,7 +3369,11 @@ describe('status output', () => {
       name: 'demo',
       state: 'running',
       status: 'Up 2 minutes'
-    }, exists, { aliasSource: 'default', sshConfigPath })
+    }, exists, {
+      aliasSource: 'default',
+      sshConfigPath,
+      isFile: (path) => path === context.hostClaudeCredentialsPath
+    })
     const stopped = createStatusInfo(context, 'demo-devcontainer', {
       id: 'def456',
       name: 'demo',
@@ -3387,6 +3395,10 @@ describe('status output', () => {
     assert.strictEqual(running.ssh.managedBlockState, 'installed')
     assert.strictEqual(running.paths.logPath, context.workspaceLogPath)
     assert.strictEqual(running.paths.logExists, true)
+    assert.deepStrictEqual(running.claude.credentials, {
+      state: 'mounted',
+      path: context.hostClaudeCredentialsPath
+    })
     assert.strictEqual(absent.ssh.managedBlockState, 'missing')
     assert.strictEqual(absent.paths.logExists, false)
     assert.match(formatStatusText(running), /SSH alias: demo-devcontainer \(computed default; installed\)/)
@@ -3395,6 +3407,7 @@ describe('status output', () => {
     assert.match(formatStatusText(stopped), /State: exited/)
     assert.match(formatStatusText(running), /Generated config: .* \(exists\)/)
     assert.match(formatStatusText(running), /Command log: .*boxdown\.log \(exists\)/)
+    assert.match(formatStatusText(running), /Claude credentials: .* \(mounted; host-owned\)/)
     assert.match(formatStatusText(absent), /Generated config: .* \(missing\)/)
     assert.match(formatStatusText(absent), /Command log: .*boxdown\.log \(missing\)/)
     assert.match(formatStatusText(running), /SSH config: .* \(exists\)/)
@@ -3404,6 +3417,49 @@ describe('status output', () => {
     assert.match(formatStatusText(running, { color: true }), /\u001B\[32mexists\u001B\[0m/)
     assert.match(formatStatusText(running, { color: true }), /\u001B\[32minstalled\u001B\[0m/)
     assert.match(formatStatusText(running, { color: true }), /\u001B\[32myes\u001B\[0m/)
+  })
+
+  test('reports missing Claude credential status', () => {
+    const workspace = tempDir('status-claude-missing-workspace')
+    const baseContext = createWorkspaceContext({
+      workspace,
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('status-claude-missing-cache'),
+        BOXDOWN_DATA_HOME: tempDir('status-claude-missing-data')
+      },
+      assetsDevcontainerDir
+    })
+    const context = {
+      ...baseContext,
+      hostClaudeCredentialsPath: '/home/demo/.claude/.credentials.json'
+    }
+    const sshConfigPath = join(tempDir('status-claude-missing-config'), 'config')
+    const status = createStatusInfo(context, 'demo-devcontainer', undefined,
+      () => false, { sshConfigPath })
+
+    assert.deepStrictEqual(status.claude.credentials, {
+      state: 'missing',
+      path: context.hostClaudeCredentialsPath
+    })
+    assert.match(formatStatusText(status), /Run Claude Code and \/login on the host, then recreate the devcontainer\./)
+  })
+
+  test('reports unsupported Claude credential status', () => {
+    const workspace = tempDir('status-claude-unsupported-workspace')
+    const baseContext = createWorkspaceContext({
+      workspace,
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('status-claude-unsupported-cache'),
+        BOXDOWN_DATA_HOME: tempDir('status-claude-unsupported-data')
+      },
+      assetsDevcontainerDir
+    })
+    const macContext = { ...baseContext, hostClaudeCredentialsPath: undefined }
+    const sshConfigPath = join(tempDir('status-claude-unsupported-config'), 'config')
+    const unsupported = createStatusInfo(macContext, 'demo-devcontainer', undefined, () => false, { sshConfigPath })
+
+    assert.deepStrictEqual(unsupported.claude.credentials, { state: 'unsupported' })
+    assert.match(formatStatusText(unsupported), /macOS Keychain credentials are not automatically forwarded/)
   })
 })
 

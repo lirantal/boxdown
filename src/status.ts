@@ -1,10 +1,16 @@
-import { readFileSync } from 'node:fs'
+import { readFileSync, statSync } from 'node:fs'
 
 import type { WorkspaceContext } from './paths.ts'
 import { buildSshConfigBlock, defaultSshConfigPath } from './ssh-config.ts'
 
 export type SshAliasSource = 'default' | 'provided'
 export type SshManagedBlockState = 'missing' | 'installed' | 'outdated'
+export type ClaudeCredentialsState = 'mounted' | 'missing' | 'unsupported'
+
+export interface ClaudeCredentialsStatus {
+  state: ClaudeCredentialsState
+  path?: string
+}
 
 export interface ContainerSummary {
   id: string
@@ -44,6 +50,9 @@ export interface StatusInfo {
     logExists: boolean
     assetsDevcontainerDir: string
     assetsDevcontainerExists: boolean
+  }
+  claude: {
+    credentials: ClaudeCredentialsStatus
   }
   container: {
     found: boolean
@@ -108,6 +117,28 @@ export function parseDockerPsJsonLines (output: string): ContainerSummary[] {
 
 function readFileUtf8 (path: string): string {
   return readFileSync(path, 'utf8')
+}
+
+function isRegularFile (path: string): boolean {
+  try {
+    return statSync(path).isFile()
+  } catch {
+    return false
+  }
+}
+
+function inspectClaudeCredentialsStatus (
+  context: WorkspaceContext,
+  isFile: (path: string) => boolean
+): ClaudeCredentialsStatus {
+  if (context.hostClaudeCredentialsPath === undefined) {
+    return { state: 'unsupported' }
+  }
+
+  return {
+    state: isFile(context.hostClaudeCredentialsPath) ? 'mounted' : 'missing',
+    path: context.hostClaudeCredentialsPath
+  }
 }
 
 function managedSshBlockMarkers (alias: string): { begin: string, end: string } {
@@ -181,6 +212,7 @@ export function createStatusInfo (
     aliasSource?: SshAliasSource
     sshConfigPath?: string
     readFile?: (path: string) => string
+    isFile?: (path: string) => boolean
   } = {}
 ): StatusInfo {
   const state = container?.state?.toLowerCase()
@@ -222,6 +254,9 @@ export function createStatusInfo (
       logExists: exists(context.workspaceLogPath),
       assetsDevcontainerDir: context.assetsDevcontainerDir,
       assetsDevcontainerExists: exists(context.assetsDevcontainerDir)
+    },
+    claude: {
+      credentials: inspectClaudeCredentialsStatus(context, options.isFile ?? isRegularFile)
     },
     container: {
       found: container !== undefined,
@@ -286,6 +321,14 @@ export function formatStatusText (status: StatusInfo, options: { color?: boolean
   const colorEnabled = options.color ?? false
   const containerState = status.container.found ? status.container.state ?? 'unknown' : 'absent'
   const healthy = statusIsHealthy(status)
+  const claudeCredentialsLines = status.claude.credentials.state === 'mounted'
+    ? [`  Claude credentials: ${status.claude.credentials.path} (mounted; host-owned)`]
+    : status.claude.credentials.state === 'missing'
+      ? [
+          `  Claude credentials: ${status.claude.credentials.path} (missing)`,
+          '  Run Claude Code and /login on the host, then recreate the devcontainer.'
+        ]
+      : ['  Claude credentials: macOS Keychain credentials are not automatically forwarded.']
   const lines = [
     'Boxdown status',
     '',
@@ -303,6 +346,9 @@ export function formatStatusText (status: StatusInfo, options: { color?: boolean
     `  Generated config: ${status.paths.generatedConfigPath} (${existenceText(status.paths.generatedConfigExists, colorEnabled)})`,
     `  Command log: ${status.paths.logPath} (${existenceText(status.paths.logExists, colorEnabled)})`,
     `  Devcontainer assets: ${status.paths.assetsDevcontainerDir} (${existenceText(status.paths.assetsDevcontainerExists, colorEnabled)})`,
+    '',
+    'Claude Code:',
+    ...claudeCredentialsLines,
     '',
     'SSH:',
     `  SSH config: ${status.ssh.configPath} (${existenceText(status.ssh.configExists, colorEnabled)})`,
