@@ -750,12 +750,16 @@ describe('CLI parsing', () => {
 })
 
 test('documents narrow host Claude credential forwarding', () => {
+  const readme = readFileSync(join(process.cwd(), 'README.md'), 'utf8')
   const stateDocs = readFileSync(join(process.cwd(), 'docs/features/generated-config-and-state.md'), 'utf8')
+  const startDocs = readFileSync(join(process.cwd(), 'docs/features/start-and-shell.md'), 'utf8')
   const lifecycleDocs = readFileSync(join(process.cwd(), 'docs/features/lifecycle.md'), 'utf8')
 
+  assert.match(readme, /Run Claude Code and complete `\/login`\s+on the host, then run `boxdown start --recreate`/)
   assert.match(stateDocs, /\.claude\/\.credentials\.json/)
   assert.match(stateDocs, /does not mount.*~\/\.claude.*~\/\.claude\.json/is)
   assert.match(stateDocs, /macOS.*Keychain/is)
+  assert.match(startDocs, /Run Claude Code and complete `\/login` on the host, then run `boxdown start\s+--recreate`/)
   assert.match(lifecycleDocs, /does not remove host Claude credentials/is)
 })
 

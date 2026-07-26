@@ -222,8 +222,8 @@ boxdown claude -- --continue
 ```
 
 On supported Linux/WSL and Windows hosts, Boxdown forwards the documented
-Claude Code credential file automatically. If you log in to Claude Code after
-creating the container, run `boxdown start --recreate` to add the new mount.
+Claude Code credential file automatically. Run Claude Code and complete `/login`
+on the host, then run `boxdown start --recreate` to add the new mount.
 
 List Boxdown-known devcontainer environments from any directory:
 
