@@ -8,6 +8,11 @@ The mount survives container removal because its source remains host-owned. It
 does not expose the host's broader Claude configuration, prompt history,
 transcripts, plugins, or personal MCP configuration.
 
+On Linux/WSL, Dev Containers synchronizes the remote user's UID/GID at
+container creation. That makes an owner-only host credential file readable and
+writable by the `node` user, accepting a small local create-time cost instead
+of treating the published image as wholly immutable at runtime.
+
 The initial implementation supports Linux, WSL, and native Windows, where
 Claude Code documents file-backed credentials. macOS uses Keychain-backed
 credentials and is deliberately not included in automatic forwarding.
@@ -62,7 +67,9 @@ devcontainer configuration includes one writable bind mount:
 
 The published image creates `/home/node/.claude` with ownership for the `node`
 user, so Docker can bind-mount the file without mounting the entire parent
-directory.
+directory. Dev Containers also synchronizes that user's UID/GID on Linux/WSL
+so the writable host file remains usable when its host permissions are
+owner-only.
 
 Boxdown does not set `CLAUDE_CONFIG_DIR` inside the container. Claude Code uses
 its standard Linux path there, while the single mounted file supplies the
@@ -100,11 +107,14 @@ forwarded automatically. It does not offer an unsafe workaround.
 
 `boxdown status` reports Claude authentication as one of:
 
-- `mounted`: a supported, regular host credential file will be forwarded;
+- `available`: a supported, regular host credential file is available on the
+  host; the user can recreate to apply the current generated mount
+  configuration;
 - `missing`: the supported host credential location does not contain a regular
   file, with host-login and recreate guidance;
 - `unsupported`: macOS Keychain-backed credentials are not automatically
-  forwardable.
+  forwardable; other platforms report that no supported file-backed forwarding
+  path is known.
 
 Documentation explains the contrast with Codex: Codex's `auth.json` is mounted
 read-only, while Claude's documented credential file is writable because Claude
@@ -118,13 +128,15 @@ Tests are written before production changes and cover:
    `CLAUDE_CONFIG_DIR`.
 2. Generated config adding the exact writable file mount only when the source
    is a regular file.
-3. No generated mount on macOS or for a missing/non-regular source.
+3. No generated mount on macOS, unsupported platforms, or for a
+   missing/non-regular source.
 4. Preservation of a custom mount that already targets the container
    credential file.
-5. Status text and JSON reporting for mounted, missing, and unsupported
+5. Status text and JSON reporting for available, missing, and platform-specific
+   unsupported
    credential states.
-6. The published image creating the single-file mount's target parent
-   directory.
+6. The published image creating the single-file mount's target parent directory
+   and enabling remote UID/GID synchronization.
 
 ## Follow-up
 

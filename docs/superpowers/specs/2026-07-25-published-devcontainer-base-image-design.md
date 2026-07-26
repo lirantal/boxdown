@@ -198,9 +198,10 @@ anonymous `docker pull`. Thereafter, Boxdown users require no registry login.
 
 New workspaces pull the matching published image. The generated configuration
 contains no Features, so the Dev Containers CLI does not invoke a local Feature
-or Dockerfile build. It also sets `updateRemoteUserUID` to `false`, preserving
-the published image directly rather than constructing a local `-uid`
-derivative.
+or Dockerfile build. It enables `updateRemoteUserUID` so Linux/WSL containers
+can access owner-only, writable host credential mounts as the remote `node`
+user. This is an intentional local create-time tradeoff for correct credential
+file permissions.
 
 Existing Boxdown containers are deliberately not changed merely because the
 user upgrades Boxdown. If Boxdown sees that a running or reused workspace is

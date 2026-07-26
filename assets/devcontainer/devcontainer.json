@@ -58,8 +58,8 @@
     "postCreateCommand": "bash .devcontainer/hooks/post-create.sh",
     "postStartCommand": "bash .devcontainer/hooks/post-start.sh",
     "remoteUser": "node",
-    // Keep the immutable published image instead of building a host-UID derivative.
-    "updateRemoteUserUID": false,
+    // Keep the Linux container user aligned with host-owned writable credential mounts.
+    "updateRemoteUserUID": true,
     "workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
     "containerEnv": {
         "NODE_ENV": "development"

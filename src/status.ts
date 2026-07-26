@@ -1,15 +1,16 @@
 import { readFileSync, statSync } from 'node:fs'
 
-import type { WorkspaceContext } from './paths.ts'
+import type { ClaudeCredentialsSupport, WorkspaceContext } from './paths.ts'
 import { buildSshConfigBlock, defaultSshConfigPath } from './ssh-config.ts'
 
 export type SshAliasSource = 'default' | 'provided'
 export type SshManagedBlockState = 'missing' | 'installed' | 'outdated'
-export type ClaudeCredentialsState = 'mounted' | 'missing' | 'unsupported'
+export type ClaudeCredentialsState = 'available' | 'missing' | 'unsupported'
 
 export interface ClaudeCredentialsStatus {
   state: ClaudeCredentialsState
   path?: string
+  reason?: Exclude<ClaudeCredentialsSupport, 'file'>
 }
 
 export interface ContainerSummary {
@@ -131,12 +132,12 @@ function inspectClaudeCredentialsStatus (
   context: WorkspaceContext,
   isFile: (path: string) => boolean
 ): ClaudeCredentialsStatus {
-  if (context.hostClaudeCredentialsPath === undefined) {
-    return { state: 'unsupported' }
+  if (context.claudeCredentialsSupport !== 'file') {
+    return { state: 'unsupported', reason: context.claudeCredentialsSupport }
   }
 
   return {
-    state: isFile(context.hostClaudeCredentialsPath) ? 'mounted' : 'missing',
+    state: isFile(context.hostClaudeCredentialsPath) ? 'available' : 'missing',
     path: context.hostClaudeCredentialsPath
   }
 }
@@ -321,14 +322,19 @@ export function formatStatusText (status: StatusInfo, options: { color?: boolean
   const colorEnabled = options.color ?? false
   const containerState = status.container.found ? status.container.state ?? 'unknown' : 'absent'
   const healthy = statusIsHealthy(status)
-  const claudeCredentialsLines = status.claude.credentials.state === 'mounted'
-    ? [`  Claude credentials: ${status.claude.credentials.path} (mounted; host-owned)`]
+  const claudeCredentialsLines = status.claude.credentials.state === 'available'
+    ? [
+        `  Claude credentials: ${status.claude.credentials.path} (available on host; host-owned)`,
+        '  Run `boxdown start --recreate` to apply the current credential mount configuration.'
+      ]
     : status.claude.credentials.state === 'missing'
       ? [
           `  Claude credentials: ${status.claude.credentials.path} (missing)`,
           '  Run Claude Code and /login on the host, then recreate the devcontainer.'
         ]
-      : ['  Claude credentials: macOS Keychain credentials are not automatically forwarded.']
+      : status.claude.credentials.reason === 'macos-keychain'
+        ? ['  Claude credentials: macOS Keychain credentials are not automatically forwarded.']
+        : ['  Claude credentials: This host platform does not have a supported file-backed Claude credential forwarding path.']
   const lines = [
     'Boxdown status',
     '',

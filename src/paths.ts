@@ -10,9 +10,12 @@ export interface WorkspaceContextOptions {
   workspace?: string
   cwd?: string
   env?: NodeJS.ProcessEnv
+  platform?: NodeJS.Platform
   packageRoot?: string
   assetsDevcontainerDir?: string
 }
+
+export type ClaudeCredentialsSupport = 'file' | 'macos-keychain' | 'unsupported-platform'
 
 export interface WorkspaceContext {
   workspaceFolder: string
@@ -30,6 +33,7 @@ export interface WorkspaceContext {
   generatedConfigPath: string
   hostAgentsDir: string
   hostCodexAuthPath: string
+  claudeCredentialsSupport: ClaudeCredentialsSupport
   hostClaudeCredentialsPath?: string
   hostGitconfigPath: string
   hostGitconfigSnapshotDir: string
@@ -120,7 +124,7 @@ export function defaultHostClaudeCredentialsPath (
   env: NodeJS.ProcessEnv = process.env,
   platform: NodeJS.Platform = process.platform
 ): string | undefined {
-  if (platform === 'darwin') return undefined
+  if (platform !== 'linux' && platform !== 'win32') return undefined
 
   const pathJoin = platform === 'win32' ? win32.join : join
 
@@ -137,6 +141,13 @@ export function defaultHostClaudeCredentialsPath (
     : pathJoin(home, '.claude', '.credentials.json')
 }
 
+export function claudeCredentialsSupportFor (
+  platform: NodeJS.Platform = process.platform
+): ClaudeCredentialsSupport {
+  if (platform === 'linux' || platform === 'win32') return 'file'
+  return platform === 'darwin' ? 'macos-keychain' : 'unsupported-platform'
+}
+
 export function defaultHostGitconfigPath (env: NodeJS.ProcessEnv = process.env): string {
   return join(env.HOME ?? homedir(), '.gitconfig')
 }
@@ -146,6 +157,7 @@ export function createWorkspaceContextFromIdentity (
   options: Omit<WorkspaceContextOptions, 'workspace' | 'cwd'> = {}
 ): WorkspaceContext {
   const env = options.env ?? process.env
+  const platform = options.platform ?? process.platform
   const packageRoot = options.packageRoot ?? packageRootFromImportMeta()
   const assetsDevcontainerDir = options.assetsDevcontainerDir ?? env.BOXDOWN_DEVCONTAINER_ASSETS_DIR ?? join(packageRoot, 'assets', 'devcontainer')
   const cacheRoot = defaultCacheRoot(env)
@@ -153,7 +165,7 @@ export function createWorkspaceContextFromIdentity (
   const runtimeRoot = defaultRuntimeRoot(env)
   const hostAgentsDir = defaultHostAgentsDir(env)
   const hostCodexAuthPath = defaultHostCodexAuthPath(env)
-  const hostClaudeCredentialsPath = defaultHostClaudeCredentialsPath(env)
+  const hostClaudeCredentialsPath = defaultHostClaudeCredentialsPath(env, platform)
   const workspaceCacheDir = join(cacheRoot, 'workspaces', identity.workspaceId)
   const workspaceDataDir = join(dataRoot, 'workspaces', identity.workspaceId)
   const workspaceRuntimeDir = join(runtimeRoot, 'workspaces', identity.workspaceId)
@@ -175,6 +187,7 @@ export function createWorkspaceContextFromIdentity (
     generatedConfigPath: join(workspaceCacheDir, 'devcontainer.json'),
     hostAgentsDir,
     hostCodexAuthPath,
+    claudeCredentialsSupport: claudeCredentialsSupportFor(platform),
     hostClaudeCredentialsPath,
     hostGitconfigPath: defaultHostGitconfigPath(env),
     hostGitconfigSnapshotDir,

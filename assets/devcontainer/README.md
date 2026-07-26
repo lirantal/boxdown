@@ -217,7 +217,10 @@ If an older version left a service-account token in `.env.development` or
   set is refreshed.
 - **Claude Code credentials on the host** — On supported platforms, Boxdown
   automatically forwards the documented Claude credential file. Recreate the
-  devcontainer after creating or removing it so the mount set is refreshed.
+  devcontainer after creating or removing it so the mount set is refreshed. On
+  Linux/WSL, the Dev Containers CLI synchronizes the remote UID/GID so an
+  owner-only credential remains writable, which can add a small create-time
+  cost.
 - **Other agent config on the host** — Uncomment the generic `mounts` entries
   in `devcontainer.json` to bind other agent configuration directories such as
   `~/.gemini` into the container.

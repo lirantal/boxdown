@@ -84,11 +84,16 @@ On Linux and WSL, Boxdown forwards the host credential file
 `%CLAUDE_CONFIG_DIR%\.credentials.json` when `CLAUDE_CONFIG_DIR` is set.
 The supported host file is mounted read-write at
 `/home/node/.claude/.credentials.json` so Claude Code can refresh it.
+The Dev Containers CLI synchronizes the remote user's UID/GID on Linux/WSL so
+that an owner-only host credential file remains a writable credential mount.
+This intentionally trades some first-create speed for correct host-file
+permissions.
 
 Boxdown neither copies nor deletes that host credential file. It deliberately
 does not mount `~/.claude` or `~/.claude.json`, so other Claude configuration
 stays on the host. On macOS, Claude Code credentials are stored in the Keychain
-and are not automatically forwarded.
+and are not automatically forwarded. Other host platforms do not have a
+supported file-backed forwarding path.
 
 ## External App Config
 
