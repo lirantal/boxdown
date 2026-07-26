@@ -4745,17 +4745,20 @@ describe('Claude Code host credentials', () => {
     assert.strictEqual(defaultHostClaudeCredentialsPath({ HOME: '/Users/alice' }, 'darwin'), undefined)
   })
 
-  test('mounts a present host Claude credential file read-write', { skip: process.platform === 'darwin' }, () => {
+  test('mounts a present host Claude credential file read-write', () => {
     const home = tempDir('claude-auth-home')
     const credentialsDir = join(home, '.claude')
     const credentialsPath = join(credentialsDir, '.credentials.json')
     mkdirSync(credentialsDir)
     writeFileSync(credentialsPath, '{}\n')
-    const context = createWorkspaceContext({
-      workspace: tempDir('claude-auth-workspace'),
-      env: { HOME: home, BOXDOWN_CACHE_HOME: tempDir('claude-auth-cache'), BOXDOWN_DATA_HOME: tempDir('claude-auth-data') },
-      assetsDevcontainerDir
-    })
+    const context = {
+      ...createWorkspaceContext({
+        workspace: tempDir('claude-auth-workspace'),
+        env: { HOME: home, BOXDOWN_CACHE_HOME: tempDir('claude-auth-cache'), BOXDOWN_DATA_HOME: tempDir('claude-auth-data') },
+        assetsDevcontainerDir
+      }),
+      hostClaudeCredentialsPath: credentialsPath
+    }
 
     const config = buildGeneratedDevcontainerConfig(context)
 
@@ -4768,11 +4771,15 @@ describe('Claude Code host credentials', () => {
 
   test('does not mount an absent host Claude credential file', () => {
     const home = tempDir('claude-auth-absent-home')
-    const context = createWorkspaceContext({
-      workspace: tempDir('claude-auth-absent-workspace'),
-      env: { HOME: home, BOXDOWN_CACHE_HOME: tempDir('claude-auth-absent-cache'), BOXDOWN_DATA_HOME: tempDir('claude-auth-absent-data') },
-      assetsDevcontainerDir
-    })
+    const credentialsPath = join(home, '.claude', '.credentials.json')
+    const context = {
+      ...createWorkspaceContext({
+        workspace: tempDir('claude-auth-absent-workspace'),
+        env: { HOME: home, BOXDOWN_CACHE_HOME: tempDir('claude-auth-absent-cache'), BOXDOWN_DATA_HOME: tempDir('claude-auth-absent-data') },
+        assetsDevcontainerDir
+      }),
+      hostClaudeCredentialsPath: credentialsPath
+    }
 
     const config = buildGeneratedDevcontainerConfig(context)
 
@@ -4792,15 +4799,18 @@ describe('Claude Code host credentials', () => {
     ]) {
       const customAssetsDir = tempDir('claude-auth-duplicate-assets')
       writeFileSync(join(customAssetsDir, 'devcontainer.json'), `${JSON.stringify({ mounts: [existingMount] })}\n`)
-      const context = createWorkspaceContext({
-        workspace,
-        env: {
-          HOME: home,
-          BOXDOWN_CACHE_HOME: tempDir('claude-auth-duplicate-cache'),
-          BOXDOWN_DATA_HOME: tempDir('claude-auth-duplicate-data')
-        },
-        assetsDevcontainerDir: customAssetsDir
-      })
+      const context = {
+        ...createWorkspaceContext({
+          workspace,
+          env: {
+            HOME: home,
+            BOXDOWN_CACHE_HOME: tempDir('claude-auth-duplicate-cache'),
+            BOXDOWN_DATA_HOME: tempDir('claude-auth-duplicate-data')
+          },
+          assetsDevcontainerDir: customAssetsDir
+        }),
+        hostClaudeCredentialsPath: join(credentialsDir, '.credentials.json')
+      }
 
       const config = buildGeneratedDevcontainerConfig(context)
 
