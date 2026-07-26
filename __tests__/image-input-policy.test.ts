@@ -382,6 +382,8 @@ test('validates and attests the immutable digest before moving release tags', ()
   assert.match(buildkitAttestationStep, /index \.SBOM/)
   assert.match(buildkitAttestationStep, /\.SLSA/)
   assert.match(buildkitAttestationStep, /\.SPDX/)
+  assert.match(buildkitAttestationStep, /for attempt in 1 2 3/)
+  assert.match(buildkitAttestationStep, /sleep "\$\(\(attempt \* 2\)\)"/)
 
   const attestStep = workflow.slice(attestDigest, verifyAttestation)
   assert.match(attestStep, /subject-digest: \$\{\{ steps\.image\.outputs\.digest \}\}/)

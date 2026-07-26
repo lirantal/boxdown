@@ -194,19 +194,34 @@ jobs:
           IMAGE_REFERENCE: ghcr.io/lirantal/boxdown@${{ steps.image.outputs.digest }}
         shell: bash
         run: |
+          inspect_attestation() {
+            local format="$1"
+            local output
+
+            for attempt in 1 2 3; do
+              if output="$(
+                docker buildx imagetools inspect \
+                  "${IMAGE_REFERENCE}" \
+                  --format "${format}"
+              )"; then
+                printf '%s\n' "${output}"
+                return 0
+              fi
+
+              if [ "${attempt}" -eq 3 ]; then
+                echo "unable to inspect BuildKit attestation after ${attempt} attempts" >&2
+                return 1
+              fi
+
+              sleep "$((attempt * 2))"
+            done
+          }
+
           for platform in linux/amd64 linux/arm64; do
             provenance_format="{{json (index .Provenance \"${platform}\")}}"
             sbom_format="{{json (index .SBOM \"${platform}\")}}"
-            provenance="$(
-              docker buildx imagetools inspect \
-                "${IMAGE_REFERENCE}" \
-                --format "${provenance_format}"
-            )"
-            sbom="$(
-              docker buildx imagetools inspect \
-                "${IMAGE_REFERENCE}" \
-                --format "${sbom_format}"
-            )"
+            provenance="$(inspect_attestation "${provenance_format}")"
+            sbom="$(inspect_attestation "${sbom_format}")"
             jq -e '.SLSA | type == "object" and length > 0' <<<"${provenance}" >/dev/null
             jq -e '.SPDX | type == "object" and length > 0' <<<"${sbom}" >/dev/null
           done
