@@ -1,5 +1,11 @@
 # boxdown
 
+## 2.1.0
+
+### Minor Changes
+
+- [`bca47aa`](https://github.com/lirantal/boxdown/commit/bca47aac4fcb963e4af55c3b89029c43fbb48a93) Thanks [@lirantal](https://github.com/lirantal)! - feat: fixes across UX, Claude directory, WSL and Purge updates
+
 ## 2.0.0
 
 ### Major Changes
