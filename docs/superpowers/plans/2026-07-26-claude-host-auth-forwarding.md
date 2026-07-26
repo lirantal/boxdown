@@ -26,12 +26,14 @@
 ### Task 1: Resolve and Mount Supported Host Claude Credentials
 
 **Files:**
+
 - Modify: `src/constants.ts`
 - Modify: `src/paths.ts`
 - Modify: `src/config.ts`
 - Modify: `__tests__/app.test.ts`
 
 **Interfaces:**
+
 - Produces `BOXDOWN_CONTAINER_CLAUDE_DIR = '/home/node/.claude'` and `BOXDOWN_CONTAINER_CLAUDE_CREDENTIALS_PATH = '/home/node/.claude/.credentials.json'` from `src/constants.ts`.
 - Produces `defaultHostClaudeCredentialsPath(env?: NodeJS.ProcessEnv, platform?: NodeJS.Platform): string | undefined` from `src/paths.ts`.
 - Adds `hostClaudeCredentialsPath?: string` to `WorkspaceContext`; it is `undefined` on macOS and a candidate path on Linux/WSL or Windows.
@@ -165,10 +167,12 @@
 ### Task 2: Prepare the Published Image for the Single-File Mount
 
 **Files:**
+
 - Modify: `assets/image/Dockerfile`
 - Modify: `__tests__/image-input-policy.test.ts`
 
 **Interfaces:**
+
 - Consumes `BOXDOWN_CONTAINER_CLAUDE_CREDENTIALS_PATH` only as the target contract established in Task 1.
 - Produces a `node`-owned `/home/node/.claude` directory in every newly built Boxdown image.
 
@@ -227,10 +231,12 @@
 ### Task 3: Surface Claude Authentication State in Status
 
 **Files:**
+
 - Modify: `src/status.ts`
 - Modify: `__tests__/app.test.ts`
 
 **Interfaces:**
+
 - Consumes `WorkspaceContext.hostClaudeCredentialsPath` from Task 1, the existing injectable `exists(path)` callback, and a new injectable `isFile(path)` callback.
 - Produces `ClaudeCredentialsState = 'available' | 'missing' | 'unsupported'` and `StatusInfo.claude.credentials` for both text and JSON status output.
 - Does not change `statusIsHealthy()`; host Claude auth is optional and must not make a healthy devcontainer unhealthy.
@@ -352,6 +358,7 @@
 ### Task 4: Document the Credential Boundary and Recreation Behavior
 
 **Files:**
+
 - Modify: `README.md`
 - Modify: `docs/features/generated-config-and-state.md`
 - Modify: `docs/features/start-and-shell.md`
@@ -360,6 +367,7 @@
 - Modify: `assets/devcontainer/devcontainer.json`
 
 **Interfaces:**
+
 - Consumes the mount contract from Task 1 and the status/recreation behavior from Task 3.
 - Produces user-facing documentation that distinguishes host-owned Claude credentials from non-mounted Claude configuration and from Codex's read-only auth file.
 
@@ -422,9 +430,11 @@
 ### Task 5: Run the Full Verification Suite
 
 **Files:**
+
 - Verify only; no new production files.
 
 **Interfaces:**
+
 - Verifies all public behavior produced by Tasks 1 through 4.
 
 - [ ] **Step 1: Run the complete test suite**

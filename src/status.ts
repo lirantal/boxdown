@@ -136,9 +136,15 @@ function inspectClaudeCredentialsStatus (
     return { state: 'unsupported', reason: context.claudeCredentialsSupport }
   }
 
+  const path = context.hostClaudeCredentialsPath
+
+  if (path === undefined) {
+    return { state: 'missing' }
+  }
+
   return {
-    state: isFile(context.hostClaudeCredentialsPath) ? 'available' : 'missing',
-    path: context.hostClaudeCredentialsPath
+    state: isFile(path) ? 'available' : 'missing',
+    path
   }
 }
 
