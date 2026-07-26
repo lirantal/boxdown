@@ -43,8 +43,8 @@ test('uses the release-matched Boxdown image without Dev Container Features', ()
   assert.equal(devcontainer.overrideFeatureInstallOrder, undefined)
   assert.equal(
     devcontainer.updateRemoteUserUID,
-    false,
-    'published images must not be replaced by a locally built UID-mutated derivative'
+    true,
+    'Linux credential bind mounts must be readable and writable by the container user'
   )
 })
 

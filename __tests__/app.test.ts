@@ -14,7 +14,7 @@ import { canonicalCodexRemotePathForWorkspace, codexDiscoveredRemoteHostId, code
 import { codingAgentBinary, codingAgentFromCommand } from '../src/coding-agents.ts'
 import { color, formatPromptEnd, formatPromptTitle, promptRail, selectedMark } from '../src/cli-style.ts'
 import { buildGeneratedDevcontainerConfig, publishContainerPortFromConfig } from '../src/config.ts'
-import { BOXDOWN_CONTAINER_AGENTS_DIR, BOXDOWN_CONTAINER_CODEX_AUTH_PATH, BOXDOWN_CONTAINER_CODEX_DIR, BOXDOWN_CONTAINER_GITCONFIG_PATH, BOXDOWN_CONTAINER_HOST_GITCONFIG_DIR, BOXDOWN_CONTAINER_SECRET_ENV_BOOTSTRAP, BOXDOWN_CONTAINER_SECRET_ENV_DIR, DEVCONTAINER_CLI_VERSION } from '../src/constants.ts'
+import { BOXDOWN_CONTAINER_AGENTS_DIR, BOXDOWN_CONTAINER_CLAUDE_CREDENTIALS_PATH, BOXDOWN_CONTAINER_CLAUDE_DIR, BOXDOWN_CONTAINER_CODEX_AUTH_PATH, BOXDOWN_CONTAINER_CODEX_DIR, BOXDOWN_CONTAINER_GITCONFIG_PATH, BOXDOWN_CONTAINER_HOST_GITCONFIG_DIR, BOXDOWN_CONTAINER_SECRET_ENV_BOOTSTRAP, BOXDOWN_CONTAINER_SECRET_ENV_DIR, DEVCONTAINER_CLI_VERSION } from '../src/constants.ts'
 import { codingAgentDevcontainerExecArgs, isPublishedBoxdownImage, parseDockerInspectImage, sshdProxyDockerArgs, sshTunnelArgs, startDevcontainer } from '../src/devcontainer.ts'
 import { resolveDevcontainerCli } from '../src/devcontainer-cli.ts'
 import { doctorHasFailures, formatDoctorText, runDoctorChecks } from '../src/doctor.ts'
@@ -26,7 +26,7 @@ import { createWorkspaceCommandLogger, redactKnownSecretEnvironmentAssignments, 
 import { commandRequiresContainerRuntime, commandWritesWorkspaceMetadata, parseCliArgs, parseTunnelPort, parseTunnelPortList, prepareContainerLifecycle, runCli, runContainerRuntimePreflight, setupWorkspace, USAGE, type BoxdownCommand } from '../src/main.ts'
 import { listWorkspaceMetadata, readWorkspaceMetadata, recordLegacyImageMigrationNotice, recordWorkspaceDockerImage, workspaceMetadataPath, writeWorkspaceMetadata } from '../src/metadata.ts'
 import { readPackageVersion } from '../src/package-info.ts'
-import { createWorkspaceContext } from '../src/paths.ts'
+import { createWorkspaceContext, defaultHostClaudeCredentialsPath } from '../src/paths.ts'
 import { createPurgePlan, formatPurgePlanText } from '../src/purge.ts'
 import { promptConfirm, promptMultiSelect, promptText, type PromptInput, type PromptOutput } from '../src/interactive-prompts.ts'
 import { buildHostToolPath, runBuffered, runInteractive } from '../src/process.ts'
@@ -797,6 +797,21 @@ describe('CLI parsing', () => {
     assert.strictEqual(setupLine.indexOf('Prepare'), descriptionColumn)
     assert.strictEqual(setupContinuationLine.indexOf('integration'), descriptionColumn)
   })
+})
+
+test('documents narrow host Claude credential forwarding', () => {
+  const readme = readFileSync(join(process.cwd(), 'README.md'), 'utf8')
+  const stateDocs = readFileSync(join(process.cwd(), 'docs/features/generated-config-and-state.md'), 'utf8')
+  const startDocs = readFileSync(join(process.cwd(), 'docs/features/start-and-shell.md'), 'utf8')
+  const lifecycleDocs = readFileSync(join(process.cwd(), 'docs/features/lifecycle.md'), 'utf8')
+
+  assert.match(readme, /Run Claude Code and complete `\/login`\s+on the host, then run `boxdown start --recreate`/)
+  assert.match(stateDocs, /\.claude\/\.credentials\.json/)
+  assert.match(stateDocs, /does not mount.*~\/\.claude.*~\/\.claude\.json/is)
+  assert.match(stateDocs, /macOS.*Keychain/is)
+  assert.match(stateDocs, /UID\/GID.*Linux\/WSL.*writable credential mount/is)
+  assert.match(startDocs, /Run Claude Code and complete `\/login` on the host, then run `boxdown start\s+--recreate`/)
+  assert.match(lifecycleDocs, /does not remove host Claude credentials/is)
 })
 
 describe('interactive install target prompt', () => {
@@ -3713,7 +3728,7 @@ describe('status output', () => {
 
   test('formats status for running and absent containers', () => {
     const workspace = tempDir('status-workspace')
-    const context = createWorkspaceContext({
+    const baseContext = createWorkspaceContext({
       workspace,
       env: {
         BOXDOWN_CACHE_HOME: tempDir('status-cache'),
@@ -3721,6 +3736,11 @@ describe('status output', () => {
       },
       assetsDevcontainerDir
     })
+    const context = {
+      ...baseContext,
+      claudeCredentialsSupport: 'file' as const,
+      hostClaudeCredentialsPath: '/home/demo/.claude/.credentials.json'
+    }
     const sshConfigPath = join(tempDir('status-config'), 'config')
     writeFileSync(sshConfigPath, buildSshConfigBlock(context, 'demo-devcontainer'))
     const exists = (path: string): boolean => [
@@ -3737,7 +3757,11 @@ describe('status output', () => {
       name: 'demo',
       state: 'running',
       status: 'Up 2 minutes'
-    }, exists, { aliasSource: 'default', sshConfigPath })
+    }, exists, {
+      aliasSource: 'default',
+      sshConfigPath,
+      isFile: (path) => path === context.hostClaudeCredentialsPath
+    })
     const stopped = createStatusInfo(context, 'demo-devcontainer', {
       id: 'def456',
       name: 'demo',
@@ -3759,6 +3783,10 @@ describe('status output', () => {
     assert.strictEqual(running.ssh.managedBlockState, 'installed')
     assert.strictEqual(running.paths.logPath, context.workspaceLogPath)
     assert.strictEqual(running.paths.logExists, true)
+    assert.deepStrictEqual(running.claude.credentials, {
+      state: 'available',
+      path: context.hostClaudeCredentialsPath
+    })
     assert.strictEqual(absent.ssh.managedBlockState, 'missing')
     assert.strictEqual(absent.paths.logExists, false)
     assert.match(formatStatusText(running), /SSH alias: demo-devcontainer \(computed default; installed\)/)
@@ -3767,6 +3795,8 @@ describe('status output', () => {
     assert.match(formatStatusText(stopped), /State: exited/)
     assert.match(formatStatusText(running), /Generated config: .* \(exists\)/)
     assert.match(formatStatusText(running), /Command log: .*boxdown\.log \(exists\)/)
+    assert.match(formatStatusText(running), /Claude credentials: .* \(available on host; host-owned\)/)
+    assert.match(formatStatusText(running), /Run `boxdown start --recreate` to apply the current credential mount configuration\./)
     assert.match(formatStatusText(absent), /Generated config: .* \(missing\)/)
     assert.match(formatStatusText(absent), /Command log: .*boxdown\.log \(missing\)/)
     assert.match(formatStatusText(running), /SSH config: .* \(exists\)/)
@@ -3776,6 +3806,80 @@ describe('status output', () => {
     assert.match(formatStatusText(running, { color: true }), /\u001B\[32mexists\u001B\[0m/)
     assert.match(formatStatusText(running, { color: true }), /\u001B\[32minstalled\u001B\[0m/)
     assert.match(formatStatusText(running, { color: true }), /\u001B\[32myes\u001B\[0m/)
+  })
+
+  test('reports missing Claude credential status', () => {
+    const workspace = tempDir('status-claude-missing-workspace')
+    const baseContext = createWorkspaceContext({
+      workspace,
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('status-claude-missing-cache'),
+        BOXDOWN_DATA_HOME: tempDir('status-claude-missing-data')
+      },
+      assetsDevcontainerDir
+    })
+    const context = {
+      ...baseContext,
+      claudeCredentialsSupport: 'file' as const,
+      hostClaudeCredentialsPath: '/home/demo/.claude/.credentials.json'
+    }
+    const sshConfigPath = join(tempDir('status-claude-missing-config'), 'config')
+    const status = createStatusInfo(context, 'demo-devcontainer', undefined,
+      () => false, { sshConfigPath, isFile: () => false })
+
+    assert.deepStrictEqual(status.claude.credentials, {
+      state: 'missing',
+      path: context.hostClaudeCredentialsPath
+    })
+    assert.match(formatStatusText(status), /Run Claude Code and \/login on the host, then recreate the devcontainer\./)
+  })
+
+  test('reports unsupported Claude credential status', () => {
+    const workspace = tempDir('status-claude-unsupported-workspace')
+    const baseContext = createWorkspaceContext({
+      workspace,
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('status-claude-unsupported-cache'),
+        BOXDOWN_DATA_HOME: tempDir('status-claude-unsupported-data')
+      },
+      assetsDevcontainerDir
+    })
+    const macContext = {
+      ...baseContext,
+      claudeCredentialsSupport: 'macos-keychain' as const,
+      hostClaudeCredentialsPath: undefined
+    }
+    const sshConfigPath = join(tempDir('status-claude-unsupported-config'), 'config')
+    const unsupported = createStatusInfo(macContext, 'demo-devcontainer', undefined, () => false, { sshConfigPath })
+
+    assert.deepStrictEqual(unsupported.claude.credentials, { state: 'unsupported', reason: 'macos-keychain' })
+    assert.match(formatStatusText(unsupported), /macOS Keychain credentials are not automatically forwarded/)
+  })
+
+  test('reports a platform-specific unsupported Claude credential status', () => {
+    const workspace = tempDir('status-claude-platform-unsupported-workspace')
+    const baseContext = createWorkspaceContext({
+      workspace,
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('status-claude-platform-unsupported-cache'),
+        BOXDOWN_DATA_HOME: tempDir('status-claude-platform-unsupported-data')
+      },
+      assetsDevcontainerDir
+    })
+    const context = {
+      ...baseContext,
+      claudeCredentialsSupport: 'unsupported-platform' as const,
+      hostClaudeCredentialsPath: undefined
+    }
+    const status = createStatusInfo(context, 'demo-devcontainer', undefined, () => false, {
+      sshConfigPath: join(tempDir('status-claude-platform-unsupported-config'), 'config')
+    })
+
+    assert.deepStrictEqual(status.claude.credentials, {
+      state: 'unsupported',
+      reason: 'unsupported-platform'
+    })
+    assert.match(formatStatusText(status), /This host platform does not have a supported file-backed Claude credential forwarding path\./)
   })
 })
 
@@ -5197,6 +5301,134 @@ describe('progress output', () => {
         return true
       }
     )
+  })
+})
+
+describe('Claude Code host credentials', () => {
+  test('resolves documented Claude credential paths by platform', () => {
+    assert.strictEqual(
+      defaultHostClaudeCredentialsPath({ HOME: '/home/alice' }, 'linux'),
+      '/home/alice/.claude/.credentials.json'
+    )
+    assert.strictEqual(
+      defaultHostClaudeCredentialsPath({ USERPROFILE: 'C:\\Users\\Alice' }, 'win32'),
+      'C:\\Users\\Alice\\.claude.credentials.json'
+    )
+    assert.strictEqual(
+      defaultHostClaudeCredentialsPath({ CLAUDE_CONFIG_DIR: '/secure/claude' }, 'linux'),
+      '/secure/claude/.credentials.json'
+    )
+    assert.strictEqual(defaultHostClaudeCredentialsPath({ HOME: '/Users/alice' }, 'darwin'), undefined)
+    assert.strictEqual(defaultHostClaudeCredentialsPath({ HOME: '/home/alice' }, 'freebsd'), undefined)
+  })
+
+  test('mounts a present host Claude credential file read-write', () => {
+    const home = tempDir('claude-auth-home')
+    const credentialsDir = join(home, '.claude')
+    const credentialsPath = join(credentialsDir, '.credentials.json')
+    mkdirSync(credentialsDir)
+    writeFileSync(credentialsPath, '{}\n')
+    const context = {
+      ...createWorkspaceContext({
+        workspace: tempDir('claude-auth-workspace'),
+        env: { HOME: home, BOXDOWN_CACHE_HOME: tempDir('claude-auth-cache'), BOXDOWN_DATA_HOME: tempDir('claude-auth-data') },
+        assetsDevcontainerDir
+      }),
+      hostClaudeCredentialsPath: credentialsPath
+    }
+
+    const config = buildGeneratedDevcontainerConfig(context)
+
+    assert.strictEqual(context.hostClaudeCredentialsPath, credentialsPath)
+    assert.ok(config.mounts?.includes(
+      `type=bind,source=${credentialsPath},target=${BOXDOWN_CONTAINER_CLAUDE_CREDENTIALS_PATH}`
+    ))
+    assert.ok(!config.mounts?.some((mount) => mount.includes(`target=${BOXDOWN_CONTAINER_CLAUDE_CREDENTIALS_PATH},readonly`)))
+  })
+
+  test('does not mount an absent host Claude credential file', () => {
+    const home = tempDir('claude-auth-absent-home')
+    const credentialsPath = join(home, '.claude', '.credentials.json')
+    const context = {
+      ...createWorkspaceContext({
+        workspace: tempDir('claude-auth-absent-workspace'),
+        env: { HOME: home, BOXDOWN_CACHE_HOME: tempDir('claude-auth-absent-cache'), BOXDOWN_DATA_HOME: tempDir('claude-auth-absent-data') },
+        assetsDevcontainerDir
+      }),
+      hostClaudeCredentialsPath: credentialsPath
+    }
+
+    const config = buildGeneratedDevcontainerConfig(context)
+
+    assert.ok(!config.mounts?.some((mount) => mount.includes(`target=${BOXDOWN_CONTAINER_CLAUDE_CREDENTIALS_PATH}`)))
+  })
+
+  test('does not mount a directory at the Claude credential source path', () => {
+    const home = tempDir('claude-auth-non-regular-home')
+    const credentialsPath = join(home, '.claude', '.credentials.json')
+    mkdirSync(join(home, '.claude'))
+    mkdirSync(credentialsPath)
+    const directoryContext = {
+      ...createWorkspaceContext({
+        workspace: tempDir('claude-auth-directory-workspace'),
+        env: { HOME: home, BOXDOWN_CACHE_HOME: tempDir('claude-auth-directory-cache'), BOXDOWN_DATA_HOME: tempDir('claude-auth-directory-data') },
+        assetsDevcontainerDir
+      }),
+      hostClaudeCredentialsPath: credentialsPath
+    }
+
+    assert.ok(!buildGeneratedDevcontainerConfig(directoryContext).mounts?.some((mount) => mount.includes(`target=${BOXDOWN_CONTAINER_CLAUDE_CREDENTIALS_PATH}`)))
+
+  })
+
+  test('does not mount a FIFO at the Claude credential source path', { skip: process.platform === 'win32' }, () => {
+    const home = tempDir('claude-auth-fifo-home')
+    const credentialsPath = join(home, '.claude', '.credentials.json')
+    mkdirSync(join(home, '.claude'))
+    execFileSync('mkfifo', [credentialsPath])
+    const context = {
+      ...createWorkspaceContext({
+        workspace: tempDir('claude-auth-fifo-workspace'),
+        env: { HOME: home, BOXDOWN_CACHE_HOME: tempDir('claude-auth-fifo-cache'), BOXDOWN_DATA_HOME: tempDir('claude-auth-fifo-data') },
+        assetsDevcontainerDir
+      }),
+      hostClaudeCredentialsPath: credentialsPath
+    }
+
+    assert.ok(!buildGeneratedDevcontainerConfig(context).mounts?.some((mount) => mount.includes(`target=${BOXDOWN_CONTAINER_CLAUDE_CREDENTIALS_PATH}`)))
+  })
+
+  test('preserves existing Claude config mounts without adding credentials', () => {
+    const workspace = tempDir('claude-auth-duplicate-workspace')
+    const home = tempDir('claude-auth-duplicate-home')
+    const credentialsDir = join(home, '.claude')
+    mkdirSync(credentialsDir)
+    writeFileSync(join(credentialsDir, '.credentials.json'), '{}\n')
+
+    for (const existingMount of [
+      `type=bind,source=/tmp/claude,target=${BOXDOWN_CONTAINER_CLAUDE_DIR},readonly`,
+      `type=bind,source=/tmp/credentials.json,target=${BOXDOWN_CONTAINER_CLAUDE_CREDENTIALS_PATH},readonly`
+    ]) {
+      const customAssetsDir = tempDir('claude-auth-duplicate-assets')
+      writeFileSync(join(customAssetsDir, 'devcontainer.json'), `${JSON.stringify({ mounts: [existingMount] })}\n`)
+      const context = {
+        ...createWorkspaceContext({
+          workspace,
+          env: {
+            HOME: home,
+            BOXDOWN_CACHE_HOME: tempDir('claude-auth-duplicate-cache'),
+            BOXDOWN_DATA_HOME: tempDir('claude-auth-duplicate-data')
+          },
+          assetsDevcontainerDir: customAssetsDir
+        }),
+        hostClaudeCredentialsPath: join(credentialsDir, '.credentials.json')
+      }
+
+      const config = buildGeneratedDevcontainerConfig(context)
+
+      assert.ok(config.mounts?.includes(existingMount))
+      assert.ok(!config.mounts?.includes(`type=bind,source=${context.hostClaudeCredentialsPath},target=${BOXDOWN_CONTAINER_CLAUDE_CREDENTIALS_PATH}`))
+    }
   })
 })
 

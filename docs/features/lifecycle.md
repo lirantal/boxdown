@@ -98,6 +98,8 @@ changes after the confirmation is handled by the normal purge flow. A canceled
 interactive purge can therefore perform Docker discovery, but does not remove
 resources or create a workspace command log.
 
+It does not remove host Claude credentials.
+
 `purge --workspace <value>` first treats `<value>` as a filesystem path. If that
 path does not exist, it looks for an exact `PATH`, then `SSH ALIAS`, then `REPO`
 match in Boxdown metadata. `PATH` and `REPO` are shown by `boxdown list`; use

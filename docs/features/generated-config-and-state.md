@@ -75,6 +75,26 @@ host values and failed 1Password lookup are non-blocking. `boxdown down` and
 `boxdown purge` remove the workspace runtime directory after container removal.
 Boxdown does not use or modify project `.env.development` files.
 
+## Claude Code credentials
+
+On Linux and WSL, Boxdown forwards the host credential file
+`~/.claude/.credentials.json`, or `$CLAUDE_CONFIG_DIR/.credentials.json` when
+`CLAUDE_CONFIG_DIR` is set. On Windows, it forwards
+`%USERPROFILE%\.claude.credentials.json`, or
+`%CLAUDE_CONFIG_DIR%\.credentials.json` when `CLAUDE_CONFIG_DIR` is set.
+The supported host file is mounted read-write at
+`/home/node/.claude/.credentials.json` so Claude Code can refresh it.
+The Dev Containers CLI synchronizes the remote user's UID/GID on Linux/WSL so
+that an owner-only host credential file remains a writable credential mount.
+This intentionally trades some first-create speed for correct host-file
+permissions.
+
+Boxdown neither copies nor deletes that host credential file. It deliberately
+does not mount `~/.claude` or `~/.claude.json`, so other Claude configuration
+stays on the host. On macOS, Claude Code credentials are stored in the Keychain
+and are not automatically forwarded. Other host platforms do not have a
+supported file-backed forwarding path.
+
 ## External App Config
 
 External app integration config is not Boxdown workspace state. Boxdown writes
@@ -118,8 +138,9 @@ Boxdown starts from `assets/devcontainer/devcontainer.json` and rewrites:
 - `postStartCommand`, to call mounted container assets.
 - `mounts`, to add the read-only asset mount, public-key mount, host Git config
   snapshot mount, runtime secret mount, host `~/.agents` mount when that
-  directory exists, and host `~/.codex/auth.json` read-only mount when that
-  file exists.
+  directory exists, host `~/.codex/auth.json` read-only mount when that file
+  exists, and the optional supported Claude credential file as a writable
+  single-file mount.
 - `containerEnv`, to point SSH bootstrap at the mounted public key and actual
   container workspace.
 
@@ -128,5 +149,5 @@ The target repository is still the Dev Container workspace via
 
 Mounts are create-time container settings. Existing containers created before
 runtime-mounted secrets require `boxdown start --recreate`. The same applies
-after creating or removing host `~/.agents` or `~/.codex/auth.json` so Docker
-receives the updated mount set.
+after creating or removing host `~/.agents`, `~/.codex/auth.json`, or the
+supported host Claude credential file so Docker receives the updated mount set.

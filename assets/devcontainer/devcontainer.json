@@ -41,8 +41,7 @@
 
     "mounts": [
         // mount host user home directories for agents:
-        // "source=${localEnv:HOME}/.claude,target=/home/node/.claude,type=bind,consistency=cached",
-        // "source=${localEnv:HOME}/.gemini,target=/home/node/.claude,type=bind,consistency=cached"
+        // "source=${localEnv:HOME}/.gemini,target=/home/node/.gemini,type=bind,consistency=cached"
         // Codex auth.json is mounted automatically by Boxdown's generated config when present.
     ],
 
@@ -59,8 +58,8 @@
     "postCreateCommand": "bash .devcontainer/hooks/post-create.sh",
     "postStartCommand": "bash .devcontainer/hooks/post-start.sh",
     "remoteUser": "node",
-    // Keep the immutable published image instead of building a host-UID derivative.
-    "updateRemoteUserUID": false,
+    // Keep the Linux container user aligned with host-owned writable credential mounts.
+    "updateRemoteUserUID": true,
     "workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
     "containerEnv": {
         "NODE_ENV": "development"
