@@ -74,12 +74,26 @@ workspace data directory. `--verbose` only controls terminal streaming; it does
 not disable or enable log persistence. Foreground interactive shell, agent, and
 tunnel session bytes are not tee'd into the log.
 
-`purge` removes the workspace devcontainer with Docker, force-removes the exact
-Docker image ID Boxdown can inspect or has recorded for the workspace, removes
-Boxdown-managed SSH/Codex/Claude entries for the computed, recorded, and
-provided aliases, and deletes the workspace's Boxdown cache/data directories,
-including the per-workspace command log. It does not delete the target
-repository directory or files inside it.
+`purge` removes the workspace Docker container and its attached anonymous
+volumes, force-removes the exact Docker image ID Boxdown can inspect or has
+recorded for the workspace, removes Boxdown-managed SSH/Codex/Claude entries
+for the computed, recorded, and provided aliases, and deletes the workspace's
+Boxdown cache/data directories, including the per-workspace command log. It
+does not delete the target repository directory or files inside it.
+
+Before an interactive confirmation, Boxdown shows a resource-level removal
+plan. It names the Docker container and image when available, the managed SSH
+and app connections, and the exact generated-configuration, workspace-data,
+and temporary-runtime paths. The plan also states what remains untouched: the
+repository, Git history and original host Git configuration, other Docker
+resources, and other Boxdown workspaces. It never prints secret, private-key,
+or log contents.
+
+The plan is a read-only snapshot collected immediately before confirmation.
+Boxdown checks Docker resources again when deletion starts, so a resource that
+changes after the confirmation is handled by the normal purge flow. A canceled
+interactive purge can therefore perform Docker discovery, but does not remove
+resources or create a workspace command log.
 
 `purge --workspace <value>` first treats `<value>` as a filesystem path. If that
 path does not exist, it looks for an exact `PATH`, then `SSH ALIAS`, then `REPO`
@@ -123,9 +137,10 @@ token: `running` is green, `exited` is yellow, and `absent`, `missing`, or
 `unknown` are red. These colors are terminal UI affordances only; scripts should
 rely on text or JSON state values.
 
-Interactive `purge` runs ask for confirmation before removing devcontainer,
-image, SSH/Codex integration, cache, and data state. Non-interactive purge runs
-do not prompt so existing targeted scripts keep working. Non-interactive
+Interactive `purge` runs show the removal plan and ask for confirmation before
+removing resources. Explicitly targeted non-interactive and CI purges print the
+same plan as plain text before deletion and do not prompt, so scripts remain
+non-blocking while their logs explain the affected resources. Non-interactive
 `purge` from an untracked directory fails safely instead of treating the current
 directory as a workspace.
 
