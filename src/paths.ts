@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { existsSync, realpathSync, statSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
-import { basename, dirname, join, resolve } from 'node:path'
+import { basename, dirname, join, resolve, win32 } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import { PACKAGE_NAME } from './constants.ts'
@@ -30,6 +30,7 @@ export interface WorkspaceContext {
   generatedConfigPath: string
   hostAgentsDir: string
   hostCodexAuthPath: string
+  hostClaudeCredentialsPath?: string
   hostGitconfigPath: string
   hostGitconfigSnapshotDir: string
   hostGitconfigSnapshotPath: string
@@ -115,6 +116,27 @@ export function defaultHostCodexAuthPath (env: NodeJS.ProcessEnv = process.env):
   return join(env.HOME ?? homedir(), '.codex', 'auth.json')
 }
 
+export function defaultHostClaudeCredentialsPath (
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform
+): string | undefined {
+  if (platform === 'darwin') return undefined
+
+  const pathJoin = platform === 'win32' ? win32.join : join
+
+  if (env.CLAUDE_CONFIG_DIR) {
+    return pathJoin(env.CLAUDE_CONFIG_DIR, '.credentials.json')
+  }
+
+  const home = platform === 'win32'
+    ? env.USERPROFILE ?? env.HOME ?? homedir()
+    : env.HOME ?? homedir()
+
+  return platform === 'win32'
+    ? pathJoin(home, '.claude.credentials.json')
+    : pathJoin(home, '.claude', '.credentials.json')
+}
+
 export function defaultHostGitconfigPath (env: NodeJS.ProcessEnv = process.env): string {
   return join(env.HOME ?? homedir(), '.gitconfig')
 }
@@ -131,6 +153,7 @@ export function createWorkspaceContextFromIdentity (
   const runtimeRoot = defaultRuntimeRoot(env)
   const hostAgentsDir = defaultHostAgentsDir(env)
   const hostCodexAuthPath = defaultHostCodexAuthPath(env)
+  const hostClaudeCredentialsPath = defaultHostClaudeCredentialsPath(env)
   const workspaceCacheDir = join(cacheRoot, 'workspaces', identity.workspaceId)
   const workspaceDataDir = join(dataRoot, 'workspaces', identity.workspaceId)
   const workspaceRuntimeDir = join(runtimeRoot, 'workspaces', identity.workspaceId)
@@ -152,6 +175,7 @@ export function createWorkspaceContextFromIdentity (
     generatedConfigPath: join(workspaceCacheDir, 'devcontainer.json'),
     hostAgentsDir,
     hostCodexAuthPath,
+    hostClaudeCredentialsPath,
     hostGitconfigPath: defaultHostGitconfigPath(env),
     hostGitconfigSnapshotDir,
     hostGitconfigSnapshotPath: join(hostGitconfigSnapshotDir, '.gitconfig'),

@@ -3,6 +3,8 @@ import { join } from 'node:path'
 
 import {
   BOXDOWN_CONTAINER_AGENTS_DIR,
+  BOXDOWN_CONTAINER_CLAUDE_CREDENTIALS_PATH,
+  BOXDOWN_CONTAINER_CLAUDE_DIR,
   BOXDOWN_CONTAINER_CODEX_AUTH_PATH,
   BOXDOWN_CONTAINER_CODEX_DIR,
   BOXDOWN_CONTAINER_DEVCONTAINER_DIR,
@@ -91,6 +93,17 @@ export function buildGeneratedDevcontainerConfig (context: WorkspaceContext, sig
     !hasMountTarget(mounts, BOXDOWN_CONTAINER_CODEX_AUTH_PATH)
   ) {
     boxdownMounts.push(`type=bind,source=${context.hostCodexAuthPath},target=${BOXDOWN_CONTAINER_CODEX_AUTH_PATH},readonly`)
+  }
+
+  if (
+    context.hostClaudeCredentialsPath !== undefined &&
+    fileExists(context.hostClaudeCredentialsPath) &&
+    !hasMountTarget(mounts, BOXDOWN_CONTAINER_CLAUDE_DIR) &&
+    !hasMountTarget(mounts, BOXDOWN_CONTAINER_CLAUDE_CREDENTIALS_PATH)
+  ) {
+    boxdownMounts.push(
+      `type=bind,source=${context.hostClaudeCredentialsPath},target=${BOXDOWN_CONTAINER_CLAUDE_CREDENTIALS_PATH}`
+    )
   }
 
   return {
