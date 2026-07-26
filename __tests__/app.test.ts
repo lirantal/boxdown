@@ -6223,7 +6223,7 @@ describe('devcontainer git config hooks', () => {
     assert.strictEqual(readGitConfig(targetPath, 'url.ssh://git@github.com/.insteadOf'), undefined)
     assert.deepStrictEqual(readGitConfigAll(targetPath, 'credential.helper'), ['cache'])
     assert.deepStrictEqual(readGitConfigAll(targetPath, 'credential.https://github.com.helper'), ['', '!gh auth git-credential'])
-    assert.strictEqual(readGitConfig(targetPath, 'commit.gpgsign'), 'yes')
+    assert.strictEqual(readGitConfig(targetPath, 'commit.gpgsign'), 'true')
     assert.strictEqual(readGitConfig(targetPath, 'tag.gpgsign'), 'true')
   })
 
