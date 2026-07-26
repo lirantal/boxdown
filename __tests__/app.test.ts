@@ -682,7 +682,9 @@ describe('CLI parsing', () => {
     const usageLines = USAGE.split(/\r?\n/)
 
     assert.match(USAGE, /Commands:/)
-    assert.match(USAGE, /boxdown setup \[--workspace <path>\] \[--alias <name>\] \[--recreate\] \[--target <name>\]\.\.\./)
+    assert.match(USAGE, /boxdown setup \[--workspace <path>\] \[--alias <name>\] \[--recreate\] \[--target <name>\]\.\.\. \[--verbose\]/)
+    assert.match(USAGE, /boxdown start \[--workspace <path>\] \[--recreate\] \[--verbose\]/)
+    assert.match(USAGE, /boxdown tunnel \[--port <port>\] \[--port <local:remote>\] \[--workspace <path>\] \[--alias <name>\] \[--verbose\]/)
     assert.match(USAGE, /boxdown ssh uninstall \[--workspace <path>\] \[--alias <name>\] \[--target <name>\]\.\.\./)
     assert.match(USAGE, /boxdown list \[--details\] \[--json\|--format json\]/)
     assert.match(USAGE, /boxdown status \[--workspace <path>\] \[--alias <name>\] \[--json\|--format json\]/)
@@ -705,7 +707,7 @@ describe('CLI parsing', () => {
     assert.match(USAGE, /--json\s+Print JSON output\. Supported by status and list\./)
     assert.match(USAGE, /--format json\s+Print JSON output\. Equivalent to --json\./)
     assert.match(USAGE, /--details\s+Print detailed human list output\. Supported by list\./)
-    assert.match(USAGE, /--verbose\s+Stream raw Docker, devcontainer, and hook command output\.[\s\S]*per-workspace command log either way\./)
+    assert.match(USAGE, /--verbose\s+Show a detailed lifecycle trace in an interactive terminal\.[\s\S]*Streams raw Docker, devcontainer, and hook output in CI or non-interactive output\./)
     assert.match(USAGE, /--version, -v\s+Show version\./)
     assert.match(USAGE, /doctor\s+Check required host tools/)
     assert.doesNotMatch(USAGE, /Alias:/)
@@ -1095,6 +1097,46 @@ describe('interactive install target prompt', () => {
 })
 
 describe('CLI execution', () => {
+  test('setup interactive output explains generated state outside this repository', async () => {
+    const workspace = tempDir('setup-ownership-workspace')
+    const dataHome = tempDir('setup-ownership-data')
+    const cacheHome = tempDir('setup-ownership-cache')
+    const stdout: string[] = []
+    const originalWrite = process.stdout.write
+    const originalIsTTY = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY')
+
+    process.stdout.write = ((chunk: string | Uint8Array) => {
+      stdout.push(Buffer.isBuffer(chunk) ? chunk.toString('utf8') : chunk)
+      return true
+    }) as typeof process.stdout.write
+    Object.defineProperty(process.stdout, 'isTTY', { configurable: true, value: true })
+
+    try {
+      const code = await withProcessEnv({
+        BOXDOWN_DATA_HOME: dataHome,
+        BOXDOWN_CACHE_HOME: cacheHome,
+        CI: 'false'
+      }, async () => await withCwd(workspace, async () => runCli(['setup'], {
+          env: { CI: 'false', BOXDOWN_DATA_HOME: dataHome, BOXDOWN_CACHE_HOME: cacheHome },
+          waitForContainerRuntime: async () => ({ state: 'ready', mode: 'buildx', warnings: [] }),
+          runDoctorChecks: async () => [],
+          setupWorkspace: async () => {}
+        })))
+
+      assert.strictEqual(code, 0)
+    } finally {
+      process.stdout.write = originalWrite
+      if (originalIsTTY === undefined) {
+        delete (process.stdout as NodeJS.WriteStream & { isTTY?: boolean }).isTTY
+      } else {
+        Object.defineProperty(process.stdout, 'isTTY', originalIsTTY)
+      }
+    }
+
+    assert.ok(stdout.join('').includes('Boxdown keeps generated state outside this repository.'))
+    assert.ok(stdout.join('').includes('Run `boxdown status` to inspect managed paths and the command log.'))
+  })
+
   test('setup preflight stops before prompts or state writes when runtime readiness fails', async () => {
     const workspace = tempDir('setup-preflight-failure-workspace')
     const dataHome = tempDir('setup-preflight-failure-data')

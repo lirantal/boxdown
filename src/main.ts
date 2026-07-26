@@ -66,12 +66,12 @@ export interface RunCliOptions {
 }
 
 export const USAGE = `Usage:
-  boxdown setup [--workspace <path>] [--alias <name>] [--recreate] [--target <name>]...
-  boxdown start [--workspace <path>] [--recreate]
-  boxdown codex [--workspace <path>] [--recreate] [-- <codex args...>]
-  boxdown claude [--workspace <path>] [--recreate] [-- <claude args...>]
-  boxdown opencode [--workspace <path>] [--recreate] [-- <opencode args...>]
-  boxdown antigravity [--workspace <path>] [--recreate] [-- <agy args...>]
+  boxdown setup [--workspace <path>] [--alias <name>] [--recreate] [--target <name>]... [--verbose]
+  boxdown start [--workspace <path>] [--recreate] [--verbose]
+  boxdown codex [--workspace <path>] [--recreate] [-- <codex args...>] [--verbose]
+  boxdown claude [--workspace <path>] [--recreate] [-- <claude args...>] [--verbose]
+  boxdown opencode [--workspace <path>] [--recreate] [-- <opencode args...>] [--verbose]
+  boxdown antigravity [--workspace <path>] [--recreate] [-- <agy args...>] [--verbose]
   boxdown list [--details] [--json|--format json]
   boxdown status [--workspace <path>] [--alias <name>] [--json|--format json]
   boxdown stop [--workspace <path>]
@@ -80,10 +80,10 @@ export const USAGE = `Usage:
   boxdown doctor [--workspace <path>]
   boxdown ssh install [--workspace <path>] [--alias <name>] [--target <name>]...
   boxdown ssh uninstall [--workspace <path>] [--alias <name>] [--target <name>]...
-  boxdown ssh-proxy [--workspace <path>] [--alias <name>]
-  boxdown tunnel [--port <port>] [--port <local:remote>] [--workspace <path>] [--alias <name>]
-  boxdown refresh-gh-token [--workspace <path>]
-  boxdown refresh-gh-token-running [--workspace <path>]
+  boxdown ssh-proxy [--workspace <path>] [--alias <name>] [--verbose]
+  boxdown tunnel [--port <port>] [--port <local:remote>] [--workspace <path>] [--alias <name>] [--verbose]
+  boxdown refresh-gh-token [--workspace <path>] [--verbose]
+  boxdown refresh-gh-token-running [--workspace <path>] [--verbose]
 
 Commands:
   setup                     Prepare the workspace devcontainer and SSH/app
@@ -140,9 +140,10 @@ Options:
   --json              Print JSON output. Supported by status and list.
   --format json       Print JSON output. Equivalent to --json.
   --details           Print detailed human list output. Supported by list.
-  --verbose           Stream raw Docker, devcontainer, and hook command output.
-                      Lifecycle commands append the same managed output to the
-                      per-workspace command log either way.
+  --verbose           Show a detailed lifecycle trace in an interactive terminal.
+                      Streams raw Docker, devcontainer, and hook output in CI or non-interactive output.
+                      Managed output is appended to
+                      the per-workspace command log either way.
   --help, -h          Show help.
   --version, -v       Show version.
 `
@@ -1084,6 +1085,11 @@ function startProgressSteps (): ProgressStepDefinition[] {
   ]
 }
 
+const SETUP_OWNERSHIP_DETAILS = [
+  'Boxdown keeps generated state outside this repository.',
+  'Run `boxdown status` to inspect managed paths and the command log.'
+] as const
+
 function sshTargetProgressLabel (target: SshConfigInstallTarget): string {
   const label = SSH_INSTALL_TARGETS.find((candidate) => candidate.value === target)?.label ?? target
   return `Installing ${label} SSH target`
@@ -1380,7 +1386,8 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
       await runLoggedLifecycle(context, 'setup', argv, async (logger) => {
         await withProgressSection(progress, 'Boxdown setup', [
           `Workspace: ${context.workspaceFolder}`,
-          `SSH alias: ${alias}`
+          `SSH alias: ${alias}`,
+          ...(progress.mode === 'none' ? [] : SETUP_OWNERSHIP_DETAILS)
         ], async () => {
           progress.setSteps(setupProgressSteps(resolvedTargets.targets))
           await (options.setupWorkspace ?? setupWorkspace)(context, alias, {
