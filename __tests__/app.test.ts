@@ -3984,11 +3984,69 @@ describe('progress output', () => {
   test('resolves progress modes from terminal and output context', () => {
     assert.strictEqual(resolveProgressMode({ isTTY: true, env: { CI: 'false' } }), 'interactive')
     assert.strictEqual(resolveProgressMode({ target: 'stderr', isTTY: true, env: { CI: 'false' } }), 'interactive')
-    assert.strictEqual(resolveProgressMode({ isTTY: true, verbose: true, env: { CI: 'false' } }), 'verbose')
+    assert.strictEqual(resolveProgressMode({ isTTY: true, verbose: true, env: { CI: 'false' } }), 'detailed')
     assert.strictEqual(resolveProgressMode({ isTTY: true, env: { CI: 'true' } }), 'verbose')
-    assert.strictEqual(resolveProgressMode({ isTTY: true, env: { CI: '1' } }), 'verbose')
     assert.strictEqual(resolveProgressMode({ isTTY: false, env: { CI: 'false' } }), 'verbose')
     assert.strictEqual(resolveProgressMode({ json: true, isTTY: true, env: { CI: 'false' } }), 'none')
+  })
+
+  test('detailed progress enables lifecycle markers without raw command mode', () => {
+    const progress = createProgress({ mode: 'detailed' })
+    assert.strictEqual(progress.detailed, true)
+    assert.strictEqual(progress.rawOutput, false)
+    assert.deepStrictEqual(progress.commandEnv(), {
+      BOXDOWN_VERBOSE: '0',
+      BOXDOWN_PROGRESS: '1'
+    })
+  })
+
+  test('raw progress preserves raw command mode', () => {
+    const progress = createProgress({ mode: 'verbose' })
+    assert.strictEqual(progress.detailed, false)
+    assert.strictEqual(progress.rawOutput, true)
+    assert.deepStrictEqual(progress.commandEnv(), {
+      BOXDOWN_VERBOSE: '1',
+      BOXDOWN_PROGRESS: '0'
+    })
+  })
+
+  test('detailed progress appends normalized lifecycle output without redraws', () => {
+    const lines: string[] = []
+    const raw: string[] = []
+    const progress = createProgress({
+      mode: 'detailed',
+      isTTY: true,
+      write: (_target, message) => lines.push(message),
+      writeRaw: (_target, message) => raw.push(message)
+    })
+
+    progress.section('Boxdown setup')
+    progress.detail('Workspace: /tmp/demo')
+    progress.item('  Preparing   workspace  ')
+    progress.status('  Waiting for Docker daemon  ')
+    progress.marker('  configuring runtime  ')
+    progress.setSteps([{ id: 'demo', label: 'Running demo command' }])
+    progress.startStep('demo')
+    progress.completeStep('demo')
+    progress.failStep('demo')
+    progress.skipStep('demo')
+    progress.startSpinner('  Running fallback command  ')
+    progress.warn('Docker Buildx is unavailable')
+    progress.end()
+
+    assert.deepStrictEqual(lines, [
+      'Boxdown setup',
+      '  Workspace: /tmp/demo',
+      'Preparing workspace',
+      'Waiting for Docker daemon',
+      'configuring runtime',
+      'Running demo command',
+      'Failed: Running demo command',
+      'Skipped: Running demo command',
+      'Running fallback command',
+      'Warning: Docker Buildx is unavailable'
+    ])
+    assert.deepStrictEqual(raw, [])
   })
 
   test('none progress mode keeps output fully silent for JSON callers', () => {
