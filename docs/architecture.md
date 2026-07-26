@@ -28,6 +28,11 @@ Boxdown does not copy `.devcontainer/` into consumer repositories. Instead it:
 This makes the target repository the workspace while Boxdown remains the owner
 of reusable configuration and runtime assets.
 
+New containers pull the public image whose tag exactly matches the installed
+Boxdown version, `ghcr.io/lirantal/boxdown:<Boxdown-version>`. They do not
+build Dev Container Features or shared tools locally. An uncached pull needs
+network access but no GHCR login.
+
 ## State Boundaries
 
 Cache-like state belongs under `~/.cache/boxdown` or `BOXDOWN_CACHE_HOME`.
@@ -85,17 +90,17 @@ on the host and is referenced from the user's SSH config.
 
 ## Container Lifecycle Tooling
 
-Boxdown-owned container assets install and refresh development tooling from
-inside the devcontainer lifecycle. Coding-agent CLIs are refreshed through a
-shared mounted utility: post-create runs an immediate install/update, while
-post-start and SSH proxy setup run throttled best-effort refreshes for
-already-running containers.
+The release image contains the shared tools: Codex, Claude Code, Snyk,
+1Password, and APM on AMD64. OpenCode and Antigravity are still lazy installs.
+The image contains no workspace or credentials; generated configuration supplies
+workspace mounts and runtime credentials only when a container is created.
 
-Baseline Python is also lifecycle-owned. The devcontainer installs Debian
-`python3`, `python3-venv`, `python3-pip`, and `pipx` during post-create instead
-of using the Dev Containers Python feature, which keeps the image layer smaller
-and avoids shipping Python dev-tool virtualenvs in every container. uv remains a
-separate feature and does not provide the system Python runtime by default.
+Container lifecycle hooks configure the workspace and SSH runtime. Codex and
+Claude retain throttled best-effort refreshes during post-start and SSH proxy
+setup, allowing their npm-backed installations to update without changing the
+release image. Snyk, 1Password, and AMD64 APM update only through a Boxdown
+release followed by recreation. APM is deferred on ARM64 until the user
+explicitly opts into a Python-based installation.
 
 Tool refreshes are container-side behavior, not generated config schema.
 Failures should warn without making the devcontainer unusable. SSH proxy
@@ -107,6 +112,7 @@ update logic.
 
 - Boxdown must not create `.devcontainer/` in target repositories.
 - Boxdown must not package or mount generated `.ssh/` private key material.
+- The release image must not contain user workspaces or credentials.
 - Lifecycle scripts must work when run from mounted assets, not only from a
   repo-local `.devcontainer/` directory.
 - SSH aliases must be workspace-specific and idempotently replaceable.

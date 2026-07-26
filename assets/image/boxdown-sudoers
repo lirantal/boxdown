@@ -1,0 +1,2 @@
+Cmnd_Alias BOXDOWN_SSH_RUNTIME = /usr/bin/true, /usr/local/sbin/boxdown-ssh-runtime prepare, /usr/local/sbin/boxdown-ssh-runtime validate, /usr/local/sbin/boxdown-ssh-agent-proxy
+node ALL=(root) NOPASSWD: BOXDOWN_SSH_RUNTIME

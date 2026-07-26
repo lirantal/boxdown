@@ -1,0 +1,13 @@
+{
+  "name": "boxdown-image-tools",
+  "version": "1.0.0",
+  "private": true,
+  "engines": {
+    "node": ">=24 <25"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-code": "2.1.220",
+    "@openai/codex": "0.145.0",
+    "snyk": "1.1306.1"
+  }
+}

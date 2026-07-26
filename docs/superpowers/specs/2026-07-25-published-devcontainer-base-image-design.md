@@ -67,7 +67,10 @@ tooling:
 The image build installs every downloaded third-party binary from a
 version/checksum lock manifest. Platform-specific URLs and checksums are
 explicit. OCI labels identify the source repository, source revision, Boxdown
-package version, and tool-lock revision.
+package version, and the SHA-256 identity of the tool lock. The non-root
+runtime user has passwordless sudo access only to fixed, root-owned SSH runtime
+and agent-proxy launchers (plus a no-op probe); other commands retain normal
+sudo authentication.
 
 ### Deliberately lazy tooling
 
@@ -103,11 +106,11 @@ per-workspace config continues to mount the packaged Boxdown assets at
 
 It no longer installs the shared image tools. `postStartCommand` still prepares
 the SSH runtime and calls the existing throttled Codex/Claude update helper.
-The image build creates valid initial stamps for that helper under the `node`
-user's home directory, preventing a newly created container from immediately
-performing an update check. Once the existing interval has elapsed, Codex and
-Claude continue to refresh in the writable workspace container exactly as they
-do today.
+Post-create initializes valid stamps for that helper under the `node` user's
+home directory, preventing an aged image from immediately performing an update
+check when a container is newly created. Once the existing interval has
+elapsed, Codex and Claude continue to refresh in the writable workspace
+container exactly as they do today.
 
 Snyk and 1Password CLI are fixed at the version of the base image. APM has the
 same release/recreate lifecycle on AMD64 and is absent by design on ARM64 until
@@ -195,7 +198,9 @@ anonymous `docker pull`. Thereafter, Boxdown users require no registry login.
 
 New workspaces pull the matching published image. The generated configuration
 contains no Features, so the Dev Containers CLI does not invoke a local Feature
-or Dockerfile build.
+or Dockerfile build. It also sets `updateRemoteUserUID` to `false`, preserving
+the published image directly rather than constructing a local `-uid`
+derivative.
 
 Existing Boxdown containers are deliberately not changed merely because the
 user upgrades Boxdown. If Boxdown sees that a running or reused workspace is

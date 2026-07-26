@@ -25,6 +25,14 @@ Docker CLI fails immediately; a starting Docker daemon or discoverable Buildx
 builder is polled once per second for up to 60 seconds. If this preflight fails,
 setup leaves no workspace metadata, generated devcontainer config, or SSH key.
 
+New setups pull the public release-matched image
+`ghcr.io/lirantal/boxdown:<Boxdown-version>`, rather than building Dev
+Container Features or shared tools locally. The first uncached pull needs
+network access but no GHCR login. The image includes Codex, Claude Code, Snyk,
+1Password, and AMD64 APM; OpenCode and Antigravity remain lazy installs. It
+contains no workspaces or credentials, which Boxdown provides only through
+per-workspace mounts and runtime state.
+
 ## Flow
 
 1. Resolve the workspace to a real absolute path.
@@ -69,3 +77,9 @@ registration unless `--target` is provided.
 foreground. Use `boxdown start`, `boxdown codex`, or `boxdown tunnel` for those
 foreground workflows. Those commands log Boxdown-managed startup steps, but do
 not tee full interactive shell, agent, or tunnel session bytes into the log.
+
+Codex and Claude retain throttled best-effort refreshes after startup. Snyk,
+1Password, and AMD64 APM advance through a Boxdown release plus recreation;
+APM is deferred on ARM64 until you explicitly opt in to a Python-based
+installation. Existing workspaces switch to the published image only with
+`boxdown setup --recreate` or `boxdown start --recreate`.

@@ -15,7 +15,7 @@ import { codingAgentBinary, codingAgentFromCommand } from '../src/coding-agents.
 import { color, formatPromptEnd, formatPromptTitle, promptRail, selectedMark } from '../src/cli-style.ts'
 import { buildGeneratedDevcontainerConfig, publishContainerPortFromConfig } from '../src/config.ts'
 import { BOXDOWN_CONTAINER_AGENTS_DIR, BOXDOWN_CONTAINER_CODEX_AUTH_PATH, BOXDOWN_CONTAINER_CODEX_DIR, BOXDOWN_CONTAINER_GITCONFIG_PATH, BOXDOWN_CONTAINER_HOST_GITCONFIG_DIR, BOXDOWN_CONTAINER_SECRET_ENV_BOOTSTRAP, BOXDOWN_CONTAINER_SECRET_ENV_DIR, DEVCONTAINER_CLI_VERSION } from '../src/constants.ts'
-import { codingAgentDevcontainerExecArgs, parseDockerInspectImage, sshTunnelArgs, startDevcontainer } from '../src/devcontainer.ts'
+import { codingAgentDevcontainerExecArgs, isPublishedBoxdownImage, parseDockerInspectImage, sshdProxyDockerArgs, sshTunnelArgs, startDevcontainer } from '../src/devcontainer.ts'
 import { resolveDevcontainerCli } from '../src/devcontainer-cli.ts'
 import { doctorHasFailures, formatDoctorText, runDoctorChecks } from '../src/doctor.ts'
 import { parseSshPublicKey, reportGitSigningPlan, resolveConfiguredSshSigningKey, resolveGitSigningPlan, selectGitSigningKey, type GitSigningPlan, type GitSigningReason } from '../src/git-signing.ts'
@@ -24,7 +24,7 @@ import { parseJsonc } from '../src/jsonc.ts'
 import { createWorkspaceListEntries, formatWorkspaceListDetailsText, formatWorkspaceListText } from '../src/list.ts'
 import { createWorkspaceCommandLogger, redactKnownSecretEnvironmentAssignments, withLoggedProcessOutput } from '../src/logging.ts'
 import { commandRequiresContainerRuntime, commandWritesWorkspaceMetadata, parseCliArgs, parseTunnelPort, parseTunnelPortList, prepareContainerLifecycle, runCli, runContainerRuntimePreflight, setupWorkspace, USAGE, type BoxdownCommand } from '../src/main.ts'
-import { listWorkspaceMetadata, readWorkspaceMetadata, recordWorkspaceDockerImage, workspaceMetadataPath, writeWorkspaceMetadata } from '../src/metadata.ts'
+import { listWorkspaceMetadata, readWorkspaceMetadata, recordLegacyImageMigrationNotice, recordWorkspaceDockerImage, workspaceMetadataPath, writeWorkspaceMetadata } from '../src/metadata.ts'
 import { readPackageVersion } from '../src/package-info.ts'
 import { createWorkspaceContext } from '../src/paths.ts'
 import { promptConfirm, promptMultiSelect, promptText, type PromptInput, type PromptOutput } from '../src/interactive-prompts.ts'
@@ -39,35 +39,6 @@ const assetsDevcontainerDir = fileURLToPath(new URL('../assets/devcontainer', im
 
 function tempDir (name: string): string {
   return mkdtempSync(join(tmpdir(), `boxdown-${name}-`))
-}
-
-function runOnePasswordInstallForArchitecture (arch: string): { status: number | null, stderr: string, downloads: string } {
-  const postCreatePath = join(assetsDevcontainerDir, 'hooks', 'post-create.sh')
-  const curlLogPath = join(tempDir('onepassword-curl-log'), 'calls.log')
-  const script = [
-    'source "$1"',
-    'uname() { printf "%s\\n" "$BOXDOWN_TEST_ARCH"; }',
-    'curl() { printf "%s\\n" "$*" >> "$BOXDOWN_TEST_CURL_LOG"; }',
-    'python3() { :; }',
-    'sudo() { :; }',
-    'chmod() { :; }',
-    'rm() { :; }',
-    'install_1password_cli'
-  ].join('\n')
-  const result = spawnSync('bash', ['-c', script, 'bash', postCreatePath], {
-    encoding: 'utf8',
-    env: {
-      ...process.env,
-      BOXDOWN_TEST_ARCH: arch,
-      BOXDOWN_TEST_CURL_LOG: curlLogPath
-    }
-  })
-
-  return {
-    status: result.status,
-    stderr: result.stderr,
-    downloads: existsSync(curlLogPath) ? readFileSync(curlLogPath, 'utf8') : ''
-  }
 }
 
 function readGitConfig (configPath: string, key: string): string | undefined {
@@ -160,6 +131,10 @@ async function withFakeDocker<T> (workspaces: FakeDockerWorkspace[], run: (logPa
     '  fi',
     '  while IFS="$(printf \'\\t\')" read -r folder id container_state remove_exit_code image_id image_name inspect_exit_code image_remove_exit_code; do',
     '    if [ "$folder" = "$workspace" ]; then',
+    '      if [[ "$*" == *\'{{.ID}}\'* ]]; then',
+    '        printf \'%s\\n\' "$id"',
+    '        exit 0',
+    '      fi',
     '      printf \'{"ID":"%s","Names":"%s","State":"%s","Status":"%s","Labels":"devcontainer.local_folder=%s"}\\n\' "$id" "$id" "$container_state" "$container_state" "$folder"',
     '      exit 0',
     '    fi',
@@ -3112,6 +3087,19 @@ describe('coding-agent command mapping', () => {
   })
 })
 
+describe('SSH proxy container execution', () => {
+  test('starts inetd-mode sshd explicitly as root in the non-root image', () => {
+    assert.deepStrictEqual(sshdProxyDockerArgs('container-123').slice(0, 5), [
+      'exec',
+      '--user',
+      'root',
+      '-i',
+      'container-123'
+    ])
+    assert.equal(sshdProxyDockerArgs('container-123').includes('/usr/sbin/sshd'), true)
+  })
+})
+
 describe('host tool path', () => {
   test('adds GUI-missing Docker and Homebrew paths while preserving existing priority', () => {
     const home = tempDir('host-tool-path-home')
@@ -3176,6 +3164,52 @@ describe('workspace metadata', () => {
     assert.strictEqual(imageMetadata?.dockerImageLastSeenAt, '2026-01-01T00:01:00.000Z')
     assert.strictEqual(laterMetadata.dockerImageId, 'sha256:demo-image')
     assert.deepStrictEqual(readWorkspaceMetadata(context), laterMetadata)
+  })
+
+  test('warns once for a legacy locally-built devcontainer image without removing it', async () => {
+    const workspace = tempDir('legacy-image-migration-workspace')
+    const migrationWorkspace = tempDir('legacy-image-migration-metadata-workspace')
+    const env = {
+      BOXDOWN_CACHE_HOME: tempDir('legacy-image-migration-cache'),
+      BOXDOWN_DATA_HOME: tempDir('legacy-image-migration-data')
+    }
+    const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+    const migrationContext = createWorkspaceContext({ workspace: migrationWorkspace, env, assetsDevcontainerDir })
+    const image = { id: 'sha256:legacy', name: 'vsc-example-legacy-uid' }
+    const stderr: string[] = []
+    const originalStderrWrite = process.stderr.write
+
+    writeWorkspaceMetadata(context, 'legacy-devcontainer')
+    writeWorkspaceMetadata(migrationContext, 'legacy-metadata-devcontainer')
+    assert.equal(isPublishedBoxdownImage(image), false)
+    assert.equal(isPublishedBoxdownImage({ id: 'sha256:published', name: 'ghcr.io/lirantal/boxdown:latest' }), true)
+    assert.equal(isPublishedBoxdownImage({ id: 'sha256:untagged', name: 'ghcr.io/lirantal/boxdown' }), false)
+    assert.equal(recordLegacyImageMigrationNotice(migrationContext), true)
+    assert.equal(recordLegacyImageMigrationNotice(migrationContext), false)
+    assert.match(readWorkspaceMetadata(migrationContext)?.legacyImageMigrationNotifiedAt ?? '', /^\d{4}-\d{2}-\d{2}T/)
+
+    await withFakeDocker([
+      { workspace, id: 'legacy-container', imageId: image.id, imageName: image.name }
+    ], async (logPath, dockerEnv) => {
+      process.stderr.write = function capturedStderrWrite (this: typeof process.stderr, chunk: string | Uint8Array): boolean {
+        stderr.push(Buffer.isBuffer(chunk) ? chunk.toString('utf8') : chunk)
+        return true
+      } as typeof process.stderr.write
+
+      try {
+        await withProcessEnv({ ...dockerEnv, ...env }, async () => {
+          await startDevcontainer(context, { reuseRunning: true })
+          await startDevcontainer(context, { reuseRunning: true })
+        })
+      } finally {
+        process.stderr.write = originalStderrWrite
+      }
+
+      const calls = fakeDockerCalls(logPath)
+      assert.match(stderr.join(''), /Run `boxdown start --recreate` to switch to the published Boxdown image\./)
+      assert.strictEqual(stderr.join('').match(/This workspace uses Boxdown's legacy locally-built devcontainer image\./g)?.length, 1)
+      assert.ok(!calls.some(call => call.startsWith('docker rm') || call.startsWith('docker image rm') || call.startsWith('rm ') || call.startsWith('image rm ')))
+    })
   })
 
   test('status does not record workspace metadata', () => {
@@ -5139,7 +5173,7 @@ describe('git signing selection', () => {
 
 describe('SSH-agent proxy asset', () => {
   test('forwards node SSH-agent connections', async () => {
-    const root = mkdtempSync(join(process.cwd(), '.ssh-agent-proxy-'))
+    const root = mkdtempSync('/tmp/boxdown-ssh-agent-proxy-')
     const sourcePath = join(root, 'source.sock')
     const targetPath = join(root, 'target.sock')
     const proxyPath = join(assetsDevcontainerDir, 'utils', 'ssh-agent-proxy.mjs')
@@ -5319,34 +5353,6 @@ describe('devcontainer git config hooks', () => {
     assert.deepStrictEqual(helpers, ['', '!gh auth git-credential'])
     assert.strictEqual(readGitConfig(join(workspace, '.git', 'config'), 'commit.gpgsign'), undefined)
     assert.strictEqual(execFileSync('git', ['config', '--local', '--get', 'core.pager'], { cwd: workspace }).toString('utf8').trim(), 'less -R')
-  })
-
-  for (const arch of ['x86_64', 'amd64']) {
-    test(`1Password installer selects the amd64 archive on ${arch}`, () => {
-      const result = runOnePasswordInstallForArchitecture(arch)
-
-      assert.strictEqual(result.status, 0)
-      assert.match(result.downloads, /op_linux_amd64_v2\.32\.1\.zip/)
-      assert.doesNotMatch(result.downloads, /op_linux_arm64/)
-    })
-  }
-
-  for (const arch of ['aarch64', 'arm64']) {
-    test(`1Password installer selects the arm64 archive on ${arch}`, () => {
-      const result = runOnePasswordInstallForArchitecture(arch)
-
-      assert.strictEqual(result.status, 0)
-      assert.match(result.downloads, /op_linux_arm64_v2\.32\.1\.zip/)
-      assert.doesNotMatch(result.downloads, /op_linux_amd64/)
-    })
-  }
-
-  test('1Password installer skips unsupported architectures', () => {
-    const result = runOnePasswordInstallForArchitecture('riscv64')
-
-    assert.strictEqual(result.status, 0)
-    assert.strictEqual(result.downloads, '')
-    assert.match(result.stderr, /skipping 1Password CLI \(unsupported arch: riscv64\)/)
   })
 
   test('git signing bootstrap preserves an explicit user signing configuration without an agent', () => {
@@ -7145,25 +7151,33 @@ describe('packaged assets', () => {
     assert.strictEqual(readFileSync(configPath, 'utf8'), overlapping)
   })
 
-  test('refreshes coding-agent CLIs from lifecycle hooks through updater utility', () => {
+  test('post-create configures workspace state without installing image-owned tools', () => {
     const postCreate = readFileSync(join(assetsDevcontainerDir, 'hooks', 'post-create.sh'), 'utf8')
-    const postStart = readFileSync(join(assetsDevcontainerDir, 'hooks', 'post-start.sh'), 'utf8')
     const gitConfigBootstrap = readFileSync(join(assetsDevcontainerDir, 'utils', 'git-config-bootstrap.sh'), 'utf8')
-    const updater = readFileSync(join(assetsDevcontainerDir, 'utils', 'coding-agent-cli-update.sh'), 'utf8')
-    const codexWrapper = readFileSync(join(assetsDevcontainerDir, 'utils', 'codex-cli-update.sh'), 'utf8')
 
     assert.match(postCreate, /configure_global_git/)
-    assert.ok(postCreate.indexOf('configure_global_git') < postCreate.indexOf('install_or_update_coding_agent_clis'))
     assert.match(postCreate, /git-config-bootstrap\.sh/)
-    assert.match(postCreate, /install_or_update_coding_agent_clis/)
-    assert.match(postCreate, /coding-agent-cli-update\.sh" install/)
+    assert.match(postCreate, /configure_git_signing/)
+    assert.match(postCreate, /configure_local_git/)
+    assert.match(postCreate, /configure_runtime_secret_environment/)
+    assert.match(postCreate, /ssh-bootstrap\.sh" runtime/)
+    assert.match(postCreate, /deps-install\.sh/)
+    assert.doesNotMatch(postCreate, /install_(openssh_server|python_runtime|apm|1password_cli|snyk_cli)/)
+    assert.doesNotMatch(postCreate, /coding-agent-cli-update\.sh" install/)
     assert.match(postCreate, /BOXDOWN_PROGRESS: %s\\n/)
-    assert.match(postCreate, /run_step "Installing coding-agent CLIs"/)
-    assert.match(postStart, /coding-agent-cli-update\.sh" maybe-update/)
-    assert.match(postStart, /run_step "Refreshing coding-agent CLIs"/)
     assert.match(gitConfigBootstrap, /url\.git@github\.com:\.insteadOf/)
     assert.match(gitConfigBootstrap, /credential\.https:\/\/github\.com\.helper/)
     assert.match(gitConfigBootstrap, /Preparing writable Git config/)
+  })
+
+  test('keeps coding-agent refresh throttled in post-start', () => {
+    const postStart = readFileSync(join(assetsDevcontainerDir, 'hooks', 'post-start.sh'), 'utf8')
+    const updater = readFileSync(join(assetsDevcontainerDir, 'utils', 'coding-agent-cli-update.sh'), 'utf8')
+    const codexWrapper = readFileSync(join(assetsDevcontainerDir, 'utils', 'codex-cli-update.sh'), 'utf8')
+
+    assert.match(postStart, /ssh-bootstrap\.sh" runtime/)
+    assert.match(postStart, /coding-agent-cli-update\.sh" maybe-update/)
+    assert.match(postStart, /run_step "Refreshing coding-agent CLIs"/)
     assert.match(updater, /DEFAULT_AGENTS=\(codex claude\)/)
     assert.match(updater, /BOXDOWN_PROGRESS: %s\\n/)
     assert.match(updater, /codex update/)
@@ -7199,36 +7213,6 @@ describe('packaged assets', () => {
     assert.match(startScript, /stdout is reserved for SSH traffic/)
   })
 
-  test('downloads the APM installer before executing it', () => {
-    const postCreate = readFileSync(join(assetsDevcontainerDir, 'hooks', 'post-create.sh'), 'utf8')
-
-    assert.match(postCreate, /install_apm\(\)/)
-    assert.match(postCreate, /curl -fsSL https:\/\/aka\.ms\/apm-unix -o "\$\{installer\}"/)
-    assert.match(postCreate, /could not download APM installer; skipping APM/)
-    assert.doesNotMatch(postCreate, /curl -sSL https:\/\/aka\.ms\/apm-unix \| sh/)
-  })
-
-  test('installs baseline Python from apt instead of the Python feature', () => {
-    const pythonFeatureRef = 'ghcr.io/devcontainers/features/python@sha256:fbcad6955caeecc5ad3f7886baf652e25cba5225a6c4c2287c536de2e5607511'
-    const devcontainerJson = readFileSync(join(assetsDevcontainerDir, 'devcontainer.json'), 'utf8')
-    const devcontainerConfig = parseJsonc<{
-      features?: Record<string, unknown>
-      overrideFeatureInstallOrder?: string[]
-    }>(devcontainerJson)
-    const postCreate = readFileSync(join(assetsDevcontainerDir, 'hooks', 'post-create.sh'), 'utf8')
-    const pythonBootstrap = readFileSync(join(assetsDevcontainerDir, 'utils', 'python-bootstrap.sh'), 'utf8')
-
-    assert.match(devcontainerJson, /roughly 900MB/)
-    assert.match(devcontainerJson, /heavy Dev Containers Python feature layer/)
-    assert.ok(!Object.keys(devcontainerConfig.features ?? {}).includes(pythonFeatureRef))
-    assert.ok(!(devcontainerConfig.overrideFeatureInstallOrder ?? []).includes(pythonFeatureRef))
-    assert.match(postCreate, /install_python_runtime/)
-    assert.ok(postCreate.indexOf('install_openssh_server') < postCreate.indexOf('install_python_runtime'))
-    assert.ok(postCreate.indexOf('install_python_runtime') < postCreate.indexOf('install_1password_cli'))
-    assert.match(postCreate, /python-bootstrap\.sh" install/)
-    assert.match(pythonBootstrap, /python3 python3-venv python3-pip pipx/)
-    assert.match(pythonBootstrap, /apt-get install -y --no-install-recommends/)
-  })
 
   test('installs only eager coding-agent CLIs by default', () => {
     const updaterPath = join(assetsDevcontainerDir, 'utils', 'coding-agent-cli-update.sh')
@@ -7520,6 +7504,43 @@ describe('packaged assets', () => {
 
     for (const agent of ['codex', 'opencode', 'claude', 'antigravity']) {
       writeFileSync(join(stateDir, `${agent}.stamp`), '')
+    }
+
+    execFileSync('bash', [updaterPath, 'maybe-update'], {
+      env: {
+        ...process.env,
+        BOXDOWN_CODING_AGENT_UPDATE_STATE_DIR: stateDir,
+        BOXDOWN_CODING_AGENT_UPDATE_INTERVAL_SECONDS: '999999'
+      },
+      stdio: 'pipe'
+    })
+  })
+
+  test('refreshes image-aged coding-agent stamps when the container is created', () => {
+    const updaterPath = join(assetsDevcontainerDir, 'utils', 'coding-agent-cli-update.sh')
+    const stateDir = tempDir('coding-agent-create-stamps-state')
+    mkdirSync(stateDir, { recursive: true })
+
+    for (const agent of ['codex', 'claude']) {
+      const stampPath = join(stateDir, `${agent}.stamp`)
+      writeFileSync(stampPath, '')
+      execFileSync('touch', ['-t', '202001010000', stampPath])
+    }
+
+    execFileSync('bash', [updaterPath, 'initialize-stamps'], {
+      env: {
+        ...process.env,
+        BOXDOWN_CODING_AGENT_UPDATE_STATE_DIR: stateDir
+      },
+      stdio: 'pipe'
+    })
+
+    const nowSeconds = Date.now() / 1000
+    for (const agent of ['codex', 'claude']) {
+      assert.ok(
+        nowSeconds - statSync(join(stateDir, `${agent}.stamp`)).mtimeMs / 1000 < 10,
+        `${agent} stamp must reflect container creation, not image build time`
+      )
     }
 
     execFileSync('bash', [updaterPath, 'maybe-update'], {

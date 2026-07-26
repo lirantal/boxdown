@@ -22,7 +22,7 @@ progress() {
 prepend_agent_bin_paths() {
   local codex_home="${CODEX_HOME:-${HOME}/.codex}"
 
-  PATH="${HOME}/.local/bin:${HOME}/.opencode/bin:${codex_home}/packages/standalone/current/bin:${PATH}"
+  PATH="${HOME}/.local/node_modules/.bin:${HOME}/.local/bin:${HOME}/.opencode/bin:${codex_home}/packages/standalone/current/bin:${PATH}"
   export PATH
 }
 
@@ -30,6 +30,7 @@ usage() {
   cat >&2 <<'EOF'
 Usage: coding-agent-cli-update.sh <install|update-now|maybe-update> [codex|opencode|claude|antigravity...]
        coding-agent-cli-update.sh ensure <codex|opencode|claude|antigravity...>
+       coding-agent-cli-update.sh initialize-stamps
 EOF
 }
 
@@ -138,6 +139,19 @@ ensure_state_dir() {
   local lock_dir="$2"
 
   mkdir -p "$(dirname "${stamp_file}")" "$(dirname "${lock_dir}")"
+}
+
+initialize_default_stamps() {
+  local agent
+  local stamp_file
+  local lock_dir
+
+  for agent in "${DEFAULT_AGENTS[@]}"; do
+    stamp_file="$(agent_stamp_file "${agent}")"
+    lock_dir="$(agent_lock_dir "${agent}")"
+    ensure_state_dir "${stamp_file}" "${lock_dir}"
+    touch "${stamp_file}"
+  done
 }
 
 stamp_fresh() {
@@ -456,7 +470,28 @@ update_antigravity() {
   install_antigravity
 }
 
+image_agent_package() {
+  case "$1" in
+    codex) printf '%s\n' '@openai/codex' ;;
+    claude) printf '%s\n' '@anthropic-ai/claude-code' ;;
+    *) return 1 ;;
+  esac
+}
+
+update_image_agent_package() {
+  local agent="$1"
+  local package
+
+  package="$(image_agent_package "${agent}")" || return 1
+  npm install --omit=dev --prefix "${HOME}/.local" "${package}@latest"
+}
+
 run_agent_update() {
+  if [ -f /home/node/.local/package-lock.json ] && image_agent_package "$1" >/dev/null; then
+    update_image_agent_package "$1"
+    return
+  fi
+
   case "$1" in
     codex) update_codex ;;
     opencode) update_opencode ;;
@@ -598,6 +633,15 @@ main() {
   shift
 
   prepend_agent_bin_paths
+
+  if [ "${action}" = "initialize-stamps" ]; then
+    if [ "$#" -ne 0 ]; then
+      usage
+      return 1
+    fi
+    initialize_default_stamps
+    return
+  fi
 
   if [ "$#" -eq 0 ]; then
     if [ "${action}" = "ensure" ]; then

@@ -15,7 +15,20 @@ if ! command -v sudo >/dev/null 2>&1 || ! command -v node >/dev/null 2>&1; then
   exit 1
 fi
 
-sudo -n node "${PROXY_SCRIPT}" --source "${SOURCE_SOCKET}" --target "${TARGET_SOCKET}" --uid "$(id -u)" --gid "$(id -g)" >/dev/null 2>&1 &
+if [[ -x /usr/local/sbin/boxdown-ssh-agent-proxy ]]; then
+  if [[ "${SOURCE_SOCKET}" != "/run/boxdown/ssh-agent.sock" ]] ||
+    [[ "${TARGET_SOCKET}" != "/run/boxdown/ssh-agent-node.sock" ]]; then
+    exit 1
+  fi
+  sudo -n /usr/local/sbin/boxdown-ssh-agent-proxy >/dev/null 2>&1 &
+else
+  # Legacy Feature-built containers retain their existing sudo-based launcher.
+  sudo -n node "${PROXY_SCRIPT}" \
+    --source "${SOURCE_SOCKET}" \
+    --target "${TARGET_SOCKET}" \
+    --uid "$(id -u)" \
+    --gid "$(id -g)" >/dev/null 2>&1 &
+fi
 
 for _ in $(seq 1 20); do
   if [[ -S "${TARGET_SOCKET}" ]] && ssh-add -L >/dev/null 2>&1; then

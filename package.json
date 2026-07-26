@@ -54,7 +54,8 @@
     "test:watch": "c8 node --import tsx --test --watch __tests__/**/*.test.ts",
     "coverage:view": "open coverage/lcov-report/index.html",
     "prepare": "husky",
-    "version": "changeset version",
+    "version": "changeset version && pnpm run sync:devcontainer-image",
+    "sync:devcontainer-image": "tsx scripts/sync-devcontainer-image.ts",
     "release": "changeset publish",
     "release:create": "changeset && git add .changeset && git commit -m \"chore: release\" && git push origin HEAD --no-verify"
   },

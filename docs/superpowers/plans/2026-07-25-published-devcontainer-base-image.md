@@ -144,21 +144,21 @@ Use the exact digest already in `assets/devcontainer/devcontainer.json`. Install
 ```dockerfile
 FROM node:24-trixie-slim@sha256:ae91dcc111a68c9d2d81ff2a17bda61be126426176fde6fe7d08ab13b7f50573
 ARG TARGETARCH
-COPY assets/image/npm /opt/boxdown/image-npm
-RUN npm ci --omit=dev --ignore-scripts --prefix /opt/boxdown/image-npm \
- && ln -s /opt/boxdown/image-npm/node_modules/.bin/codex /usr/local/bin/codex \
- && ln -s /opt/boxdown/image-npm/node_modules/.bin/claude /usr/local/bin/claude \
- && ln -s /opt/boxdown/image-npm/node_modules/.bin/snyk /usr/local/bin/snyk
+COPY --chown=node:node assets/image/npm /home/node/.local
+USER node
+RUN npm ci --omit=dev --ignore-scripts --prefix /home/node/.local
+ENV PATH=/home/node/.local/node_modules/.bin:${PATH}
+USER root
 COPY assets/image/tools.lock.json assets/image/install-native-tools.sh /opt/boxdown/image-tools/
 RUN /opt/boxdown/image-tools/install-native-tools.sh "$TARGETARCH" /opt/boxdown/image-tools/tools.lock.json
 USER node
 ```
 
-The installer must parse JSON with Node, use `curl --fail --location`, validate `sha256sum --check --status`, install only the expected binary, and clean its `mktemp -d` directory with `trap`.
+The installer must parse JSON with Node, use `curl --fail --location`, validate `sha256sum --check --status`, install only the expected payload, and clean its `mktemp -d` directory with `trap`. For 1Password the payload is its single executable. For the checksum-verified AMD64 APM PyInstaller archive, the expected payload is the `apm-linux-x86_64/` bundle subtree, because `apm` requires its adjacent `_internal/` runtime files; reject any archive that lacks the exact `apm-linux-x86_64/apm` entry.
 
 - [ ] **Step 4: Preserve safe agent updates**
 
-Use `/opt/boxdown/image-npm/package-lock.json` as the image marker. When it exists, update the selected agent's npm package; otherwise run the current standalone updater. During the image build create `/home/node/.cache/boxdown/coding-agent-clis/{codex,claude}.stamp` and `chown -R node:node /home/node/.cache`, so first `maybe-update` is skipped.
+Use `/home/node/.local/package-lock.json` as the image marker. Add `/home/node/.local/node_modules/.bin` to `prepend_agent_bin_paths`. When the marker exists, update the selected agent through `npm install --omit=dev --prefix "${HOME}/.local" <package>@latest`; otherwise run the current standalone updater. During the image build create `/home/node/.cache/boxdown/coding-agent-clis/{codex,claude}.stamp` and `chown -R node:node /home/node/.cache`, so first `maybe-update` is skipped. The `node` user owns this prefix, so the existing throttled updates can succeed without `sudo`.
 
 - [ ] **Step 5: Add and run the smoke test**
 
@@ -417,6 +417,17 @@ git commit -m "ci: publish Boxdown image before npm release"
 - Modify: `docs/architecture.md`
 - Modify: `docs/features/start-and-shell.md`
 - Modify: `docs/features/setup.md`
+- Modify: `renovate.json`
+- Modify: `__tests__/devcontainer-image-policy.test.ts`
+- Modify: `__tests__/image-input-policy.test.ts`
+- Modify: `scripts/sync-devcontainer-image.ts`
+
+**Implementation note (amended after Task 7 review):** Replace the obsolete
+Dev Container packaged-image Renovate policy with Dockerfile coverage for the
+still-consumed digest-pinned Node base image, and update its policy test. Fix
+the existing `security/detect-unsafe-regex` lint findings in the image policy
+and JSONC synchronizer without weakening lint rules; Task 7 verification must
+be green.
 
 - [ ] **Step 1: Update user documentation**
 

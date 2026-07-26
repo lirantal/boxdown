@@ -1,11 +1,17 @@
 # Dev container
 
-Run this project in a **consistent Node.js 24 + TypeScript** environment without installing toolchains on your machine. The container starts from the slim Node 24 Debian image, then adds only the shared tools Boxdown needs. Dependencies install automatically; your repo is the workspace inside the container.
+Run this project in a **consistent Node.js 24 + TypeScript** environment without
+installing toolchains on your machine. New containers pull the public,
+release-matched `ghcr.io/lirantal/boxdown:<Boxdown-version>` image. Your repo
+is mounted as the workspace after the image is pulled.
 
 ## Why use it?
 
-- **Same stack for everyone** — Node 24 plus pinned features provide Git, uv, ripgrep, GitHub CLI, and common shell utilities; Debian Python is installed during post-create.
-- **Fast onboarding** — Open the folder in a container; dependency installation and local git tweaks run once after create. pnpm-based workspaces bootstrap `pnpm@11` when needed.
+- **Same stack for everyone** — The published image provides Node 24, Git,
+  ripgrep, GitHub CLI, Codex, Claude Code, Snyk, 1Password, and AMD64 APM.
+- **Fast onboarding** — Open the folder in a container. An uncached image pull
+  needs network access, but no GHCR login; dependency installation and local
+  git tweaks then run once for the workspace.
 - **Host secrets, container dev** — `ANTHROPIC_API_KEY` and `SNYK_TOKEN` are passed from your Mac/Linux session into the container when set locally (see below).
 - **Optional CLI workflow** — Use `start.sh` if you prefer a terminal-driven container instead of only the editor.
 - **Portless SSH workflow** — Install a normal SSH host alias that proxies into the devcontainer without publishing an SSH port.
@@ -14,38 +20,31 @@ Run this project in a **consistent Node.js 24 + TypeScript** environment without
 
 | File | Role |
 | ---- | ---- |
-| `devcontainer.json` | Slim Node base image, pinned feature set/order, Boxdown state mounts, lifecycle commands, env forwarding. |
+| `devcontainer.json` | Release-matched Boxdown image, Boxdown state mounts, lifecycle commands, and env forwarding. |
 | `start.sh` | Brings the dev container up with the Dev Containers CLI, then opens a shell **inside** the container or acts as an SSH `ProxyCommand`. |
 | `ssh-config-install.sh` | Installs/updates a host SSH config alias for Cursor, Claude, or plain `ssh`. |
 | `hooks/initialize.sh` | Runs on the host before container create/start; refreshes private runtime secret files and host Git state. |
-| `hooks/post-create.sh` | Runs once after the container is created — e.g. installs OpenSSH server, Debian Python, [APM](https://github.com/microsoft/apm) (Agent Package Manager), and default coding-agent CLIs. |
+| `hooks/post-create.sh` | Runs once after the container is created to configure the workspace and SSH runtime. |
 | `hooks/post-start.sh` | Runs on each container start; refreshes runtime state such as SSH host keys and authorized keys. |
 | `utils/git-config-bootstrap.sh` | Container-side Git config copy/sanitization helper used by lifecycle scripts. |
-| `utils/python-bootstrap.sh` | Container-side Debian Python runtime helper used by lifecycle scripts. |
+| `utils/python-bootstrap.sh` | Container-side Debian Python runtime helper for explicit opt-in use. |
 | `utils/ssh-bootstrap.sh` | Container-side OpenSSH install/runtime helper used by lifecycle scripts. |
 | `utils/coding-agent-cli-update.sh` | Shared install/update helper for Codex, OpenCode, Claude Code, and Antigravity CLI. |
-| `utils/deps-install.sh` | Dependency installation helper used by `hooks/post-create.sh`; bootstraps pnpm/yarn when the slim base does not provide them. |
+| `utils/deps-install.sh` | Workspace dependency installation helper used by `hooks/post-create.sh`; bootstraps pnpm/yarn when required. |
 
-## Base image
+## Published image
 
-Boxdown uses `node:24-trixie-slim` as the base-image update track to keep the
-shared image smaller than the full Dev Containers TypeScript/Node image. The
-template appends the upstream multi-platform OCI index digest, making rebuilds
-immutable while allowing AMD64 and ARM64 hosts to select the matching platform
-manifest from the same pinned release set. Renovate checks the packaged
-template monthly and opens a pull request when that tag's index digest changes,
-so base-image updates remain explicit and auditable.
+The image tag exactly follows the installed Boxdown package version. It is
+public, so first use needs only network access and no registry credentials. It
+contains the default Codex, Claude Code, Snyk, 1Password, and AMD64 APM tools;
+OpenCode and Antigravity are installed lazily only when their Boxdown commands
+are used. The image contains neither a workspace nor credentials. Boxdown adds
+both only as per-workspace mounts and runtime state when it creates a container.
 
-The devcontainer then installs the required operating-system tools through
-pinned Dev Container features. `common-utils` and `git` run first so later
-features and lifecycle hooks can rely on shell basics, `sudo`, package
-metadata, Git, and related utilities.
-
-Python is installed during `postCreateCommand` from Debian apt packages (`python3`, `python3-venv`, `python3-pip`, and `pipx`). On Debian trixie this currently provides Python 3.13. Boxdown intentionally avoids the Dev Containers Python feature because it added a large Python runtime/dev-tooling layer, including bundled environments for tools such as mypy, black, pylint, pytest, bandit, pipenv, and flake8.
-
-uv remains a separate pinned feature. It provides `uv`/`uvx`, but it does not provide the system Python runtime by default.
-
-JavaScript package managers are handled at workspace setup time: npm comes from the Node image, pnpm is installed as `pnpm@11` for pnpm projects, and Yarn is enabled through Corepack when needed.
+Codex and Claude retain throttled best-effort refreshes after startup. Snyk,
+1Password, and AMD64 APM advance through a Boxdown release plus container
+recreation. APM is deferred on ARM64 until you explicitly opt in to a
+Python-based installation.
 
 ## Usage
 
@@ -175,7 +174,11 @@ Use the generated host alias when configuring the agent:
 - `bash .devcontainer/start.sh --refresh-gh-token-running` refreshes container `gh` auth from host `gh` only when the devcontainer is already running.
 - Add `--verbose` to any startup mode when debugging raw devcontainer, Docker, or hook output.
 
-If the devcontainer does not exist yet, the first SSH connection through `<repo-name>-devcontainer` will create it with `@devcontainers/cli up`, including `initializeCommand`, features, mounts, `postCreateCommand`, and `postStartCommand`. The first connection may take longer while the container is created.
+If the devcontainer does not exist yet, the first SSH connection through
+`<repo-name>-devcontainer` creates it with `@devcontainers/cli up`, including
+the image pull, mounts, `initializeCommand`, `postCreateCommand`, and
+`postStartCommand`. The first connection may take longer while the image is
+pulled and the container is created.
 
 ## Environment variables (host → container)
 
@@ -215,17 +218,18 @@ If an older version left a service-account token in `.env.development` or
 - **Other agent config on the host** — Uncomment the `mounts` entries in
   `devcontainer.json` to bind directories such as `~/.claude` or `~/.gemini`
   into the container so coding agents see your existing settings.
-- **Coding-agent defaults** — Container create/start installs or refreshes
-  Codex and Claude Code by default. OpenCode and Antigravity CLI remain
-  available through `boxdown opencode` and `boxdown antigravity`, but install
-  lazily only when those commands are launched.
+- **Coding-agent defaults** — The published image provides Codex and Claude
+  Code. OpenCode and Antigravity remain available through `boxdown opencode`
+  and `boxdown antigravity`, but install lazily only when those commands run.
 - **Agent CLI cleanup** — After a successful coding-agent CLI install/update,
   Boxdown removes stale agent artifacts: old Codex standalone releases, old
   Claude Code versions, OpenCode installer temp directories, and Antigravity
   staging cache. Codex keeps only the active standalone release by default; set
   `BOXDOWN_CODEX_STANDALONE_RELEASES_KEEP_PREVIOUS` to keep extra rollback
   releases.
-- **1Password / other CLIs** — Follow the commented blocks in `devcontainer.json` and `hooks/post-create.sh` if you need them; keep the image lean by default.
+- **Image migration** — Existing workspaces keep their legacy container until
+  you run `boxdown start --recreate` or `boxdown setup --recreate`. Recreation
+  is the only migration step and does not change the workspace.
 
 ---
 

@@ -16,6 +16,7 @@ export interface WorkspaceMetadata {
   dockerImageId?: string
   dockerImageName?: string
   dockerImageLastSeenAt?: string
+  legacyImageMigrationNotifiedAt?: string
 }
 
 export interface WorkspaceDockerImageMetadata {
@@ -39,7 +40,8 @@ function isWorkspaceMetadata (value: unknown): value is WorkspaceMetadata {
     typeof candidate.lastSeenAt === 'string' &&
     (candidate.dockerImageId === undefined || typeof candidate.dockerImageId === 'string') &&
     (candidate.dockerImageName === undefined || typeof candidate.dockerImageName === 'string') &&
-    (candidate.dockerImageLastSeenAt === undefined || typeof candidate.dockerImageLastSeenAt === 'string')
+    (candidate.dockerImageLastSeenAt === undefined || typeof candidate.dockerImageLastSeenAt === 'string') &&
+    (candidate.legacyImageMigrationNotifiedAt === undefined || typeof candidate.legacyImageMigrationNotifiedAt === 'string')
 }
 
 export function workspaceMetadataPath (context: WorkspaceContext): string {
@@ -87,7 +89,8 @@ export function writeWorkspaceMetadata (context: WorkspaceContext, sshAlias: str
     lastSeenAt: timestamp,
     ...(existingMetadata?.dockerImageId === undefined ? {} : { dockerImageId: existingMetadata.dockerImageId }),
     ...(existingMetadata?.dockerImageName === undefined ? {} : { dockerImageName: existingMetadata.dockerImageName }),
-    ...(existingMetadata?.dockerImageLastSeenAt === undefined ? {} : { dockerImageLastSeenAt: existingMetadata.dockerImageLastSeenAt })
+    ...(existingMetadata?.dockerImageLastSeenAt === undefined ? {} : { dockerImageLastSeenAt: existingMetadata.dockerImageLastSeenAt }),
+    ...(existingMetadata?.legacyImageMigrationNotifiedAt === undefined ? {} : { legacyImageMigrationNotifiedAt: existingMetadata.legacyImageMigrationNotifiedAt })
   }
 
   mkdirSync(context.workspaceDataDir, { recursive: true })
@@ -116,6 +119,23 @@ export function recordWorkspaceDockerImage (
   mkdirSync(context.workspaceDataDir, { recursive: true })
   writeFileSync(workspaceMetadataPath(context), `${JSON.stringify(nextMetadata, null, 2)}\n`)
   return nextMetadata
+}
+
+export function recordLegacyImageMigrationNotice (context: WorkspaceContext, now = new Date()): boolean {
+  const metadata = readWorkspaceMetadata(context)
+
+  if (metadata === undefined || metadata.legacyImageMigrationNotifiedAt !== undefined) {
+    return false
+  }
+
+  const nextMetadata: WorkspaceMetadata = {
+    ...metadata,
+    legacyImageMigrationNotifiedAt: now.toISOString()
+  }
+
+  mkdirSync(context.workspaceDataDir, { recursive: true })
+  writeFileSync(workspaceMetadataPath(context), `${JSON.stringify(nextMetadata, null, 2)}\n`)
+  return true
 }
 
 export function listWorkspaceMetadata (dataRoot: string): WorkspaceMetadata[] {

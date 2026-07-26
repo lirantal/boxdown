@@ -1,37 +1,24 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "enabledManagers": [
-    "devcontainer"
+    "dockerfile"
   ],
-  "devcontainer": {
+  "dockerfile": {
     "managerFilePatterns": [
-      "/^assets\\/devcontainer\\/devcontainer\\.json$/"
+      "/^assets\\/image\\/Dockerfile$/"
     ]
   },
   "packageRules": [
     {
-      "description": "Keep digest-pinned Dev Container Features outside Renovate",
+      "description": "Refresh the Boxdown Node 24 image base digest monthly",
       "matchManagers": [
-        "devcontainer"
-      ],
-      "matchDepTypes": [
-        "feature"
-      ],
-      "enabled": false
-    },
-    {
-      "description": "Refresh the Boxdown Node 24 devcontainer image digest monthly",
-      "matchManagers": [
-        "devcontainer"
-      ],
-      "matchDepTypes": [
-        "image"
+        "dockerfile"
       ],
       "matchPackageNames": [
         "node"
       ],
       "matchFileNames": [
-        "assets/devcontainer/devcontainer.json"
+        "assets/image/Dockerfile"
       ],
       "versioning": "exact",
       "pinDigests": true,

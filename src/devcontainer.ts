@@ -7,7 +7,7 @@ import { resolveDevcontainerCli } from './devcontainer-cli.ts'
 import { configureWorkspaceGithubGitAuth } from './github-git-auth.ts'
 import { reportGitSigningPlan, resolveGitSigningPlan } from './git-signing.ts'
 import type { WorkspaceCommandLogger } from './logging.ts'
-import { recordWorkspaceDockerImage } from './metadata.ts'
+import { recordLegacyImageMigrationNotice, recordWorkspaceDockerImage } from './metadata.ts'
 import type { WorkspaceContext } from './paths.ts'
 import { runBuffered, runInteractive } from './process.ts'
 import { assertProgressCommandSucceeded, type ProgressReporter, runProgressCommand } from './progress.ts'
@@ -44,6 +44,9 @@ export interface DockerImageInfo {
   name?: string
 }
 
+export function isPublishedBoxdownImage (image?: DockerImageInfo): boolean {
+  return /^ghcr\.io\/lirantal\/boxdown:\S+$/.test(image?.name ?? '')
+}
 
 function devcontainerWorkspaceArgs (context: WorkspaceContext): string[] {
   return [
@@ -189,6 +192,11 @@ async function recordContainerImageIfPresent (context: WorkspaceContext, contain
 
     if (image !== undefined) {
       recordWorkspaceDockerImage(context, image)
+
+      if (!isPublishedBoxdownImage(image) && recordLegacyImageMigrationNotice(context)) {
+        process.stderr.write("This workspace uses Boxdown's legacy locally-built devcontainer image.\n")
+        process.stderr.write('Run `boxdown start --recreate` to switch to the published Boxdown image.\n')
+      }
     }
   } catch {
     process.stderr.write(`Warning: could not record devcontainer image metadata for ${containerId}.\n`)
@@ -610,9 +618,11 @@ export async function ensureContainerCodingAgentCli (
   }
 }
 
-export async function runSshdProxy (containerId: string, options: { logger?: WorkspaceCommandLogger } = {}): Promise<number> {
-  return runInteractive('docker', [
+export function sshdProxyDockerArgs (containerId: string): string[] {
+  return [
     'exec',
+    '--user',
+    'root',
     '-i',
     containerId,
     '/usr/sbin/sshd',
@@ -631,7 +641,11 @@ export async function runSshdProxy (containerId: string, options: { logger?: Wor
     'AllowStreamLocalForwarding=yes',
     '-o',
     'PermitTTY=yes'
-  ], { logger: options.logger })
+  ]
+}
+
+export async function runSshdProxy (containerId: string, options: { logger?: WorkspaceCommandLogger } = {}): Promise<number> {
+  return runInteractive('docker', sshdProxyDockerArgs(containerId), { logger: options.logger })
 }
 
 export function sshTunnelArgs (alias: string, ports: TunnelPortForward[], options: SshTunnelOptions = {}): string[] {
