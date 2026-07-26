@@ -138,6 +138,15 @@ test('uses the pinned Node image and has no mutable installer or lazy tools', ()
   assert.doesNotMatch(dockerfile, /python3|pipx|\buv\b|opencode|antigravity/)
 })
 
+test('creates the Claude credential mount parent for the node user', () => {
+  const dockerfile = readFileSync(dockerfilePath, 'utf8')
+
+  assert.match(
+    dockerfile,
+    /install -d -m 0700 -o node -g node \/home\/node\/\.claude/
+  )
+})
+
 test('runs a non-root lifecycle smoke test in the built image', () => {
   const lifecycleSmoke = readFileSync(imageLifecycleSmokePath, 'utf8')
   const ciWorkflow = readFileSync(ciWorkflowPath, 'utf8')

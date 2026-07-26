@@ -43,4 +43,6 @@ RUN chmod 0755 \
         "$TARGETARCH" \
         /opt/boxdown/image-tools/tools.lock.json
 
+RUN install -d -m 0700 -o node -g node /home/node/.claude
+
 USER node
