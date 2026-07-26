@@ -34,6 +34,10 @@ jobs:
       - name: Check release state
         id: release-state
         shell: bash
+        env:
+          # `npm view` is used only for registry metadata. It must not reject
+          # this pnpm-managed project through npm's devEngines validation.
+          NPM_CONFIG_FORCE: true
         run: |
           package_name="$(node -p "require('./package.json').name")"
           version="$(node -p "require('./package.json').version")"
