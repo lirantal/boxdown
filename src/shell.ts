@@ -12,11 +12,18 @@ export function sshConfigQuote (value: string): string {
 
 export const DEFAULT_TTY_MAX_COLUMNS = 120
 
-export function interactiveShellEnvArgs (env: NodeJS.ProcessEnv = process.env): string[] {
+export interface InteractiveShellEnvOptions {
+  defaultTtyNormalization?: '0' | '1'
+}
+
+export function interactiveShellEnvArgs (
+  env: NodeJS.ProcessEnv = process.env,
+  options: InteractiveShellEnvOptions = {}
+): string[] {
   return [
     `TERM=${env.TERM ?? 'xterm-256color'}`,
     'COLORTERM=truecolor',
-    `BOXDOWN_TTY_NORMALIZE=${env.BOXDOWN_TTY_NORMALIZE ?? '1'}`,
+    `BOXDOWN_TTY_NORMALIZE=${env.BOXDOWN_TTY_NORMALIZE ?? options.defaultTtyNormalization ?? '1'}`,
     `BOXDOWN_TTY_MAX_COLUMNS=${env.BOXDOWN_TTY_MAX_COLUMNS ?? String(DEFAULT_TTY_MAX_COLUMNS)}`
   ]
 }

@@ -3477,6 +3477,35 @@ describe('coding-agent command mapping', () => {
     assert.match(commandScript, /exec "\$@"/)
     assert.deepStrictEqual(args.slice(-3), ['boxdown-agent', 'agy', '--help'])
   })
+
+  test('disables TTY normalization by default for direct Claude launches only', () => {
+    const workspace = tempDir('claude-tty-normalization-workspace')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('claude-tty-normalization-cache'),
+        BOXDOWN_DATA_HOME: tempDir('claude-tty-normalization-data')
+      },
+      assetsDevcontainerDir
+    })
+    const previous = process.env.BOXDOWN_TTY_NORMALIZE
+
+    try {
+      delete process.env.BOXDOWN_TTY_NORMALIZE
+
+      assert.ok(codingAgentDevcontainerExecArgs(context, 'claude').includes('BOXDOWN_TTY_NORMALIZE=0'))
+      assert.ok(codingAgentDevcontainerExecArgs(context, 'codex').includes('BOXDOWN_TTY_NORMALIZE=1'))
+
+      process.env.BOXDOWN_TTY_NORMALIZE = '1'
+      assert.ok(codingAgentDevcontainerExecArgs(context, 'claude').includes('BOXDOWN_TTY_NORMALIZE=1'))
+    } finally {
+      if (previous === undefined) {
+        delete process.env.BOXDOWN_TTY_NORMALIZE
+      } else {
+        process.env.BOXDOWN_TTY_NORMALIZE = previous
+      }
+    }
+  })
 })
 
 describe('SSH proxy container execution', () => {
@@ -6477,6 +6506,31 @@ describe('interactive shell setup', () => {
       'COLORTERM=truecolor',
       'BOXDOWN_TTY_NORMALIZE=0',
       'BOXDOWN_TTY_MAX_COLUMNS=180'
+    ])
+  })
+
+  test('uses the Claude-specific TTY normalization default when requested', () => {
+    assert.deepStrictEqual(interactiveShellEnvArgs({ TERM: 'xterm-256color' }, {
+      defaultTtyNormalization: '0'
+    }), [
+      'TERM=xterm-256color',
+      'COLORTERM=truecolor',
+      'BOXDOWN_TTY_NORMALIZE=0',
+      `BOXDOWN_TTY_MAX_COLUMNS=${DEFAULT_TTY_MAX_COLUMNS}`
+    ])
+  })
+
+  test('allows an explicit TTY normalization setting to override the Claude default', () => {
+    assert.deepStrictEqual(interactiveShellEnvArgs({
+      TERM: 'xterm-256color',
+      BOXDOWN_TTY_NORMALIZE: '1'
+    }, {
+      defaultTtyNormalization: '0'
+    }), [
+      'TERM=xterm-256color',
+      'COLORTERM=truecolor',
+      'BOXDOWN_TTY_NORMALIZE=1',
+      `BOXDOWN_TTY_MAX_COLUMNS=${DEFAULT_TTY_MAX_COLUMNS}`
     ])
   })
 

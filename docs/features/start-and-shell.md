@@ -86,9 +86,17 @@ startup output.
 ## Terminal Width
 
 Some terminal UIs behave poorly when a host terminal reports an extremely wide
-PTY, especially from embedded terminals. Before opening the shell, Boxdown
-clamps interactive terminal width to 120 columns when the reported width is
-larger.
+PTY, especially from embedded terminals. Before opening the shell or a
+non-Claude coding-agent command, Boxdown clamps interactive terminal width to
+120 columns when the reported width is larger.
+
+Claude Code starts with terminal-width normalization disabled so its TUI can
+use the host terminal dimensions. Set `BOXDOWN_TTY_NORMALIZE=1` explicitly if
+you want the 120-column clamp for Claude:
+
+```sh
+BOXDOWN_TTY_NORMALIZE=1 boxdown claude
+```
 
 Before starting the interactive shell or a coding-agent command, Boxdown also
 checks whether the container recognizes the forwarded `TERM` value. If the
@@ -103,7 +111,7 @@ BOXDOWN_TTY_MAX_COLUMNS=180 boxdown start
 ```
 
 Disable the normalization entirely when you want the container shell to use the
-host terminal size unchanged:
+host terminal size unchanged. This is the default for `boxdown claude`:
 
 ```sh
 BOXDOWN_TTY_NORMALIZE=0 boxdown start

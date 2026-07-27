@@ -465,7 +465,9 @@ export function codingAgentDevcontainerExecArgs (context: WorkspaceContext, agen
     ...devcontainerWorkspaceArgs(context),
     '--',
     'env',
-    ...interactiveShellEnvArgs(),
+    ...interactiveShellEnvArgs(process.env, {
+      defaultTtyNormalization: agent === 'claude' ? '0' : '1'
+    }),
     'bash',
     '-c',
     interactiveCommandScript(),
