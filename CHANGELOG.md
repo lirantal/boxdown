@@ -1,5 +1,11 @@
 # boxdown
 
+## 2.1.1
+
+### Patch Changes
+
+- [`5593506`](https://github.com/lirantal/boxdown/commit/559350650be589c19433b4ba2b6a4b5fe9a218e6) Thanks [@lirantal](https://github.com/lirantal)! - feat: fixes for claude tui (disabling our 120 chars), adding FAQ to the README and rephrasing setup for ssh config install
+
 ## 2.1.0
 
 ### Minor Changes
