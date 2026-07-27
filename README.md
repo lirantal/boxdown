@@ -85,6 +85,15 @@ until you explicitly opt in to a Python-based installation. Existing
 workspaces keep their current container until you run `boxdown start --recreate`
 or `boxdown setup --recreate`.
 
+### FAQ
+
+#### Why does Boxdown say my workspace uses a “legacy locally-built Dev Container image”?
+
+The workspace was created by an older Boxdown version that built its Dev
+Container image locally. It remains usable and Boxdown does not change it
+automatically. Run `boxdown setup --recreate` or `boxdown start --recreate` to
+replace it with Boxdown's current published image.
+
 ## What Boxdown manages
 
 ### Outside your repository
