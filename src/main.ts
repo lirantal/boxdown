@@ -956,14 +956,14 @@ async function resolveSshInstallTargets (
   }
 
   const result = await promptMultiSelect<SshConfigInstallTarget>({
-    title: 'Install optional SSH targets?',
+    title: 'Add this project to an AI coding app? (Select any)',
     choices: SSH_INSTALL_TARGETS.map((target) => ({
       value: target.value,
       label: target.label,
       description: target.description
     })),
-    skipLabel: 'Skip optional targets',
-    summaryLabel: 'Optional SSH targets',
+    skipLabel: 'Not now — Finish setup without adding the project to an app.',
+    summaryLabel: 'Selected apps',
     input: options.promptInput,
     output: options.promptOutput,
     env: options.env

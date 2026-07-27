@@ -124,16 +124,16 @@ function uninstallClaudeTarget (context: WorkspaceContext, alias: string, option
 export const SSH_INSTALL_TARGETS: readonly SshInstallTargetDefinition[] = [
   {
     value: 'codex',
-    label: 'Codex',
-    description: 'Register this SSH alias as a Codex app remote project.',
+    label: 'ChatGPT app',
+    description: 'Connect ChatGPT to this project.',
     flag: '--target codex',
     install: installCodexTarget,
     uninstall: uninstallCodexTarget
   },
   {
     value: 'claude',
-    label: 'Claude',
-    description: 'Register this SSH alias as a Claude app SSH remote.',
+    label: 'Claude app',
+    description: 'Connect Claude to this project.',
     flag: '--target claude',
     install: installClaudeTarget,
     uninstall: uninstallClaudeTarget

@@ -2398,7 +2398,7 @@ describe('CLI execution', () => {
     const workspace = tempDir('cli-prompt-codex-workspace')
     const sshConfigPath = join(tempDir('cli-prompt-codex-ssh'), 'config')
     const codexConfigPath = join(tempDir('cli-prompt-codex-app'), 'config.json')
-    const { input, output } = fakePromptStreams()
+    const { input, output, outputText } = fakePromptStreams()
 
     const code = await withProcessEnv({
       HOME: tempDir('cli-prompt-codex-home'),
@@ -2421,10 +2421,15 @@ describe('CLI execution', () => {
       return runPromise
     })
     const codexConfig = parseCodexAppConfig(JSON.parse(readFileSync(codexConfigPath, 'utf8')))
+    const promptOutput = outputText().replace(/\u001B\[[0-?]*[ -/]*[@-~]/g, '')
 
     assert.strictEqual(code, 0)
     assert.strictEqual(existsSync(sshConfigPath), true)
     assert.strictEqual(codexConfig.remoteConnections[0]?.sshAlias, defaultSshAlias(realpathSync(workspace).split('/').at(-1) ?? 'workspace'))
+    assert.match(promptOutput, /Add this project to an AI coding app\? \(Select any\)/)
+    assert.match(promptOutput, /ChatGPT app - Connect ChatGPT to this project\./)
+    assert.match(promptOutput, /Claude app - Connect Claude to this project\./)
+    assert.match(promptOutput, /Not now — Finish setup without adding the project to an app\./)
   })
 
   test('cancels prompted ssh install without installing', async () => {
