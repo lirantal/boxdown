@@ -14,7 +14,7 @@ import { canonicalCodexRemotePathForWorkspace, codexDiscoveredRemoteHostId, code
 import { codingAgentBinary, codingAgentFromCommand, type CodingAgentCli } from '../src/coding-agents.ts'
 import { AGENT_PROFILES, isAgentProfile, resolveAgentProfile } from '../src/agent-profile.ts'
 import { color, formatPromptEnd, formatPromptTitle, promptRail, selectedMark } from '../src/cli-style.ts'
-import { buildGeneratedDevcontainerConfig, publishContainerPortFromConfig } from '../src/config.ts'
+import { buildGeneratedDevcontainerConfig, publishContainerPortFromConfig, sourcePathIsInside } from '../src/config.ts'
 import { BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_AGENTS_DIR, BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CLAUDE_CONFIG_PATH, BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CLAUDE_CREDENTIALS_PATH, BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CLAUDE_DIR, BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CODEX_AUTH_PATH, BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CODEX_DIR, BOXDOWN_CONTAINER_AGENTS_DIR, BOXDOWN_CONTAINER_CLAUDE_CONFIG_PATH, BOXDOWN_CONTAINER_CLAUDE_CREDENTIALS_PATH, BOXDOWN_CONTAINER_CLAUDE_DIR, BOXDOWN_CONTAINER_CODEX_AUTH_PATH, BOXDOWN_CONTAINER_CODEX_DIR, BOXDOWN_CONTAINER_GITCONFIG_PATH, BOXDOWN_CONTAINER_HOST_GITCONFIG_DIR, BOXDOWN_CONTAINER_SECRET_ENV_BOOTSTRAP, BOXDOWN_CONTAINER_SECRET_ENV_DIR, DEVCONTAINER_CLI_VERSION } from '../src/constants.ts'
 import { codingAgentDevcontainerExecArgs, isPublishedBoxdownImage, parseDockerInspectImage, sshdProxyDockerArgs, sshTunnelArgs, startDevcontainer } from '../src/devcontainer.ts'
 import { resolveDevcontainerCli } from '../src/devcontainer-cli.ts'
@@ -6078,6 +6078,26 @@ describe('devcontainer config generation', () => {
     assert.strictEqual(defaults.hostClaudeDir, join(home, '.claude'))
     assert.strictEqual(defaults.hostClaudeConfigPath, join(home, '.claude.json'))
     assert.strictEqual(buildGeneratedDevcontainerConfig(defaults, undefined, 'auth').containerEnv?.BOXDOWN_AGENT_PROFILE_SOURCES, '')
+  })
+
+  test('does not separately stage Claude config nested in configured roots', () => {
+    const home = tempDir('agent-profile-nested-claude-home')
+    const claudeDir = join(home, 'configured-claude')
+    mkdirSync(claudeDir)
+    writeFileSync(join(claudeDir, '.claude.json'), '{}\n')
+    const context = createWorkspaceContext({
+      workspace: tempDir('agent-profile-nested-claude-workspace'),
+      env: { HOME: home, CLAUDE_CONFIG_DIR: `${claudeDir}/`, BOXDOWN_CACHE_HOME: tempDir('agent-profile-nested-claude-cache'), BOXDOWN_DATA_HOME: tempDir('agent-profile-nested-claude-data') },
+      platform: 'linux',
+      assetsDevcontainerDir
+    })
+    const config = buildGeneratedDevcontainerConfig(context, undefined, 'full')
+
+    assert.ok(config.mounts?.some(mount => mount.includes(`source=${context.hostClaudeDir},target=${BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CLAUDE_DIR},readonly`)))
+    assert.ok(!config.mounts?.some(mount => mount.includes(`target=${BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CLAUDE_CONFIG_PATH},readonly`)))
+    assert.strictEqual(sourcePathIsInside('C:\\custom\\claude\\.claude.json', 'C:\\custom\\claude'), true)
+    assert.strictEqual(sourcePathIsInside('C:\\custom\\claude-other\\.claude.json', 'C:\\custom\\claude'), false)
+    assert.strictEqual(sourcePathIsInside('C:\\custom\\claude\\..\\outside.json', 'C:\\custom\\claude'), false)
   })
 
   test('custom profile mounts retain ownership while discovered sources remain available', () => {

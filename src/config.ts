@@ -1,5 +1,5 @@
 import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, relative, win32 } from 'node:path'
 
 import {
   BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_AGENTS_DIR,
@@ -85,8 +85,17 @@ function hasMountConflict (mounts: string[], destination: string): boolean {
   return mounts.some(mount => mountConflictsWithDestination(mount, destination))
 }
 
-function sourcePathIsInside (path: string, directory: string): boolean {
-  return path === directory || path.startsWith(`${directory}/`)
+export function sourcePathIsInside (path: string, directory: string): boolean {
+  const pathApi = path.includes('\\') || directory.includes('\\')
+    ? win32
+    : { relative, isAbsolute: (candidate: string) => candidate.startsWith('/'), sep: '/' }
+  const pathRelative = pathApi.relative(directory, path)
+
+  return pathRelative === '' || (
+    pathRelative !== '..' &&
+    !pathRelative.startsWith(`..${pathApi.sep}`) &&
+    !pathApi.isAbsolute(pathRelative)
+  )
 }
 
 interface AgentProfileSource {
