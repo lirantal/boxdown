@@ -90,7 +90,7 @@ synchronization from the container to the host.
 and available supported file-backed Claude credentials. On Linux and WSL, the
 Claude source is `~/.claude/.credentials.json`, or
 `$CLAUDE_CONFIG_DIR/.credentials.json`; on Windows it is
-`%USERPROFILE%\.claude.credentials.json`, or the equivalent configured path.
+`%USERPROFILE%\.claude\.credentials.json`, or the equivalent configured path.
 The bootstrap copies those credentials into the container-local home, so Claude
 can refresh its copy without changing the host credential file. Missing or
 unreadable credential sources are non-fatal.

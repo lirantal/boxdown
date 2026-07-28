@@ -978,6 +978,8 @@ test('documents agent profile tiers', () => {
   assert.match(startDocs, /--agent-profile <tier>/)
   assert.match(stateDocs, /read-only staging.*container-local writable cop(?:y|ies)/is)
   assert.match(stateDocs, /no reverse\s+synchronization/is)
+  assert.ok(stateDocs.includes(String.raw`%USERPROFILE%\.claude\.credentials.json`))
+  assert.ok(!stateDocs.includes(String.raw`%USERPROFILE%\.claude.credentials.json`))
   assert.match(lifecycleDocs, /stop.*preserves.*profile/is)
   assert.match(lifecycleDocs, /down.*recreate.*discard.*profile/is)
   assert.match(architecture, /metadata selection\s*->\s*generated staging intent\s*->\s*container applied marker/)
@@ -7440,6 +7442,190 @@ describe('devcontainer config generation', () => {
       assetsDevcontainerDir: boundaryAssetsDir
     })
     assert.ok(buildGeneratedDevcontainerConfig(boundaryContext, undefined, 'full').mounts?.some(mount => mount.includes(`target=${BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CODEX_DIR},readonly`)))
+  })
+
+  test('string mount aliases and normalized POSIX destinations consistently control profile staging and status', () => {
+    const home = tempDir('normalized-string-profile-home')
+    mkdirSync(join(home, '.agents'))
+    mkdirSync(join(home, '.codex'))
+    mkdirSync(join(home, '.claude'))
+    writeFileSync(join(home, '.claude.json'), '{}\n')
+
+    const cases = [
+      {
+        name: 'target exact',
+        mount: 'type=bind,source=/custom/codex,target=/home/node/.codex,readonly',
+        ownsCodex: true
+      },
+      {
+        name: 'dst normalized parent',
+        mount: 'type=bind,source=/custom/home,dst=/home/node/.codex/..,readonly',
+        ownsCodex: true
+      },
+      {
+        name: 'destination child',
+        mount: 'type=bind,source=/custom/cache,destination=/home/node/.codex/cache,readonly',
+        ownsCodex: true
+      },
+      {
+        name: 'target trailing slash',
+        mount: 'type=bind,source=/custom/codex,target=/home/node/.codex/,readonly',
+        ownsCodex: true
+      },
+      {
+        name: 'dst double slash',
+        mount: 'type=bind,source=/custom/codex,dst=/home//node/.codex,readonly',
+        ownsCodex: true
+      },
+      {
+        name: 'destination dot and dotdot',
+        mount: 'type=bind,source=/custom/codex,destination=/home/node/./.codex/cache/..,readonly',
+        ownsCodex: true
+      },
+      {
+        name: 'sibling',
+        mount: 'type=bind,source=/custom/codex-other,target=/home/node/.codex-other,readonly',
+        ownsCodex: false
+      },
+      {
+        name: 'unrelated',
+        mount: 'type=bind,source=/custom/codex,dst=/var/lib/codex,readonly',
+        ownsCodex: false
+      },
+      {
+        name: 'relative destination',
+        mount: 'type=bind,source=/custom/codex,destination=home/node/.codex,readonly',
+        ownsCodex: false
+      },
+      {
+        name: 'any valid alias fails closed',
+        mount: 'type=bind,source=/custom/codex,target=/var/lib/codex,dst=/home/node/.codex,readonly',
+        ownsCodex: true
+      }
+    ] as const
+
+    for (const entry of cases) {
+      const assets = tempDir(`normalized-string-profile-assets-${entry.name.replaceAll(' ', '-')}`)
+      writeFileSync(join(assets, 'devcontainer.json'), `${JSON.stringify({ mounts: [entry.mount] })}\n`)
+      const context = createWorkspaceContext({
+        workspace: tempDir(`normalized-string-profile-workspace-${entry.name.replaceAll(' ', '-')}`),
+        env: {
+          HOME: home,
+          BOXDOWN_CACHE_HOME: tempDir(`normalized-string-profile-cache-${entry.name.replaceAll(' ', '-')}`),
+          BOXDOWN_DATA_HOME: tempDir(`normalized-string-profile-data-${entry.name.replaceAll(' ', '-')}`)
+        },
+        platform: 'linux',
+        assetsDevcontainerDir: assets
+      })
+
+      const config = buildGeneratedDevcontainerConfig(context, undefined, 'full')
+      const hasCodexBootstrapInput = config.mounts?.some(mount =>
+        typeof mount === 'string' &&
+        mount.includes(`target=${BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CODEX_DIR},`)
+      ) ?? false
+
+      assert.ok(config.mounts?.includes(entry.mount), `${entry.name}: preserve original mount`)
+      assert.strictEqual(
+        hasCodexBootstrapInput,
+        !entry.ownsCodex,
+        `${entry.name}: custom ownership must suppress the corresponding bootstrap input`
+      )
+      assert.match(config.containerEnv?.BOXDOWN_AGENT_PROFILE_SOURCES ?? '', /(?:^|,)codex-home(?:,|$)/)
+
+      mkdirSync(context.workspaceCacheDir, { recursive: true })
+      writeFileSync(context.generatedConfigPath, `${JSON.stringify(config, null, 2)}\n`)
+      const status = createStatusInfo(context, 'normalized-string-profile', {
+        id: 'normalized-string-profile-container',
+        state: 'running'
+      }, existsSync, {
+        sshConfigPath: join(tempDir('normalized-string-profile-ssh'), 'config'),
+        agentProfileSelection: resolveAgentProfile(undefined, 'full'),
+        containerAgentProfile: 'full'
+      })
+
+      assert.strictEqual(
+        status.agentProfile.sources.codexHome,
+        entry.ownsCodex ? 'custom' : 'available',
+        `${entry.name}: status must match generation`
+      )
+      assert.strictEqual(
+        status.agentProfile.customDestinations.includes(BOXDOWN_CONTAINER_CODEX_DIR),
+        entry.ownsCodex,
+        `${entry.name}: normalized custom destination`
+      )
+    }
+  })
+
+  test('structured mounts are preserved unchanged and use normalized dst ownership in generation and status', () => {
+    const home = tempDir('structured-profile-home')
+    mkdirSync(join(home, '.agents'))
+    mkdirSync(join(home, '.codex'))
+    mkdirSync(join(home, '.claude'))
+    writeFileSync(join(home, '.claude.json'), '{}\n')
+
+    const cases = [
+      { name: 'exact', dst: '/home//node/.codex/', ownsCodex: true },
+      { name: 'parent', dst: '/home/node/.codex/..', ownsCodex: true },
+      { name: 'child', dst: '/home/node/.codex/./cache', ownsCodex: true },
+      { name: 'sibling', dst: '/home/node/.codex-other', ownsCodex: false },
+      { name: 'unrelated', dst: '/var/lib/codex', ownsCodex: false }
+    ] as const
+
+    for (const entry of cases) {
+      const mount = {
+        type: 'bind',
+        src: `/custom/${entry.name}`,
+        dst: entry.dst,
+        consistency: 'cached',
+        arbitrary: {
+          keep: true,
+          labels: ['opaque', entry.name]
+        }
+      }
+      const assets = tempDir(`structured-profile-assets-${entry.name}`)
+      writeFileSync(join(assets, 'devcontainer.json'), `${JSON.stringify({ mounts: [mount] })}\n`)
+      const context = createWorkspaceContext({
+        workspace: tempDir(`structured-profile-workspace-${entry.name}`),
+        env: {
+          HOME: home,
+          BOXDOWN_CACHE_HOME: tempDir(`structured-profile-cache-${entry.name}`),
+          BOXDOWN_DATA_HOME: tempDir(`structured-profile-data-${entry.name}`)
+        },
+        platform: 'linux',
+        assetsDevcontainerDir: assets
+      })
+
+      const config = buildGeneratedDevcontainerConfig(context, undefined, 'full')
+      const hasCodexBootstrapInput = config.mounts?.some(candidate =>
+        typeof candidate === 'string' &&
+        candidate.includes(`target=${BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CODEX_DIR},`)
+      ) ?? false
+
+      assert.deepStrictEqual(config.mounts?.[0], mount, `${entry.name}: preserve every structured field`)
+      assert.strictEqual(hasCodexBootstrapInput, !entry.ownsCodex, `${entry.name}: staging decision`)
+
+      mkdirSync(context.workspaceCacheDir, { recursive: true })
+      writeFileSync(context.generatedConfigPath, `${JSON.stringify(config, null, 2)}\n`)
+      const status = createStatusInfo(context, 'structured-profile', {
+        id: 'structured-profile-container',
+        state: 'running'
+      }, existsSync, {
+        sshConfigPath: join(tempDir('structured-profile-ssh'), 'config'),
+        agentProfileSelection: resolveAgentProfile(undefined, 'full'),
+        containerAgentProfile: 'full'
+      })
+
+      assert.strictEqual(
+        status.agentProfile.sources.codexHome,
+        entry.ownsCodex ? 'custom' : 'available',
+        `${entry.name}: status must classify the same normalized dst`
+      )
+      assert.strictEqual(
+        status.agentProfile.customDestinations.includes(BOXDOWN_CONTAINER_CODEX_DIR),
+        entry.ownsCodex,
+        `${entry.name}: canonical destination reporting`
+      )
+    }
   })
 
   test('parses JSONC without stripping URLs inside strings', () => {

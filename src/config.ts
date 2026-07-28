@@ -23,6 +23,12 @@ import {
   BOXDOWN_CONTAINER_SSH_PUBLIC_KEY_PATH
 } from './constants.ts'
 import { DEFAULT_AGENT_PROFILE, isAgentProfile, type AgentProfile } from './agent-profile.ts'
+import {
+  isDevcontainerMount,
+  mountConflictsWithDestination,
+  mountTargetsDestination,
+  type DevcontainerMount
+} from './devcontainer-mount.ts'
 import { parseJsonc } from './jsonc.ts'
 import type { WorkspaceContext } from './paths.ts'
 import type { GitSigningPlan } from './git-signing.ts'
@@ -30,7 +36,7 @@ import { shellQuote } from './shell.ts'
 
 export interface DevcontainerConfig {
   name?: string
-  mounts?: string[]
+  mounts?: DevcontainerMount[]
   containerEnv?: Record<string, string>
   runArgs?: string[]
   initializeCommand?: string
@@ -60,24 +66,7 @@ function fileExists (path: string): boolean {
   }
 }
 
-function mountHasTarget (mount: string, target: string): boolean {
-  return mount.split(',').some((part) => part.trim() === `target=${target}`)
-}
-
-function mountTarget (mount: string): string | undefined {
-  return mount.split(',').map(part => part.trim()).find(part => part.startsWith('target='))?.slice('target='.length)
-}
-
-function mountConflictsWithDestination (mount: string, destination: string): boolean {
-  const target = mountTarget(mount)
-  return target !== undefined && (
-    target === destination ||
-    target.startsWith(`${destination}/`) ||
-    destination.startsWith(`${target}/`)
-  )
-}
-
-function hasMountConflict (mounts: string[], destination: string): boolean {
+function hasMountConflict (mounts: DevcontainerMount[], destination: string): boolean {
   return mounts.some(mount => mountConflictsWithDestination(mount, destination))
 }
 
@@ -165,8 +154,8 @@ export function buildGeneratedDevcontainerConfig (context: WorkspaceContext, sig
   const baseConfig = readBaseDevcontainerConfig(context.assetsDevcontainerDir)
   const mounts = Array.isArray(baseConfig.mounts)
     ? baseConfig.mounts
-      .filter((mount): mount is string => typeof mount === 'string')
-      .filter((mount) => !mountHasTarget(mount, BOXDOWN_CONTAINER_GITCONFIG_PATH))
+      .filter(isDevcontainerMount)
+      .filter((mount) => !mountTargetsDestination(mount, BOXDOWN_CONTAINER_GITCONFIG_PATH))
     : []
 
   const boxdownMounts = [

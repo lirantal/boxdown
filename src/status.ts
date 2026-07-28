@@ -16,6 +16,11 @@ import {
   BOXDOWN_CONTAINER_CODEX_DIR
 } from './constants.ts'
 import { isAgentProfile, resolveAgentProfile, type AgentProfile, type AgentProfileSelection, type AgentProfileSelectionSource } from './agent-profile.ts'
+import {
+  classifyPosixPath,
+  normalizedMountDestinations,
+  posixPathsConflict
+} from './devcontainer-mount.ts'
 import { parseJsonc } from './jsonc.ts'
 import type { ClaudeCredentialsSupport, WorkspaceContext } from './paths.ts'
 import { buildSshConfigBlock, defaultSshConfigPath } from './ssh-config.ts'
@@ -193,31 +198,19 @@ interface GeneratedAgentProfileInfo {
   customDestinations: string[]
 }
 
-function mountTarget (mount: string): string | undefined {
-  const target = mount
-    .split(',')
-    .map(part => part.trim())
-    .find(part => part.startsWith('target='))
-    ?.slice('target='.length)
-
-  return target?.startsWith('/') === true ? target : undefined
-}
-
-function pathsConflict (left: string, right: string): boolean {
-  return left === right || left.startsWith(`${right}/`) || right.startsWith(`${left}/`)
-}
-
 function normalizedCustomDestinations (targets: string[]): string[] {
   const destinations = new Set<string>()
 
   for (const target of targets) {
-    if (canonicalAgentProfileDestinations.includes(target as typeof canonicalAgentProfileDestinations[number])) {
-      destinations.add(target)
+    const exactDestination = canonicalAgentProfileDestinations
+      .find(destination => classifyPosixPath(target, destination) === 'exact')
+    if (exactDestination !== undefined) {
+      destinations.add(exactDestination)
       continue
     }
 
     const containingDestinations = canonicalAgentProfileDestinations
-      .filter(destination => target.startsWith(`${destination}/`))
+      .filter(destination => classifyPosixPath(target, destination) === 'descendant')
       .sort((left, right) => right.length - left.length)
 
     if (containingDestinations[0] !== undefined) {
@@ -226,11 +219,11 @@ function normalizedCustomDestinations (targets: string[]): string[] {
     }
 
     const containedDestinations = canonicalAgentProfileDestinations
-      .filter(destination => destination.startsWith(`${target}/`))
+      .filter(destination => classifyPosixPath(target, destination) === 'ancestor')
       .filter(destination => !canonicalAgentProfileDestinations.some(parent =>
         parent !== destination &&
-        destination.startsWith(`${parent}/`) &&
-        parent.startsWith(`${target}/`)
+        classifyPosixPath(destination, parent) === 'descendant' &&
+        classifyPosixPath(target, parent) === 'ancestor'
       ))
 
     for (const destination of containedDestinations) {
@@ -280,9 +273,7 @@ function inspectGeneratedAgentProfile (
 
   const targets = Array.isArray(config.mounts)
     ? config.mounts
-      .filter((mount): mount is string => typeof mount === 'string')
-      .map(mountTarget)
-      .filter((target): target is string => target !== undefined)
+      .flatMap(normalizedMountDestinations)
     : []
 
   return {
@@ -295,7 +286,7 @@ function inspectGeneratedAgentProfile (
 }
 
 function sourceIsCustom (generated: GeneratedAgentProfileInfo, destination: string): boolean {
-  return [...generated.mountTargets].some(target => pathsConflict(target, destination))
+  return [...generated.mountTargets].some(target => posixPathsConflict(target, destination))
 }
 
 function generatedSourceState (
