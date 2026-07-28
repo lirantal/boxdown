@@ -156,6 +156,7 @@ export async function inspectContainerAgentProfile (
     '/opt/boxdown/state/agent-profile'
   ], {
     logger: options.logger,
+    logOutput: false,
     mirrorStdout: false,
     mirrorStderr: false
   })
@@ -402,12 +403,23 @@ export async function startDevcontainer (context: WorkspaceContext, options: Sta
         log(`Using running devcontainer for: ${context.workspaceFolder}`, proxyMode)
       } else if (hasStartStep) {
         progress.startStep('devcontainer-start')
-        progress.completeStep('devcontainer-start')
       } else {
         progress.item('Using running devcontainer')
         progress.detail(runningContainerId)
       }
-      await assertContainerAgentProfile(runningContainerId, agentProfile, options.logger)
+
+      try {
+        await assertContainerAgentProfile(runningContainerId, agentProfile, options.logger)
+        if (hasStartStep) {
+          progress?.completeStep('devcontainer-start')
+        }
+      } catch (error) {
+        if (hasStartStep) {
+          progress?.failStep('devcontainer-start')
+        }
+        throw error
+      }
+
       await recordContainerImageIfPresent(context, runningContainerId, options.logger)
       return runningContainerId
     }
@@ -432,46 +444,61 @@ export async function startDevcontainer (context: WorkspaceContext, options: Sta
     }
   }
 
-  const result = progress === undefined
-    ? await runBuffered(cli.command, [...cli.argsPrefix, ...args], {
-        mirrorStdout: proxyMode ? 'stderr' : 'stdout',
-        mirrorStderr: 'stderr',
-        logger: options.logger
-      })
-    : await (options.runDevcontainerUp ?? runProgressCommand)('devcontainer up', cli.command, [...cli.argsPrefix, ...args], {
-        progress,
-        spinnerLabel: 'Starting devcontainer',
-        stepId: 'devcontainer-start',
-        verboseStdout: proxyMode ? 'stderr' : 'stdout',
-        verboseStderr: 'stderr',
-        logger: options.logger
-      })
-
-  if (progress === undefined && result.code !== 0) {
-    throw new Error(`devcontainer up failed for ${context.workspaceFolder}`)
+  if (hasStartStep) {
+    progress?.startStep('devcontainer-start')
   }
 
-  if (progress !== undefined) {
-    assertProgressCommandSucceeded(
-      'devcontainer up',
-      result,
-      `devcontainer up failed for ${context.workspaceFolder}`,
-      { logPath: options.logger?.logPath }
-    )
-  }
+  try {
+    const result = progress === undefined
+      ? await runBuffered(cli.command, [...cli.argsPrefix, ...args], {
+          mirrorStdout: proxyMode ? 'stderr' : 'stdout',
+          mirrorStderr: 'stderr',
+          logger: options.logger
+        })
+      : await (options.runDevcontainerUp ?? runProgressCommand)('devcontainer up', cli.command, [...cli.argsPrefix, ...args], {
+          progress,
+          ...(hasStartStep
+            ? {}
+            : {
+                spinnerLabel: 'Starting devcontainer',
+                stepId: 'devcontainer-start'
+              }),
+          verboseStdout: proxyMode ? 'stderr' : 'stdout',
+          verboseStderr: 'stderr',
+          logger: options.logger
+        })
 
-  const containerId = parseContainerIdFromUpOutput(`${result.stdout}\n${result.stderr}`) ?? await findRunningContainerId(context, { logger: options.logger })
+    if (progress === undefined && result.code !== 0) {
+      throw new Error(`devcontainer up failed for ${context.workspaceFolder}`)
+    }
 
-  if (containerId === undefined) {
+    if (progress !== undefined) {
+      assertProgressCommandSucceeded(
+        'devcontainer up',
+        result,
+        `devcontainer up failed for ${context.workspaceFolder}`,
+        { logPath: options.logger?.logPath }
+      )
+    }
+
+    const containerId = parseContainerIdFromUpOutput(`${result.stdout}\n${result.stderr}`) ?? await findRunningContainerId(context, { logger: options.logger })
+
+    if (containerId === undefined) {
+      throw new Error(`Could not resolve devcontainer ID for ${context.workspaceFolder}`)
+    }
+
+    await assertContainerAgentProfile(containerId, agentProfile, options.logger)
+    if (hasStartStep) {
+      progress?.completeStep('devcontainer-start')
+    }
+    await recordContainerImageIfPresent(context, containerId, options.logger)
+    return containerId
+  } catch (error) {
     if (hasStartStep) {
       progress?.failStep('devcontainer-start')
     }
-    throw new Error(`Could not resolve devcontainer ID for ${context.workspaceFolder}`)
+    throw error
   }
-
-  await assertContainerAgentProfile(containerId, agentProfile, options.logger)
-  await recordContainerImageIfPresent(context, containerId, options.logger)
-  return containerId
 }
 
 export async function printPortHint (context: WorkspaceContext, containerId: string, options: { logger?: WorkspaceCommandLogger } = {}): Promise<void> {

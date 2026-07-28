@@ -7,6 +7,7 @@ export interface BufferedCommandOptions {
   cwd?: string
   env?: NodeJS.ProcessEnv
   input?: string
+  logOutput?: boolean
   mirrorStdout?: 'stdout' | 'stderr' | false
   mirrorStderr?: 'stdout' | 'stderr' | false
   logger?: WorkspaceCommandLogger
@@ -119,7 +120,7 @@ export function runBuffered (command: string, args: string[], options: BufferedC
     child.stdout.on('data', (chunk: Buffer) => {
       if (settled) return
       stdoutChunks.push(chunk)
-      loggedCommand?.stream('stdout', chunk)
+      if (options.logOutput !== false) loggedCommand?.stream('stdout', chunk)
       options.onStdout?.(chunk)
       writeChunk(options.mirrorStdout ?? 'stdout', chunk)
     })
@@ -127,7 +128,7 @@ export function runBuffered (command: string, args: string[], options: BufferedC
     child.stderr.on('data', (chunk: Buffer) => {
       if (settled) return
       stderrChunks.push(chunk)
-      loggedCommand?.stream('stderr', chunk)
+      if (options.logOutput !== false) loggedCommand?.stream('stderr', chunk)
       options.onStderr?.(chunk)
       writeChunk(options.mirrorStderr ?? 'stderr', chunk)
     })

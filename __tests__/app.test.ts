@@ -240,7 +240,7 @@ async function inspectFakeContainerAgentProfile (containerId: string): Promise<'
 function updateFakeDockerContainer (
   env: NodeJS.ProcessEnv,
   containerId: string,
-  updates: { containerState?: string, agentProfileMarker?: string }
+  updates: { workspace?: string, containerState?: string, agentProfileMarker?: string }
 ): void {
   const statePath = env.BOXDOWN_FAKE_DOCKER_STATE
   assert.notStrictEqual(statePath, undefined)
@@ -248,11 +248,37 @@ function updateFakeDockerContainer (
   const updated = lines.map((line) => {
     const fields = line.split('\t')
     if (fields[1] !== containerId) return line
+    if (updates.workspace !== undefined) fields[0] = realpathSync(updates.workspace)
     if (updates.containerState !== undefined) fields[2] = updates.containerState
     if (updates.agentProfileMarker !== undefined) fields[8] = updates.agentProfileMarker
     return fields.join('\t')
   })
   writeFileSync(statePath as string, `${updated.join('\n')}\n`)
+}
+
+function recordProgressStepEvents (
+  progress: ReturnType<typeof createProgress>,
+  stepId: string
+): string[] {
+  const events: string[] = []
+  const startStep = progress.startStep.bind(progress)
+  const completeStep = progress.completeStep.bind(progress)
+  const failStep = progress.failStep.bind(progress)
+
+  progress.startStep = (id) => {
+    if (id === stepId) events.push(`start:${id}`)
+    startStep(id)
+  }
+  progress.completeStep = (id) => {
+    if (id === stepId) events.push(`complete:${id}`)
+    completeStep(id)
+  }
+  progress.failStep = (id) => {
+    if (id === stepId) events.push(`fail:${id}`)
+    failStep(id)
+  }
+
+  return events
 }
 
 const codexPromptChoice = {
@@ -5972,6 +5998,123 @@ describe('agent profile container lifecycle', () => {
       }
       assert.ok(calls.includes('exec docker-error cat /opt/boxdown/state/agent-profile'))
       assert.strictEqual(calls.some((call) => call.includes('host-root') || call.includes(' full ')), false)
+    })
+  })
+
+  test('profile marker inspection keeps invalid credential-like content out of the workspace command log', async () => {
+    const workspace = tempDir('profile-marker-private-log-workspace')
+    const marker = 'ANTHROPIC_API_KEY=marker-credential-secret'
+
+    await withFakeDocker([{
+      workspace,
+      id: 'profile-private-log',
+      agentProfileMarker: marker
+    }], async (_logPath, dockerEnv) => {
+      const env = {
+        ...dockerEnv,
+        BOXDOWN_CACHE_HOME: tempDir('profile-marker-private-log-cache'),
+        BOXDOWN_DATA_HOME: tempDir('profile-marker-private-log-data')
+      }
+      const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+      const logger = createWorkspaceCommandLogger(context)
+      logger.section('profile marker privacy')
+
+      await withProcessEnv(env as Record<string, string>, async () => {
+        assert.strictEqual(await inspectContainerAgentProfile('profile-private-log', { logger }), undefined)
+      })
+
+      const log = readFileSync(context.workspaceLogPath, 'utf8')
+      assert.match(log, /command start: \["docker","exec","profile-private-log","cat","\/opt\/boxdown\/state\/agent-profile"\]/)
+      assert.match(log, /command exit: 0/)
+      assert.doesNotMatch(log, /ANTHROPIC_API_KEY/)
+      assert.doesNotMatch(log, /marker-credential-secret/)
+    })
+  })
+
+  test('agent profile lifecycle fails reuse progress before a missing marker can be recorded successful', async () => {
+    const workspace = tempDir('agent-profile-reuse-progress-workspace')
+
+    await withFakeDocker([{
+      workspace,
+      id: 'reuse-progress',
+      agentProfileMarker: 'invalid-marker'
+    }], async (_logPath, dockerEnv) => {
+      const env = {
+        ...dockerEnv,
+        BOXDOWN_CACHE_HOME: tempDir('agent-profile-reuse-progress-cache'),
+        BOXDOWN_DATA_HOME: tempDir('agent-profile-reuse-progress-data')
+      }
+      const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+      const progress = createProgress({ mode: 'none' })
+      progress.setSteps([
+        { id: 'ssh-identity', label: 'Preparing SSH identity' },
+        { id: 'devcontainer-config', label: 'Writing generated devcontainer config' },
+        { id: 'devcontainer-start', label: 'Starting devcontainer' }
+      ])
+      const events = recordProgressStepEvents(progress, 'devcontainer-start')
+
+      mkdirSync(context.sshKeyDir, { recursive: true })
+      writeFileSync(context.sshKeyPath, 'test private key\n')
+      writeFileSync(context.sshPublicKeyPath, 'test public key\n')
+      writeGeneratedDevcontainerConfig(context, undefined, 'auth')
+
+      await withProcessEnv(env as Record<string, string>, async () => {
+        await assert.rejects(startDevcontainer(context, {
+          agentProfile: 'auth',
+          reuseRunning: true,
+          progress
+        }), /Agent profile auth is not active/)
+      })
+
+      assert.deepStrictEqual(events, [
+        'start:devcontainer-start',
+        'fail:devcontainer-start'
+      ])
+    })
+  })
+
+  test('agent profile lifecycle fails normal startup progress before a missing marker can be recorded successful', async () => {
+    const workspace = tempDir('agent-profile-up-progress-workspace')
+    const hiddenWorkspace = tempDir('agent-profile-up-progress-hidden-workspace')
+
+    await withFakeDocker([{
+      workspace: hiddenWorkspace,
+      id: 'up-progress',
+      agentProfileMarker: 'invalid-marker'
+    }], async (_logPath, dockerEnv) => {
+      const env = {
+        ...dockerEnv,
+        BOXDOWN_CACHE_HOME: tempDir('agent-profile-up-progress-cache'),
+        BOXDOWN_DATA_HOME: tempDir('agent-profile-up-progress-data')
+      }
+      const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+      const progress = createProgress({ mode: 'none' })
+      progress.setSteps([
+        { id: 'ssh-identity', label: 'Preparing SSH identity' },
+        { id: 'devcontainer-config', label: 'Writing generated devcontainer config' },
+        { id: 'devcontainer-start', label: 'Starting devcontainer' }
+      ])
+      const events = recordProgressStepEvents(progress, 'devcontainer-start')
+
+      mkdirSync(context.sshKeyDir, { recursive: true })
+      writeFileSync(context.sshKeyPath, 'test private key\n')
+      writeFileSync(context.sshPublicKeyPath, 'test public key\n')
+
+      await withProcessEnv(env as Record<string, string>, async () => {
+        await assert.rejects(startDevcontainer(context, {
+          agentProfile: 'auth',
+          progress,
+          runDevcontainerUp: async () => {
+            updateFakeDockerContainer(env, 'up-progress', { workspace })
+            return { code: 0, stdout: '{"containerId":"up-progress"}\n', stderr: '' }
+          }
+        }), /Agent profile auth is not active/)
+      })
+
+      assert.deepStrictEqual(events, [
+        'start:devcontainer-start',
+        'fail:devcontainer-start'
+      ])
     })
   })
 
