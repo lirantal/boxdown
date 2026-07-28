@@ -1370,7 +1370,7 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
         return 1
       }
 
-      writeWorkspaceMetadata(context, alias, undefined, agentProfile.value)
+      writeWorkspaceMetadata(context, alias, undefined, parsed.agentProfile)
       await installSshConfig(context, alias)
 
       if (resolvedTargets.skippedNonInteractive) {

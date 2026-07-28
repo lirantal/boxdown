@@ -2214,6 +2214,34 @@ describe('CLI execution', () => {
     assert.strictEqual(codexConfig.remoteConnections[0]?.projects[0]?.label, realpathSync(workspace).split('/').at(-1))
   })
 
+  test('ssh install preserves metadata-only agent profile state', () => {
+    const cases: Array<{ name: string, initialProfile?: 'full', writeMetadata: boolean }> = [
+      { name: 'existing-profile', initialProfile: 'full', writeMetadata: true },
+      { name: 'legacy-profile', writeMetadata: true },
+      { name: 'missing-profile', writeMetadata: false }
+    ]
+
+    for (const entry of cases) {
+      const workspace = tempDir(`ssh-install-agent-profile-${entry.name}-workspace`)
+      const env = {
+        HOME: tempDir(`ssh-install-agent-profile-${entry.name}-home`),
+        BOXDOWN_CACHE_HOME: tempDir(`ssh-install-agent-profile-${entry.name}-cache`),
+        BOXDOWN_DATA_HOME: tempDir(`ssh-install-agent-profile-${entry.name}-data`),
+        BOXDOWN_SSH_CONFIG: join(tempDir(`ssh-install-agent-profile-${entry.name}-ssh`), 'config')
+      }
+      const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+
+      if (entry.writeMetadata) {
+        writeWorkspaceMetadata(context, defaultSshAlias(context.workspaceBasename), undefined, entry.initialProfile)
+      }
+
+      const result = runCliProcess(['ssh', 'install', '--workspace', workspace], { ...process.env, ...env })
+
+      assert.strictEqual(result.code, 0, entry.name)
+      assert.strictEqual(readWorkspaceMetadata(context)?.agentProfile, entry.initialProfile, entry.name)
+    }
+  })
+
   test('installs explicit Claude ssh install target', () => {
     const workspace = tempDir('cli-explicit-claude-workspace')
     const sshConfigPath = join(tempDir('cli-explicit-claude-ssh'), 'config')
