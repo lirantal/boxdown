@@ -64,10 +64,6 @@ function mountHasTarget (mount: string, target: string): boolean {
   return mount.split(',').some((part) => part.trim() === `target=${target}`)
 }
 
-function hasMountTarget (mounts: string[], target: string): boolean {
-  return mounts.some((mount) => mountHasTarget(mount, target))
-}
-
 function mountTarget (mount: string): string | undefined {
   return mount.split(',').map(part => part.trim()).find(part => part.startsWith('target='))?.slice('target='.length)
 }

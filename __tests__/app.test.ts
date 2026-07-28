@@ -4385,10 +4385,10 @@ describe('status output', () => {
     assert.match(formatStatusText(running), /Generated config: .* \(exists\)/)
     assert.match(formatStatusText(running), /Command log: .*boxdown\.log \(exists\)/)
     assert.match(formatStatusText(running), /Agent profile: auth \(default\)/)
-    assert.match(formatStatusText(running), /  Codex authentication: available/)
-    assert.match(formatStatusText(running), /  Claude authentication: available/)
-    assert.match(formatStatusText(running), /  ~\/\.agents: available/)
-    assert.match(formatStatusText(running), /  Container profile: active/)
+    assert.match(formatStatusText(running), / {2}Codex authentication: available/)
+    assert.match(formatStatusText(running), / {2}Claude authentication: available/)
+    assert.match(formatStatusText(running), / {2}~\/\.agents: available/)
+    assert.match(formatStatusText(running), / {2}Container profile: active/)
     assert.doesNotMatch(formatStatusText(running), /start --recreate/)
     assert.match(formatStatusText(absent), /Generated config: .* \(missing\)/)
     assert.match(formatStatusText(absent), /Command log: .*boxdown\.log \(missing\)/)
@@ -4442,7 +4442,7 @@ describe('status output', () => {
     })
     assert.deepStrictEqual(probed, [])
     assert.match(formatStatusText(status), /Agent profile: none \(workspace metadata\)/)
-    assert.match(formatStatusText(status), /  Container profile: not created/)
+    assert.match(formatStatusText(status), / {2}Container profile: not created/)
   })
 
   test('status agent profile probes only six known top-level full-profile paths', () => {
@@ -4533,7 +4533,7 @@ describe('status output', () => {
         publicKeyRuntimeExists: true
       }
     }), false)
-    assert.match(formatStatusText(status), /Agent profile: auth \(default\)[\s\S]*  Codex authentication: available[\s\S]*  Claude authentication: unavailable \(macOS Keychain is not copied\)[\s\S]*  ~\/\.agents: available[\s\S]*  Container profile: recreate required/)
+    assert.match(formatStatusText(status), /Agent profile: auth \(default\)[\s\S]* {2}Codex authentication: available[\s\S]* {2}Claude authentication: unavailable \(macOS Keychain is not copied\)[\s\S]* {2}~\/\.agents: available[\s\S]* {2}Container profile: recreate required/)
     assert.match(formatStatusText(status), /Run `boxdown start --recreate --agent-profile auth`\./)
   })
 
@@ -4578,6 +4578,9 @@ describe('status output', () => {
     assert.match(formatStatusText(macStatus), /Claude authentication: unavailable \(macOS Keychain is not copied\)/)
     assert.match(formatStatusText(freeBsdStatus), /Claude authentication: unavailable \(this host platform does not have a supported file-backed credential path\)/)
     assert.doesNotMatch(formatStatusText(freeBsdStatus), /macOS|Keychain/)
+    const clonedMacStatus = { ...macStatus }
+    assert.match(formatStatusText(clonedMacStatus), /Claude authentication: unavailable \(this host platform does not have a supported file-backed credential path\)/)
+    assert.doesNotMatch(formatStatusText(clonedMacStatus), /macOS|Keychain/)
   })
 
   test('status agent profile uses matching generated truth after host sources change', () => {
@@ -7324,7 +7327,7 @@ describe('devcontainer config generation', () => {
       assert.ok(profileMounts.every(mount => mount.endsWith(',readonly')))
       assert.strictEqual(config.containerEnv?.BOXDOWN_AGENT_PROFILE, profile)
       assert.strictEqual(config.containerEnv?.BOXDOWN_AGENT_PROFILE_SOURCES, expectation.sources)
-      assert.match(config.initializeCommand ?? '', new RegExp(`BOXDOWN_AGENT_PROFILE='${profile}'`))
+      assert.ok(config.initializeCommand?.includes(`BOXDOWN_AGENT_PROFILE='${profile}'`))
       assert.ok(!profileMounts.some(mount => /target=\/home\/node\/\.(agents|codex|claude)(,|$)/.test(mount)))
     }
   })
@@ -7417,6 +7420,13 @@ describe('devcontainer config generation', () => {
         !config.mounts?.some(candidate => candidate.includes('/opt/boxdown/agent-profile-source') && candidate.includes(`target=${skippedTarget},`)),
         `${destination} should suppress ${skippedTarget}: ${JSON.stringify(config.mounts)}`
       )
+      if (destination === '/home/node') {
+        assert.deepStrictEqual(
+          config.mounts?.filter(candidate => candidate.includes('/opt/boxdown/agent-profile-source')),
+          [],
+          '/home/node ownership should suppress every staged profile source'
+        )
+      }
       assert.strictEqual(config.containerEnv?.BOXDOWN_AGENT_PROFILE_SOURCES, 'agents,claude-config,claude-home,codex-home')
     }
 
@@ -7855,7 +7865,9 @@ describe('devcontainer git config hooks', () => {
   test('initialization scopes ANTHROPIC_API_KEY by agent profile without changing unrelated runtime secrets', () => {
     const initializePath = join(assetsDevcontainerDir, 'hooks', 'initialize.sh')
     const binDir = join(tempDir('agent-profile-initialize-bin'), 'bin')
-    const { ANTHROPIC_API_KEY: _anthropicApiKey, SNYK_TOKEN: _snykToken, ...baseEnv } = process.env
+    const baseEnv = { ...process.env }
+    delete baseEnv.ANTHROPIC_API_KEY
+    delete baseEnv.SNYK_TOKEN
     mkdirSync(binDir)
     writeFileSync(join(binDir, 'op'), '#!/usr/bin/env bash\nexit 1\n')
     chmodSync(join(binDir, 'op'), 0o755)
@@ -7889,6 +7901,20 @@ describe('devcontainer git config hooks', () => {
       assert.strictEqual(readFileSync(join(secretDir, 'SNYK_TOKEN'), 'utf8'), 'snyk-runtime-sentinel')
       assert.strictEqual(existsSync(join(secretDir, 'OP_SERVICE_ACCOUNT_TOKEN')), false)
     }
+
+    const defaultProfileSecretDir = join(tempDir('agent-profile-default-state'), 'secrets')
+    execFileSync('bash', [initializePath], {
+      env: {
+        ...baseEnv,
+        PATH: `${binDir}${delimiter}${baseEnv.PATH ?? ''}`,
+        BOXDOWN_SECRET_ENV_DIR: defaultProfileSecretDir,
+        ANTHROPIC_API_KEY: 'anthropic-runtime-sentinel'
+      }
+    })
+    assert.strictEqual(
+      readFileSync(join(defaultProfileSecretDir, 'ANTHROPIC_API_KEY'), 'utf8'),
+      'anthropic-runtime-sentinel'
+    )
 
     const staleSecretDir = join(tempDir('agent-profile-stale-state'), 'secrets')
     execFileSync('bash', [initializePath], {

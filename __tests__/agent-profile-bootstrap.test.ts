@@ -43,7 +43,8 @@ function roots(name: string): BootstrapRoots {
 
 function runBootstrap(
   profile: string | undefined,
-  paths: BootstrapRoots
+  paths: BootstrapRoots,
+  nodeArguments: string[] = []
 ): ReturnType<typeof spawnSync> {
   mkdirSync(paths.source, { recursive: true })
   mkdirSync(paths.home, { recursive: true })
@@ -58,7 +59,7 @@ function runBootstrap(
   } else {
     env.BOXDOWN_AGENT_PROFILE = profile
   }
-  return spawnSync(process.execPath, [bootstrapPath], {
+  return spawnSync(process.execPath, [...nodeArguments, bootstrapPath], {
     encoding: 'utf8',
     env
   })
@@ -279,6 +280,76 @@ test('a failed required directory copy preserves the previous destination and om
   } finally {
     chmodSync(blocked, 0o700)
   }
+})
+
+test('a promotion failure restores the previous destination and removes rollback artifacts', () => {
+  const paths = roots('failed-promotion')
+  writeSourceFile(paths.source, 'agents/new.txt', 'new profile\n')
+  mkdirSync(join(paths.home, '.agents'), { recursive: true })
+  writeFileSync(join(paths.home, '.agents', 'sentinel.txt'), 'previous\n')
+  mkdirSync(join(paths.marker, '..'), { recursive: true })
+  writeFileSync(paths.marker, 'auth\n')
+
+  const loaderPath = join(tempDir('promotion-loader'), 'fail-promotion-loader.mjs')
+  writeFileSync(loaderPath, `
+export async function resolve(specifier, context, nextResolve) {
+  if (
+    specifier === 'node:fs/promises' &&
+    context.parentURL?.endsWith('/agent-profile-bootstrap.mjs')
+  ) {
+    return { url: 'boxdown-test:fs-promises', shortCircuit: true }
+  }
+  return nextResolve(specifier, context)
+}
+
+export async function load(url, context, nextLoad) {
+  if (url !== 'boxdown-test:fs-promises') return nextLoad(url, context)
+  return {
+    format: 'module',
+    shortCircuit: true,
+    source: \`
+      import * as real from 'node:fs/promises'
+      export const chmod = real.chmod
+      export const copyFile = real.copyFile
+      export const lstat = real.lstat
+      export const mkdir = real.mkdir
+      export const readlink = real.readlink
+      export const readdir = real.readdir
+      export const rm = real.rm
+      export const symlink = real.symlink
+      export const writeFile = real.writeFile
+      export async function rename(source, destination) {
+        if (
+          source.includes('boxdown-agent-profile-temporary') &&
+          destination.endsWith('/.agents')
+        ) {
+          const error = new Error('injected promotion failure')
+          error.code = 'EIO'
+          throw error
+        }
+        return real.rename(source, destination)
+      }
+    \`
+  }
+}
+`)
+
+  const result = runBootstrap('auth', paths, [
+    '--no-warnings',
+    '--experimental-loader',
+    loaderPath
+  ])
+
+  assert.notStrictEqual(result.status, 0)
+  assert.match(result.stderr, /agent-profile-bootstrap: failed to copy ~\/\.agents/)
+  assert.doesNotMatch(result.stderr, /injected promotion failure/)
+  assert.strictEqual(readFileSync(join(paths.home, '.agents', 'sentinel.txt'), 'utf8'), 'previous\n')
+  assert.strictEqual(lstatSync(join(paths.home, '.agents', 'new.txt'), { throwIfNoEntry: false }), undefined)
+  assert.strictEqual(lstatSync(paths.marker, { throwIfNoEntry: false }), undefined)
+  assert.deepStrictEqual(
+    readdirSync(paths.home).filter(name => name.includes('boxdown-agent-profile')),
+    []
+  )
 })
 
 test('a marker invalidation failure stops before profile copies begin', {
