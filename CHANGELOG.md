@@ -1,5 +1,11 @@
 # boxdown
 
+## 2.1.2
+
+### Patch Changes
+
+- [`75506ba`](https://github.com/lirantal/boxdown/commit/75506ba00120c185dd97fa4296e07b7290de48b5) Thanks [@lirantal](https://github.com/lirantal)! - fix: interactive container re-use for boxdown cc
+
 ## 2.1.1
 
 ### Patch Changes
