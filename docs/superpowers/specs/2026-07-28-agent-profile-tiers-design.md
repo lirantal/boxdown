@@ -167,6 +167,13 @@ copy. This prevents the bootstrap from writing through a user-supplied mount
 into another host path. Status reports the affected destination as custom
 rather than claiming that Boxdown applied the selected tier there.
 
+A malformed CSV string mount, or any unresolved `${...}` expression anywhere
+in a string mount, makes all canonical profile destinations externally managed.
+For a structured mount, only an unresolved destination value has that effect; a
+substitution confined to `source` or `src` does not claim a destination. The
+original mount is preserved unchanged. Status reports only canonical
+destination names and never reports substitution values.
+
 ### Container bootstrap
 
 During initial container creation, before workspace dependency installation,
@@ -192,11 +199,15 @@ profile destinations with the corresponding host copies. The image must not
 store required Boxdown runtime assets inside those user-profile directories;
 Boxdown-owned runtime scripts remain under `/opt/boxdown`.
 
-The copy preserves regular files, directories, and symbolic links without
-following symbolic links during traversal. It skips sockets, FIFOs, devices,
-and other special files with a warning. Preserved links that reference
-host-only paths may be broken in the container; Boxdown does not dereference
-them or copy their external targets.
+Static symlinks observed during traversal are reproduced as links, and a
+final-component regular file changed to a symlink after classification fails
+closed through descriptor-based `O_NOFOLLOW` copying. Recursive directory
+traversal remains path-based: concurrent host replacement of a traversed parent
+directory during container creation is outside the isolation guarantee and may
+fail or copy best-effort from the replacement. Callers must not mutate selected
+source trees while a container is being created. Sockets, FIFOs, devices, and
+other special files are skipped with a warning. Preserved links that reference
+host-only paths may be broken in the container.
 
 ### Writable state and concurrency
 
@@ -426,8 +437,9 @@ Tests are written before implementation and cover:
    bootstrap and simulated agent writes.
 9. Two workspace bootstraps producing independent writable copies.
 10. File ownership and usability by the container's `node` user.
-11. Symlink preservation without dereferencing and warning/skip behavior for
-    special files.
+11. Static symlink preservation, fail-closed final-component regular-file
+    swaps, the documented concurrent-parent mutation boundary, and warning/skip
+    behavior for special files.
 12. Stop/start preserving a container copy, while down/recreate seeds a fresh
     copy.
 13. A custom canonical destination preventing Boxdown from staging or copying
@@ -453,6 +465,6 @@ either in the repository or in `full`.
 
 `full` uses copy-on-create rather than a writable bind mount of host agent
 homes. This costs startup time and container storage and does not provide live
-synchronization, but it prevents host mutation, cross-workspace races, and
-profile corruption. That isolation guarantee is more important than exact
-write-through parity.
+synchronization, but it prevents container writes from mutating the host and
+prevents post-bootstrap cross-workspace races and profile corruption. That
+isolation guarantee is more important than exact write-through parity.

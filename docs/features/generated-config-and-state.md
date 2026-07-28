@@ -106,6 +106,21 @@ A custom mount at, above, or below a canonical profile destination is externally
 managed. Boxdown skips the matching staging input and copy rather than writing
 over it.
 
+A malformed CSV string mount, or any unresolved `${...}` expression anywhere
+in a string mount, makes all canonical profile destinations externally managed.
+For a structured mount, only an unresolved destination value has that effect; a
+substitution confined to `source` or `src` does not claim a destination. The
+original mount is preserved unchanged. Status reports only canonical
+destination names and never reports substitution values.
+
+Static symlinks observed during traversal are reproduced as links, and a
+final-component regular file changed to a symlink after classification fails
+closed. Recursive directory traversal is path-based: concurrent host
+replacement of a traversed parent directory during container creation is
+outside the isolation guarantee and may fail or copy best-effort from the
+replacement. Do not mutate selected source trees while a container is being
+created.
+
 ## MCP server configuration
 
 `auth` does not copy Codex `config.toml`, user-scoped Claude configuration, or

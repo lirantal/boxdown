@@ -192,6 +192,18 @@ test('runs a remapped non-root lifecycle smoke test against the actual profile m
   )
 })
 
+test('checks the quoted mount policy fixture with Docker Go CSV parsing', () => {
+  const ciWorkflow = readFileSync(ciWorkflowPath, 'utf8')
+  const releaseWorkflow = readFileSync(releaseWorkflowPath, 'utf8')
+  const quotedMount = String.raw`--mount 'type=tmpfs,"dst=/tmp/boxdown ""quoted"",mount"'`
+  const decodedDestination = String.raw`test -d '/tmp/boxdown "quoted",mount'`
+
+  for (const workflow of [ciWorkflow, releaseWorkflow]) {
+    assert.ok(workflow.includes(quotedMount))
+    assert.ok(workflow.includes(decodedDestination))
+  }
+})
+
 const source = 'https://github.com/lirantal/boxdown'
 const version = '1.4.0'
 const revision = 'abc'

@@ -18,7 +18,7 @@ import {
 import { isAgentProfile, resolveAgentProfile, type AgentProfile, type AgentProfileSelection, type AgentProfileSelectionSource } from './agent-profile.ts'
 import {
   classifyPosixPath,
-  normalizedMountDestinations,
+  inspectDevcontainerMount,
   posixPathsConflict
 } from './devcontainer-mount.ts'
 import { parseJsonc } from './jsonc.ts'
@@ -190,11 +190,19 @@ const canonicalAgentProfileDestinations = [
   BOXDOWN_CONTAINER_CLAUDE_CONFIG_PATH
 ] as const
 
+const canonicalTopLevelAgentProfileDestinations = [
+  BOXDOWN_CONTAINER_AGENTS_DIR,
+  BOXDOWN_CONTAINER_CODEX_DIR,
+  BOXDOWN_CONTAINER_CLAUDE_DIR,
+  BOXDOWN_CONTAINER_CLAUDE_CONFIG_PATH
+] as const
+
 interface GeneratedAgentProfileInfo {
   profile?: AgentProfile
   sources: Set<AgentProfileSourceName>
   stagingTargets: Set<string>
   mountTargets: Set<string>
+  mountDestinationIndeterminate: boolean
   customDestinations: string[]
 }
 
@@ -242,6 +250,7 @@ function inspectGeneratedAgentProfile (
     sources: new Set(),
     stagingTargets: new Set(),
     mountTargets: new Set(),
+    mountDestinationIndeterminate: false,
     customDestinations: []
   }
 
@@ -271,22 +280,29 @@ function inspectGeneratedAgentProfile (
     }
   }
 
-  const targets = Array.isArray(config.mounts)
+  const mountPolicies = Array.isArray(config.mounts)
     ? config.mounts
-      .flatMap(normalizedMountDestinations)
+      .map(inspectDevcontainerMount)
     : []
+  const targets = mountPolicies.flatMap(policy => policy.destinations)
+  const mountDestinationIndeterminate = mountPolicies
+    .some(policy => policy.destinationIndeterminate)
 
   return {
     profile: typeof profileValue === 'string' && isAgentProfile(profileValue) ? profileValue : undefined,
     sources,
     stagingTargets: new Set(targets),
     mountTargets: new Set(targets),
-    customDestinations: normalizedCustomDestinations(targets)
+    mountDestinationIndeterminate,
+    customDestinations: mountDestinationIndeterminate
+      ? [...canonicalTopLevelAgentProfileDestinations].sort()
+      : normalizedCustomDestinations(targets)
   }
 }
 
 function sourceIsCustom (generated: GeneratedAgentProfileInfo, destination: string): boolean {
-  return [...generated.mountTargets].some(target => posixPathsConflict(target, destination))
+  return generated.mountDestinationIndeterminate ||
+    [...generated.mountTargets].some(target => posixPathsConflict(target, destination))
 }
 
 function generatedSourceState (

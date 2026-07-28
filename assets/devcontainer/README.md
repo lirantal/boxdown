@@ -230,8 +230,13 @@ the host.
 Source-file failures for missing or unreadable individual credentials are
 non-fatal. A failed `~/.agents` or full-profile directory copy is fatal; the
 error identifies only the top-level source and never prints profile or
-credential contents. The bootstrap preserves files, directories, and symlinks
-without following links, and skips special files with a warning.
+credential contents. Static symlinks observed during traversal are reproduced
+as links, and a final-component regular file changed to a symlink after
+classification fails closed. Recursive directory traversal is path-based:
+concurrent host replacement of a traversed parent directory during container
+creation is outside the isolation guarantee and may fail or copy best-effort
+from the replacement. Do not mutate selected source trees while a container is
+being created. Special files are skipped with a warning.
 
 Select the profile with `--agent-profile none|auth|full` when creating or
 recreating. `auth` copies file-backed authentication and complete `~/.agents`;
@@ -244,6 +249,13 @@ destinations, that destination is externally managed. Boxdown skips its staging
 and copy for it; the custom mount owner controls its contents and write policy.
 Recreate after changing a profile, custom mount, or host source. Host changes do
 not update an existing stopped or running container.
+
+A malformed CSV string mount, or any unresolved `${...}` expression anywhere
+in a string mount, makes all canonical profile destinations externally managed.
+For a structured mount, only an unresolved destination value has that effect; a
+substitution confined to `source` or `src` does not claim a destination. The
+original mount is preserved unchanged. Status reports only canonical
+destination names and never reports substitution values.
 
 The previous direct host mounts, Codex config forwarding, and Claude MCP
 projection no longer apply to `auth`. Put portable MCP configuration in the

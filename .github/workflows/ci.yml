@@ -112,6 +112,13 @@ jobs:
           docker run --rm --user node
           boxdown-ci:${{ github.sha }}
           /opt/boxdown/image-tools/smoke-test.sh
+      - name: Verify Docker quoted mount grammar
+        if: steps.changes.outputs.image == 'true'
+        run: >-
+          docker run --rm
+          --mount 'type=tmpfs,"dst=/tmp/boxdown ""quoted"",mount"'
+          boxdown-ci:${{ github.sha }}
+          test -d '/tmp/boxdown "quoted",mount'
       - name: Smoke-test non-root lifecycle and SSH bootstrap
         if: steps.changes.outputs.image == 'true'
         run: >-

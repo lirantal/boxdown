@@ -958,6 +958,7 @@ test('documents agent profile tiers', () => {
   const setupDocs = readFileSync(join(process.cwd(), 'docs/features/setup.md'), 'utf8')
   const architecture = readFileSync(join(process.cwd(), 'docs/architecture.md'), 'utf8')
   const assetDocs = readFileSync(join(process.cwd(), 'assets/devcontainer/README.md'), 'utf8')
+  const profileDesign = readFileSync(join(process.cwd(), 'docs/superpowers/specs/2026-07-28-agent-profile-tiers-design.md'), 'utf8')
   const devcontainerTemplate = readFileSync(join(process.cwd(), 'assets/devcontainer/devcontainer.json'), 'utf8')
 
   assert.match(readme, /\| `none` \| no host user-scoped agent profile or Claude API key \|/)
@@ -988,6 +989,28 @@ test('documents agent profile tiers', () => {
   assert.match(assetDocs, /bootstrap.*marker/is)
   assert.match(assetDocs, /non-root\s+remote user/is)
   assert.match(assetDocs, /source-file.*failure.*non-fatal/is)
+  for (const document of [stateDocs, assetDocs, profileDesign]) {
+    assert.match(
+      document,
+      /static symlinks.*(?:reproduced|copied)\s+as links.*final-component regular file.*fails\s+closed/is
+    )
+    assert.match(
+      document,
+      /concurrent host\s+replacement.*traversed parent\s+directory.*outside the isolation guarantee.*(?:fail|copy)\s+best-effort/is
+    )
+    assert.match(
+      document,
+      /malformed CSV string mount.*unresolved.*string mount.*all canonical profile destinations/is
+    )
+    assert.match(
+      document,
+      /structured mount.*destination value.*source.*does not claim a destination/is
+    )
+    assert.match(
+      document,
+      /original mount.*preserved unchanged.*status.*canonical.*never.*substitution values/is
+    )
+  }
   assert.match(devcontainerTemplate, /profile sources are staged read-only.*container-local writable copies/is)
   assert.doesNotMatch(devcontainerTemplate, /Codex auth\.json is mounted automatically|host-owned writable credential mounts/i)
 })
@@ -7501,6 +7524,26 @@ describe('devcontainer config generation', () => {
         name: 'any valid alias fails closed',
         mount: 'type=bind,source=/custom/codex,target=/var/lib/codex,dst=/home/node/.codex,readonly',
         ownsCodex: true
+      },
+      {
+        name: 'quoted destination field',
+        mount: 'type=tmpfs,"dst=/home/node/.codex"',
+        ownsCodex: true
+      },
+      {
+        name: 'quoted fields with escaped quotes and commas',
+        mount: 'type=tmpfs,"source=/tmp/source ""quoted"",with-comma","destination=/home/node/.codex/cache ""quoted"",with-comma"',
+        ownsCodex: true
+      },
+      {
+        name: 'uppercase destination alias',
+        mount: 'type=bind,source=/custom/codex,DST=/home/node/.codex,readonly',
+        ownsCodex: true
+      },
+      {
+        name: 'repeated mixed-case aliases',
+        mount: 'type=bind,source=/custom/codex,target=/var/lib/codex,DST=/home/node/.codex,readonly',
+        ownsCodex: true
       }
     ] as const
 
@@ -7554,6 +7597,158 @@ describe('devcontainer config generation', () => {
         `${entry.name}: normalized custom destination`
       )
     }
+  })
+
+  test('indeterminate mounts suppress all profile staging and report only canonical custom ownership', () => {
+    const home = tempDir('indeterminate-profile-home')
+    mkdirSync(join(home, '.agents'))
+    mkdirSync(join(home, '.codex'))
+    mkdirSync(join(home, '.claude'))
+    writeFileSync(join(home, '.codex', 'auth.json'), '{}\n')
+    writeFileSync(join(home, '.claude', '.credentials.json'), '{}\n')
+    writeFileSync(join(home, '.claude.json'), '{}\n')
+
+    const cases = [
+      {
+        name: 'malformed csv',
+        mount: 'type=bind,"source=/tmp'
+      },
+      {
+        name: 'substituted destination',
+        mount: 'type=bind,source=/tmp,target=${localEnv:PROFILE_DESTINATION}'
+      },
+      {
+        name: 'substitution generated whole field',
+        mount: '${localEnv:CUSTOM_MOUNT_FIELD}'
+      },
+      {
+        name: 'workspace substitution in a string source',
+        mount: 'type=bind,source=${localWorkspaceFolder}'
+      },
+      {
+        name: 'known gitconfig target on uncertain string',
+        mount: 'type=bind,source=${localEnv:PROFILE_SOURCE},target=/home/node/.gitconfig'
+      },
+      {
+        name: 'structured substituted destination',
+        mount: {
+          type: 'bind',
+          source: '/custom/profile',
+          destination: '${containerWorkspaceFolder}/.codex',
+          arbitrary: {
+            preserve: true
+          }
+        }
+      }
+    ] as const
+
+    for (const entry of cases) {
+      const slug = entry.name.replaceAll(' ', '-')
+      const assets = tempDir(`indeterminate-profile-assets-${slug}`)
+      writeFileSync(join(assets, 'devcontainer.json'), `${JSON.stringify({ mounts: [entry.mount] })}\n`)
+      const context = createWorkspaceContext({
+        workspace: tempDir(`indeterminate-profile-workspace-${slug}`),
+        env: {
+          HOME: home,
+          BOXDOWN_CACHE_HOME: tempDir(`indeterminate-profile-cache-${slug}`),
+          BOXDOWN_DATA_HOME: tempDir(`indeterminate-profile-data-${slug}`)
+        },
+        platform: 'linux',
+        assetsDevcontainerDir: assets
+      })
+
+      const config = buildGeneratedDevcontainerConfig(context, undefined, 'full')
+      assert.deepStrictEqual(config.mounts?.[0], entry.mount, `${entry.name}: preserve original mount`)
+      assert.deepStrictEqual(
+        config.mounts?.filter(mount =>
+          typeof mount === 'string' &&
+          mount.includes('/opt/boxdown/agent-profile-source')
+        ),
+        [],
+        `${entry.name}: uncertainty must suppress every staged profile source`
+      )
+
+      mkdirSync(context.workspaceCacheDir, { recursive: true })
+      writeFileSync(context.generatedConfigPath, `${JSON.stringify(config, null, 2)}\n`)
+      const status = createStatusInfo(context, 'indeterminate-profile', {
+        id: 'indeterminate-profile-container',
+        state: 'running'
+      }, existsSync, {
+        sshConfigPath: join(tempDir(`indeterminate-profile-ssh-${slug}`), 'config'),
+        agentProfileSelection: resolveAgentProfile(undefined, 'full'),
+        containerAgentProfile: 'full'
+      })
+
+      assert.deepStrictEqual(status.agentProfile.sources, {
+        codexAuthentication: 'custom',
+        claudeAuthentication: 'custom',
+        agents: 'custom',
+        codexHome: 'custom',
+        claudeHome: 'custom',
+        claudeConfig: 'custom'
+      }, `${entry.name}: every canonical source is externally managed`)
+      assert.deepStrictEqual(status.agentProfile.customDestinations, [
+        BOXDOWN_CONTAINER_AGENTS_DIR,
+        BOXDOWN_CONTAINER_CLAUDE_DIR,
+        BOXDOWN_CONTAINER_CLAUDE_CONFIG_PATH,
+        BOXDOWN_CONTAINER_CODEX_DIR
+      ].sort(), `${entry.name}: expose canonical top-level destinations only`)
+      assert.doesNotMatch(
+        JSON.stringify(status),
+        /\$\{|localEnv|localWorkspaceFolder|containerWorkspaceFolder/,
+        `${entry.name}: status must not disclose substitution expressions`
+      )
+    }
+  })
+
+  test('structured source-only substitutions remain unrelated to canonical profile destinations', () => {
+    const home = tempDir('structured-source-substitution-home')
+    mkdirSync(join(home, '.agents'))
+    mkdirSync(join(home, '.codex'))
+    mkdirSync(join(home, '.claude'))
+    writeFileSync(join(home, '.claude.json'), '{}\n')
+
+    const mount = {
+      type: 'bind',
+      source: '${localEnv:PROFILE_SOURCE}',
+      target: '/var/lib/unrelated',
+      arbitrary: {
+        preserve: true
+      }
+    }
+    const assets = tempDir('structured-source-substitution-assets')
+    writeFileSync(join(assets, 'devcontainer.json'), `${JSON.stringify({ mounts: [mount] })}\n`)
+    const context = createWorkspaceContext({
+      workspace: tempDir('structured-source-substitution-workspace'),
+      env: {
+        HOME: home,
+        BOXDOWN_CACHE_HOME: tempDir('structured-source-substitution-cache'),
+        BOXDOWN_DATA_HOME: tempDir('structured-source-substitution-data')
+      },
+      platform: 'linux',
+      assetsDevcontainerDir: assets
+    })
+
+    const config = buildGeneratedDevcontainerConfig(context, undefined, 'full')
+    assert.deepStrictEqual(config.mounts?.[0], mount)
+    assert.ok(config.mounts?.some(candidate =>
+      typeof candidate === 'string' &&
+      candidate.includes('/opt/boxdown/agent-profile-source')
+    ))
+
+    mkdirSync(context.workspaceCacheDir, { recursive: true })
+    writeFileSync(context.generatedConfigPath, `${JSON.stringify(config, null, 2)}\n`)
+    const status = createStatusInfo(context, 'structured-source-substitution', {
+      id: 'structured-source-substitution-container',
+      state: 'running'
+    }, existsSync, {
+      sshConfigPath: join(tempDir('structured-source-substitution-ssh'), 'config'),
+      agentProfileSelection: resolveAgentProfile(undefined, 'full'),
+      containerAgentProfile: 'full'
+    })
+
+    assert.ok(Object.values(status.agentProfile.sources).every(source => source === 'available'))
+    assert.deepStrictEqual(status.agentProfile.customDestinations, [])
   })
 
   test('structured mounts are preserved unchanged and use normalized dst ownership in generation and status', () => {
