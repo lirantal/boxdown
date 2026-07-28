@@ -108,7 +108,7 @@ test('rejects a tag that targets another release revision', () => {
 
   assert.throws(
     () => ensureGitHubRelease(release, command),
-    new RegExp(`expected ${release.revision}`)
+    error => error instanceof Error && error.message.includes(`expected ${release.revision}`)
   )
   assert.equal(calls.length, 1)
 })
