@@ -623,12 +623,15 @@ Generated config also:
   for every later lifecycle step. The hard requirement is that it precedes
   dependency installation and any coding-agent launch.
 
-- [ ] Make the marker directory writable by the image's `node` user.
+- [ ] Make the marker directory writable after the image's `node` UID is
+  remapped.
 
-  Extend the Dockerfile's directory-creation layer:
+  Extend the Dockerfile's directory-creation layer. The state parent must not
+  rely on the build-time `node` UID because `updateRemoteUserUID` can change it
+  when the container is created:
 
   ```dockerfile
-  RUN install -d -m 0755 -o node -g node /opt/boxdown/state \
+  RUN install -d -m 1777 -o root -g root /opt/boxdown/state \
       && install -d -m 0700 -o node -g node \
           /home/node/.claude /home/node/.codex
   ```
@@ -637,10 +640,11 @@ Generated config also:
 
 - [ ] Extend image/lifecycle policy tests.
 
-  Assert the Dockerfile owns `/opt/boxdown/state` as `node`; post-create invokes
-  the new bootstrap; and the lifecycle smoke test runs the bootstrap as the
-  non-root image user against temporary override paths, then proves copied
-  files and the marker are writable.
+  Assert the Dockerfile creates `/opt/boxdown/state` as a root-owned sticky
+  directory; post-create invokes the new bootstrap; and the lifecycle smoke
+  test remaps the `node` UID, runs the bootstrap as that non-root user against
+  the actual `/opt/boxdown/state/agent-profile` path, then proves copied files
+  are writable and the marker remains owner-only mode `0600`.
 
 - [ ] Run focused tests.
 

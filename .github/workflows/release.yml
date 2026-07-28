@@ -142,10 +142,10 @@ jobs:
           steps.release-state.outputs.publish == 'true' &&
           steps.image-state.outputs.decision == 'publish'
         run: >-
-          docker run --rm
+          docker run --rm --user root
           --mount type=bind,source="${GITHUB_WORKSPACE}/assets/devcontainer",target=/opt/boxdown/devcontainer,readonly
           boxdown-release:${{ github.sha }}
-          /opt/boxdown/image-tools/lifecycle-smoke-test.sh
+          /opt/boxdown/image-tools/lifecycle-smoke-test.sh --remap-node
       - name: Push immutable dual-platform release image
         if: >-
           steps.release-state.outputs.publish == 'true' &&

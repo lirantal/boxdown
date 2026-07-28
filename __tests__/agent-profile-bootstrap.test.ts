@@ -206,6 +206,72 @@ test('relative and absolute symlinks remain links without copying their targets'
   assert.strictEqual(readlinkSync(absoluteLink), external)
 })
 
+test('a regular file swapped to a symlink after lstat is never dereferenced', () => {
+  const paths = roots('regular-file-symlink-race')
+  const sourceFile = writeSourceFile(paths.source, 'agents/swap-after-lstat.txt', 'safe source\n')
+  const externalFile = join(tempDir('regular-file-symlink-race-external'), 'external-secret.txt')
+  writeFileSync(externalFile, 'external secret must never be copied\n')
+  mkdirSync(join(paths.home, '.agents'), { recursive: true })
+  writeFileSync(join(paths.home, '.agents', 'sentinel.txt'), 'previous profile\n')
+
+  const loaderPath = join(tempDir('regular-file-symlink-race-loader'), 'swap-after-lstat-loader.mjs')
+  writeFileSync(loaderPath, `
+export async function resolve(specifier, context, nextResolve) {
+  if (
+    specifier === 'node:fs/promises' &&
+    context.parentURL?.endsWith('/agent-profile-bootstrap.mjs')
+  ) {
+    return { url: 'boxdown-test:fs-promises', shortCircuit: true }
+  }
+  return nextResolve(specifier, context)
+}
+
+export async function load(url, context, nextLoad) {
+  if (url !== 'boxdown-test:fs-promises') return nextLoad(url, context)
+  return {
+    format: 'module',
+    shortCircuit: true,
+    source: \`
+      import * as real from 'node:fs/promises'
+      let swapped = false
+      export const chmod = real.chmod
+      export const copyFile = real.copyFile
+      export const mkdir = real.mkdir
+      export const open = real.open
+      export const readlink = real.readlink
+      export const readdir = real.readdir
+      export const rename = real.rename
+      export const rm = real.rm
+      export const symlink = real.symlink
+      export const writeFile = real.writeFile
+      export async function lstat(path) {
+        const entry = await real.lstat(path)
+        if (!swapped && path === ${JSON.stringify(sourceFile)} && entry.isFile()) {
+          swapped = true
+          await real.rename(path, path + '.original')
+          await real.symlink(${JSON.stringify(externalFile)}, path)
+        }
+        return entry
+      }
+    \`
+  }
+}
+`)
+
+  const result = runBootstrap('auth', paths, [
+    '--no-warnings',
+    '--experimental-loader',
+    loaderPath
+  ])
+
+  assert.notStrictEqual(result.status, 0)
+  assert.match(result.stderr, /agent-profile-bootstrap: failed to copy ~\/\.agents/)
+  assert.doesNotMatch(result.stderr, /external-secret|external secret/)
+  assert.strictEqual(readFileSync(join(paths.home, '.agents', 'sentinel.txt'), 'utf8'), 'previous profile\n')
+  assert.strictEqual(lstatSync(join(paths.home, '.agents', 'swap-after-lstat.txt'), { throwIfNoEntry: false }), undefined)
+  assert.strictEqual(lstatSync(paths.marker, { throwIfNoEntry: false }), undefined)
+})
+
 test('special files are skipped with logical, secret-safe warnings', {
   skip: process.platform === 'win32'
 }, () => {
@@ -313,6 +379,7 @@ export async function load(url, context, nextLoad) {
       export const copyFile = real.copyFile
       export const lstat = real.lstat
       export const mkdir = real.mkdir
+      export const open = real.open
       export const readlink = real.readlink
       export const readdir = real.readdir
       export const rm = real.rm

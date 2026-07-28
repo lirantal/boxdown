@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto'
+import { constants } from 'node:fs'
 import {
   chmod,
-  copyFile,
   lstat,
   mkdir,
+  open,
   readlink,
   readdir,
   rename,
@@ -68,13 +69,72 @@ async function copyEntry(source, destination, logicalSource, relativePath = '.')
   }
 
   if (sourceEntry.isFile()) {
-    await copyFile(source, destination)
-    await chmod(destination, (sourceEntry.mode & 0o777) | 0o600)
+    await copyRegularFile(source, destination)
     return true
   }
 
   warn(`skipping ${logicalSource} entry ${relativePath}`)
   return false
+}
+
+async function copyRegularFile(source, destination) {
+  const sourceHandle = await open(
+    source,
+    constants.O_RDONLY | constants.O_NOFOLLOW
+  )
+  let destinationHandle
+
+  try {
+    const sourceEntry = await sourceHandle.stat()
+    if (!sourceEntry.isFile()) {
+      throw new Error('source changed while copying')
+    }
+
+    const mode = (sourceEntry.mode & 0o777) | 0o600
+    destinationHandle = await open(
+      destination,
+      constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL,
+      mode
+    )
+
+    const buffer = Buffer.allocUnsafe(64 * 1024)
+    let sourcePosition = 0
+    let destinationPosition = 0
+
+    while (true) {
+      const { bytesRead } = await sourceHandle.read(
+        buffer,
+        0,
+        buffer.length,
+        sourcePosition
+      )
+      if (bytesRead === 0) break
+
+      sourcePosition += bytesRead
+      let bufferPosition = 0
+      while (bufferPosition < bytesRead) {
+        const { bytesWritten } = await destinationHandle.write(
+          buffer,
+          bufferPosition,
+          bytesRead - bufferPosition,
+          destinationPosition
+        )
+        if (bytesWritten === 0) {
+          throw new Error('could not write copied file')
+        }
+        bufferPosition += bytesWritten
+        destinationPosition += bytesWritten
+      }
+    }
+
+    await destinationHandle.chmod(mode)
+  } finally {
+    try {
+      await destinationHandle?.close()
+    } finally {
+      await sourceHandle.close()
+    }
+  }
 }
 
 function siblingPath(destination, kind) {

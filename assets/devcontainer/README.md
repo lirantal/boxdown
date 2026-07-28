@@ -221,8 +221,11 @@ and dependency installation.
 The bootstrap copies staged sources to writable `/home/node/.agents`,
 `/home/node/.codex`, `/home/node/.claude`, and `/home/node/.claude.json` as
 needed, then writes the applied-profile marker at
-`/opt/boxdown/state/agent-profile`. These paths are owned by the non-root
-remote user and are container-local: no copy is synchronized back to the host.
+`/opt/boxdown/state/agent-profile`. The state parent is a root-owned sticky
+directory so a UID-remapped non-root remote user can safely create its
+owner-only marker. Canonical profile copies and the marker are owned by that
+active remote user and are container-local: no copy is synchronized back to
+the host.
 
 Source-file failures for missing or unreadable individual credentials are
 non-fatal. A failed `~/.agents` or full-profile directory copy is fatal; the

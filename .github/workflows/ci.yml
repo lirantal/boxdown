@@ -115,10 +115,10 @@ jobs:
       - name: Smoke-test non-root lifecycle and SSH bootstrap
         if: steps.changes.outputs.image == 'true'
         run: >-
-          docker run --rm
+          docker run --rm --user root
           --mount type=bind,source="${GITHUB_WORKSPACE}/assets/devcontainer",target=/opt/boxdown/devcontainer,readonly
           boxdown-ci:${{ github.sha }}
-          /opt/boxdown/image-tools/lifecycle-smoke-test.sh
+          /opt/boxdown/image-tools/lifecycle-smoke-test.sh --remap-node
       - name: Export dual-platform OCI image
         if: steps.changes.outputs.image == 'true'
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
