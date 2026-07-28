@@ -815,6 +815,15 @@ test('documents narrow host Claude credential forwarding', () => {
   assert.match(lifecycleDocs, /does not remove host Claude credentials/is)
 })
 
+test('documents interactive container reuse lifecycle', () => {
+  const startDocs = readFileSync(join(process.cwd(), 'docs/features/start-and-shell.md'), 'utf8')
+  const setupDocs = readFileSync(join(process.cwd(), 'docs/features/setup.md'), 'utf8')
+
+  assert.match(startDocs, /reuse an already-running workspace devcontainer/i)
+  assert.match(startDocs, /--recreate.*bypasses reuse/i)
+  assert.match(setupDocs, /explicit provisioning/i)
+})
+
 describe('interactive install target prompt', () => {
   test('uses the shared prompt style primitives', () => {
     assert.strictEqual(formatPromptTitle('Install optional SSH targets?'), '\u001B[36m◆\u001B[0m  \u001B[1mInstall optional SSH targets?\u001B[0m')

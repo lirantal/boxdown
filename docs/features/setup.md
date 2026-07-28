@@ -33,6 +33,9 @@ network access but no GHCR login. The image includes Codex, Claude Code, Snyk,
 contains no workspaces or credentials, which Boxdown provides only through
 per-workspace mounts and runtime state.
 
+Setup is explicit provisioning and follows the full setup lifecycle even when
+the workspace container is already running.
+
 ## Flow
 
 1. Resolve the workspace to a real absolute path.
