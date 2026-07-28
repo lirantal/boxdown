@@ -12,7 +12,9 @@ is mounted as the workspace after the image is pulled.
 - **Fast onboarding** — Open the folder in a container. An uncached image pull
   needs network access, but no GHCR login; dependency installation and local
   git tweaks then run once for the workspace.
-- **Host secrets, container dev** — `ANTHROPIC_API_KEY` and `SNYK_TOKEN` are passed from your Mac/Linux session into the container when set locally (see below).
+- **Host secrets, container dev** — `SNYK_TOKEN` is available when set locally;
+  `ANTHROPIC_API_KEY` is available in the `auth` and `full` agent profiles (see
+  below).
 - **Optional CLI workflow** — Use `start.sh` if you prefer a terminal-driven container instead of only the editor.
 - **Portless SSH workflow** — Install a normal SSH host alias that proxies into the devcontainer without publishing an SSH port.
 
@@ -29,6 +31,7 @@ is mounted as the workspace after the image is pulled.
 | `utils/git-config-bootstrap.sh` | Container-side Git config copy/sanitization helper used by lifecycle scripts. |
 | `utils/python-bootstrap.sh` | Container-side Debian Python runtime helper for explicit opt-in use. |
 | `utils/ssh-bootstrap.sh` | Container-side OpenSSH install/runtime helper used by lifecycle scripts. |
+| `utils/agent-profile-bootstrap.mjs` | Copies staged agent-profile sources into container-local writable homes. |
 | `utils/coding-agent-cli-update.sh` | Shared install/update helper for Codex, OpenCode, Claude Code, and Antigravity CLI. |
 | `utils/deps-install.sh` | Workspace dependency installation helper used by `hooks/post-create.sh`; bootstraps pnpm/yarn when required. |
 
@@ -206,24 +209,46 @@ Boxdown never creates, modifies, reads, or deletes a project
 If an older version left a service-account token in `.env.development` or
 `boxdown.log`, remove it manually and rotate the token.
 
-## Optional customization
+## Agent profiles and optional customization
 
-- **Global agent config** — Boxdown automatically mounts host `~/.agents`
-  read-only at `/home/node/.agents` when that directory exists. Recreate the
-  devcontainer after creating or removing it so the mount set is refreshed.
-- **Codex auth on the host** — Boxdown automatically mounts host
-  `~/.codex/auth.json` read-only at `/home/node/.codex/auth.json` when that file
-  exists. Recreate the devcontainer after creating or removing it so the mount
-  set is refreshed.
-- **Claude Code credentials on the host** — On supported platforms, Boxdown
-  automatically forwards the documented Claude credential file. Recreate the
-  devcontainer after creating or removing it so the mount set is refreshed. On
-  Linux/WSL, the Dev Containers CLI synchronizes the remote UID/GID so an
-  owner-only credential remains writable, which can add a small create-time
-  cost.
+Boxdown supports `none`, `auth`, and `full` agent profiles; `auth` is the
+default. It mounts selected host sources read-only in the staging tree at
+`/opt/boxdown/agent-profile-source`, never directly at a canonical agent home.
+At container creation, `post-create.sh` runs the agent-profile bootstrap before
+Git setup, runtime-secret setup, SSH runtime preparation, agent refresh state,
+and dependency installation.
+
+The bootstrap copies staged sources to writable `/home/node/.agents`,
+`/home/node/.codex`, `/home/node/.claude`, and `/home/node/.claude.json` as
+needed, then writes the applied-profile marker at
+`/opt/boxdown/state/agent-profile`. These paths are owned by the non-root
+remote user and are container-local: no copy is synchronized back to the host.
+
+Source-file failures for missing or unreadable individual credentials are
+non-fatal. A failed `~/.agents` or full-profile directory copy is fatal; the
+error identifies only the top-level source and never prints profile or
+credential contents. The bootstrap preserves files, directories, and symlinks
+without following links, and skips special files with a warning.
+
+Select the profile with `--agent-profile none|auth|full` when creating or
+recreating. `auth` copies file-backed authentication and complete `~/.agents`;
+`full` copies opaque Codex and Claude homes as well. On macOS, Claude Keychain
+credentials are not copied. Repository-scoped agent configuration remains
+available through the workspace mount in every tier.
+
+If a custom mount is at, above, or below one of the canonical profile
+destinations, that destination is externally managed. Boxdown skips its staging
+and copy for it; the custom mount owner controls its contents and write policy.
+Recreate after changing a profile, custom mount, or host source. Host changes do
+not update an existing stopped or running container.
+
+The previous direct host mounts, Codex config forwarding, and Claude MCP
+projection no longer apply to `auth`. Put portable MCP configuration in the
+repository, or choose `full` when user-scoped configuration is required.
+
 - **Other agent config on the host** — Uncomment the generic `mounts` entries
   in `devcontainer.json` to bind other agent configuration directories such as
-  `~/.gemini` into the container.
+  `~/.gemini`. Such a custom canonical mount is externally managed.
 - **Coding-agent defaults** — The published image provides Codex and Claude
   Code. OpenCode and Antigravity remain available through `boxdown opencode`
   and `boxdown antigravity`, but install lazily only when those commands run.

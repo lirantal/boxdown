@@ -68,59 +68,55 @@ Metadata may also record the last inspected Docker image ID for the workspace so
 token are written to owner-only files in a per-workspace runtime directory,
 separate from persistent workspace data. Boxdown mounts that directory
 read-only at `/run/boxdown/secrets`; only non-secret mount and Bash-bootstrap
-paths appear in generated Docker configuration.
+paths appear in generated Docker configuration. The `none` agent profile
+suppresses `ANTHROPIC_API_KEY`; the other runtime secrets are unchanged.
 
 Bash sessions load available files as ordinary environment variables. Missing
 host values and failed 1Password lookup are non-blocking. `boxdown down` and
 `boxdown purge` remove the workspace runtime directory after container removal.
 Boxdown does not use or modify project `.env.development` files.
 
-## Claude Code credentials
+## Agent profile staging and authentication
 
-On Linux and WSL, Boxdown forwards the host credential file
-`~/.claude/.credentials.json`, or `$CLAUDE_CONFIG_DIR/.credentials.json` when
-`CLAUDE_CONFIG_DIR` is set. On Windows, it forwards
-`%USERPROFILE%\.claude.credentials.json`, or
-`%CLAUDE_CONFIG_DIR%\.credentials.json` when `CLAUDE_CONFIG_DIR` is set.
-The supported host file is mounted read-write at
-`/home/node/.claude/.credentials.json` so Claude Code can refresh it.
-The Dev Containers CLI synchronizes the remote user's UID/GID on Linux/WSL so
-that an owner-only host credential file remains a writable credential mount.
-This intentionally trades some first-create speed for correct host-file
-permissions.
+Every agent profile source is mounted at a read-only staging path below
+`/opt/boxdown/agent-profile-source`. During container creation, the profile
+bootstrap makes container-local writable copies in the canonical homes:
+`/home/node/.agents`, `/home/node/.codex`, `/home/node/.claude`, and, when
+applicable, `/home/node/.claude.json`. Boxdown never mounts a selected host
+source at one of those canonical destinations, and there is no reverse
+synchronization from the container to the host.
 
-Boxdown neither copies nor deletes that host credential file. It deliberately
-does not mount `~/.claude` or `~/.claude.json`, so other Claude configuration
-stays on the host. On macOS, Claude Code credentials are stored in the Keychain
-and are not automatically forwarded. Other host platforms do not have a
-supported file-backed forwarding path.
+`auth` stages the complete `~/.agents` tree, available file-backed Codex auth,
+and available supported file-backed Claude credentials. On Linux and WSL, the
+Claude source is `~/.claude/.credentials.json`, or
+`$CLAUDE_CONFIG_DIR/.credentials.json`; on Windows it is
+`%USERPROFILE%\.claude.credentials.json`, or the equivalent configured path.
+The bootstrap copies those credentials into the container-local home, so Claude
+can refresh its copy without changing the host credential file. Missing or
+unreadable credential sources are non-fatal.
+
+`full` stages opaque complete Codex and Claude homes, `~/.agents`, and a
+separate `.claude.json` when applicable. The bootstrap treats full directories
+and `~/.agents` as required when they were staged: a copy failure stops creation
+and identifies only the top-level source, never credential contents. On macOS,
+Claude credentials in Keychain are not copied. A runtime `ANTHROPIC_API_KEY`,
+when available and the tier is not `none`, remains the supported alternative.
+
+A custom mount at, above, or below a canonical profile destination is externally
+managed. Boxdown skips the matching staging input and copy rather than writing
+over it.
 
 ## MCP server configuration
 
-When `$CODEX_HOME/config.toml` exists (or `~/.codex/config.toml` when
-`CODEX_HOME` is unset), Boxdown mounts it read-only at
-`/home/node/.codex/config.toml`. This lets Codex use its configured MCP servers
-without allowing the container to change the host configuration.
+`auth` does not copy Codex `config.toml`, user-scoped Claude configuration, or
+a Claude MCP projection. Move portable MCP configuration into the repository
+using the relevant project-scoped mechanism, or select `full` when you need the
+opaque user-scoped configuration. Project `.mcp.json` and other committed agent
+configuration remain visible through the workspace mount in every tier.
 
-Claude Code stores user and local MCP configuration in `~/.claude.json`, or
-`$CLAUDE_CONFIG_DIR/.claude.json` when that variable is set. Boxdown creates an
-owner-only runtime projection containing user-scoped servers and the current
-workspace's local MCP configuration. The local entry is remapped from the host
-workspace path to `/workspaces/<repo-name>`, and project-server approval choices
-are retained. The projection is mounted read-write at `/home/node/.claude.json`
-so Claude can keep its container-local session state without changing the host
-file. Project-scoped `.mcp.json` files are already available through the normal
-workspace mount.
-
-MCP definitions can contain command paths and environment-variable references
-that are valid only on the host. Install the required server runtime in the
-container and provide any referenced environment variables there before relying
-on that server. Recreate the container after adding or removing an MCP
-configuration file so Docker receives the updated mount set.
-
-> TODO (#18): Validate and implement a safe forwarding strategy for OAuth token
-> stores used by remote MCP servers. This change forwards server definitions,
-> but does not claim OAuth login reuse across the host and container.
+Full-profile MCP definitions can still refer to host-only command paths,
+environment variables, sockets, or native dependencies. Install the required
+runtime and provide its environment inside the container before relying on them.
 
 ## External App Config
 
@@ -164,18 +160,15 @@ Boxdown starts from `assets/devcontainer/devcontainer.json` and rewrites:
 - `postCreateCommand`, to call mounted container assets.
 - `postStartCommand`, to call mounted container assets.
 - `mounts`, to add the read-only asset mount, public-key mount, host Git config
-  snapshot mount, runtime secret mount, host `~/.agents` mount when that
-  directory exists, host `~/.codex/auth.json` read-only mount when that file
-  exists, host Codex `config.toml` when present, the optional supported Claude
-  credential file as a writable single-file mount, and a workspace-scoped
-  Claude MCP configuration projection when present.
+  snapshot mount, runtime secret mount, and profile-specific read-only staging
+  mounts below `/opt/boxdown/agent-profile-source`.
 - `containerEnv`, to point SSH bootstrap at the mounted public key and actual
-  container workspace.
+  container workspace, and record the non-secret selected profile as
+  `BOXDOWN_AGENT_PROFILE`.
 
 The target repository is still the Dev Container workspace via
 `--workspace-folder`.
 
-Mounts are create-time container settings. Existing containers created before
-runtime-mounted secrets require `boxdown start --recreate`. The same applies
-after creating or removing host `~/.agents`, `~/.codex/auth.json`, or the
-supported host Claude credential file so Docker receives the updated mount set.
+Mounts are create-time container settings. A profile selection or source change
+does not update a stopped or running existing container; run
+`boxdown start --recreate` to seed a fresh container-local copy.
