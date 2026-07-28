@@ -169,10 +169,13 @@ rather than claiming that Boxdown applied the selected tier there.
 
 A malformed CSV string mount, or any unresolved `${...}` expression anywhere
 in a string mount, makes all canonical profile destinations externally managed.
-For a structured mount, only an unresolved destination value has that effect; a
-substitution confined to `source` or `src` does not claim a destination. The
-original mount is preserved unchanged. Status reports only canonical
-destination names and never reports substitution values.
+For a structured mount, every present serialized `type`, `src`/`source`, and
+`dst`/`target`/`destination` field is checked. A non-string value, unresolved
+`${...}`, comma, double quote, carriage return, line feed, or NUL makes all
+canonical profile destinations externally managed. This includes substitutions
+confined to the type or source fields. Opaque unknown fields are not interpreted
+as mount grammar. The original mount is preserved unchanged. Status reports
+only canonical destination names and never reports substitution values.
 
 ### Container bootstrap
 

@@ -24,6 +24,12 @@ export type PosixPathRelationship =
   | 'unrelated'
 
 const destinationAliases = ['target', 'dst', 'destination'] as const
+const sourceAliases = ['source', 'src'] as const
+const structuredSerializedFieldNames = new Set([
+  'type',
+  ...sourceAliases,
+  ...destinationAliases
+])
 
 export function isDevcontainerMount (value: unknown): value is DevcontainerMount {
   return typeof value === 'string' ||
@@ -126,6 +132,16 @@ function containsUnresolvedSubstitution (value: unknown): boolean {
   return typeof value === 'string' && value.includes('${')
 }
 
+function structuredFieldValueIsIndeterminate (value: unknown): boolean {
+  return typeof value !== 'string' ||
+    containsUnresolvedSubstitution(value) ||
+    value.includes(',') ||
+    value.includes('"') ||
+    value.includes('\r') ||
+    value.includes('\n') ||
+    value.includes('\0')
+}
+
 export function inspectDevcontainerMount (mount: unknown): DevcontainerMountPolicy {
   let values: unknown[]
   let destinationIndeterminate = false
@@ -141,8 +157,21 @@ export function inspectDevcontainerMount (mount: unknown): DevcontainerMountPoli
     }
     values = destinationValuesFromFields(fields)
   } else if (typeof mount === 'object' && mount !== null && !Array.isArray(mount)) {
-    values = destinationAliases.map(alias => (mount as Record<string, unknown>)[alias])
-    destinationIndeterminate = values.some(containsUnresolvedSubstitution)
+    const serializedFields = Object.entries(mount)
+      .map(([key, value]) => ({
+        key: key.toLowerCase(),
+        value
+      }))
+      .filter(field => structuredSerializedFieldNames.has(field.key))
+
+    destinationIndeterminate = serializedFields
+      .some(field => structuredFieldValueIsIndeterminate(field.value))
+    values = serializedFields
+      .filter(field =>
+        destinationAliases.includes(field.key as typeof destinationAliases[number]) &&
+        !structuredFieldValueIsIndeterminate(field.value)
+      )
+      .map(field => field.value)
   } else {
     values = []
   }

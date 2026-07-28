@@ -11,6 +11,7 @@ import {
   BOXDOWN_CONTAINER_GITCONFIG_PATH
 } from '../src/constants.ts'
 import {
+  inspectDevcontainerMount,
   mountConflictsWithDestination,
   mountTargetsDestination,
   normalizedMountDestinations
@@ -111,8 +112,8 @@ test('fails closed when an unresolved substitution can change string mount gramm
   )
 })
 
-test('fails closed only for structured destination substitutions', () => {
-  const uncertainDestinations = [
+test('fails closed when any structured serialized field contains unresolved substitution', () => {
+  const mounts = [
     {
       type: 'bind',
       source: '/tmp/profile',
@@ -127,23 +128,140 @@ test('fails closed only for structured destination substitutions', () => {
       type: 'bind',
       source: '/tmp/profile',
       destination: '${workspaceFolder}/.claude'
+    },
+    {
+      type: 'bind',
+      source: '${localEnv:PROFILE_SOURCE}',
+      target: '/var/lib/unrelated'
+    },
+    {
+      type: '${localEnv:MOUNT_TYPE}',
+      source: '/tmp/profile',
+      target: '/var/lib/unrelated'
     }
   ]
 
-  for (const mount of uncertainDestinations) {
+  for (const mount of mounts) {
     assertConflictsWithEveryProfileDestination(mount)
   }
+})
 
-  const sourceOnlySubstitution = {
-    type: 'bind',
-    source: '${localEnv:PROFILE_SOURCE}',
-    target: '/var/lib/unrelated'
+test('fails closed on structured CSV injection and control characters', () => {
+  const mounts = [
+    {
+      type: 'bind',
+      source: '/tmp/profile,target=/home/node/.codex',
+      target: '/var/lib/unrelated'
+    },
+    {
+      type: 'bind,dst=/home/node/.codex',
+      source: '/tmp/profile',
+      target: '/var/lib/unrelated'
+    },
+    {
+      type: 'tmpfs',
+      target: '/var/lib/unrelated,dst=/home/node/.codex'
+    },
+    {
+      type: 'bind"',
+      source: '/tmp/profile',
+      target: '/var/lib/unrelated'
+    },
+    {
+      type: 'bind\r',
+      source: '/tmp/profile',
+      target: '/var/lib/unrelated'
+    },
+    {
+      type: 'bind',
+      source: '/tmp/profile\ninjected',
+      target: '/var/lib/unrelated'
+    },
+    {
+      type: 'bind',
+      source: '/tmp/profile',
+      target: '/var/lib/unrelated\0dst=/home/node/.codex'
+    }
+  ]
+
+  for (const mount of mounts) {
+    assertConflictsWithEveryProfileDestination(mount)
   }
+})
+
+test('fails closed on non-string structured serialized fields', () => {
+  const mounts = [
+    {
+      type: 42,
+      source: '/tmp/profile',
+      target: '/var/lib/unrelated'
+    },
+    {
+      type: 'bind',
+      source: {
+        path: '/tmp/profile'
+      },
+      target: '/var/lib/unrelated'
+    },
+    {
+      type: 'bind',
+      source: '/tmp/profile',
+      target: ['/var/lib/unrelated']
+    }
+  ]
+
+  for (const mount of mounts) {
+    assertConflictsWithEveryProfileDestination(mount)
+  }
+})
+
+test('matches structured aliases case-insensitively and retains safe destinations while uncertain', () => {
+  const mount = {
+    TyPe: 'bind',
+    SoUrCe: '/tmp/profile,target=/home/node/.agents',
+    TARGET: BOXDOWN_CONTAINER_CODEX_DIR,
+    destination: BOXDOWN_CONTAINER_CLAUDE_DIR,
+    arbitrary: {
+      preserve: true,
+      serializedLooking: 'target=/home/node/.agents,${localEnv:OPAQUE}'
+    }
+  }
+  const original = structuredClone(mount)
+
+  assert.deepStrictEqual(inspectDevcontainerMount(mount), {
+    destinations: [
+      BOXDOWN_CONTAINER_CODEX_DIR,
+      BOXDOWN_CONTAINER_CLAUDE_DIR
+    ],
+    destinationIndeterminate: true
+  })
+  assert.deepStrictEqual(mount, original)
+  assertConflictsWithEveryProfileDestination(mount)
+})
+
+test('ignores opaque structured metadata that Dev Containers does not serialize as mount grammar', () => {
+  const mount = {
+    type: 'bind',
+    source: '/tmp/profile',
+    target: '/var/lib/unrelated',
+    arbitrary: {
+      value: 'target=/home/node/.codex,${localEnv:OPAQUE}',
+      quote: '"',
+      nul: '\0'
+    }
+  }
+  const original = structuredClone(mount)
+
+  assert.deepStrictEqual(inspectDevcontainerMount(mount), {
+    destinations: ['/var/lib/unrelated'],
+    destinationIndeterminate: false
+  })
+  assert.deepStrictEqual(mount, original)
   for (const destination of canonicalProfileDestinations) {
     assert.strictEqual(
-      mountConflictsWithDestination(sourceOnlySubstitution, destination),
+      mountConflictsWithDestination(mount, destination),
       false,
-      `source-only substitution must not claim ${destination}`
+      `opaque metadata must not claim ${destination}`
     )
   }
 })

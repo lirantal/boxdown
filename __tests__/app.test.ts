@@ -1004,8 +1004,15 @@ test('documents agent profile tiers', () => {
     )
     assert.match(
       document,
-      /structured mount.*destination value.*source.*does not claim a destination/is
+      /structured mount.*present serialized `type`, `src`\/`source`, and\s+`dst`\/`target`\/`destination`/is
     )
+    assert.match(
+      document,
+      /non-string value, unresolved.*comma, double quote, carriage return, line feed, or NUL makes all\s+canonical profile destinations/is
+    )
+    assert.match(document, /includes substitutions\s+confined to the type or source fields/is)
+    assert.match(document, /opaque unknown fields.*not interpreted\s+as mount grammar/is)
+    assert.doesNotMatch(document, /structured mount.*source.*does not claim a destination/is)
     assert.match(
       document,
       /original mount.*preserved unchanged.*status.*canonical.*never.*substitution values/is
@@ -7639,6 +7646,95 @@ describe('devcontainer config generation', () => {
             preserve: true
           }
         }
+      },
+      {
+        name: 'structured substituted source',
+        mount: {
+          type: 'bind',
+          source: '${localEnv:PROFILE_SOURCE}',
+          target: '/var/lib/unrelated',
+          arbitrary: {
+            preserve: true
+          }
+        }
+      },
+      {
+        name: 'structured substituted type',
+        mount: {
+          type: '${localEnv:MOUNT_TYPE}',
+          source: '/custom/profile',
+          target: '/var/lib/unrelated'
+        }
+      },
+      {
+        name: 'structured source comma injection',
+        mount: {
+          type: 'bind',
+          source: '/custom/profile,target=/home/node/.codex',
+          target: '/var/lib/unrelated',
+          arbitrary: {
+            preserve: true,
+            serializedLooking: 'target=/home/node/.agents,${localEnv:OPAQUE}'
+          }
+        }
+      },
+      {
+        name: 'structured type comma injection',
+        mount: {
+          type: 'bind,dst=/home/node/.codex',
+          source: '/custom/profile',
+          target: '/var/lib/unrelated'
+        }
+      },
+      {
+        name: 'structured destination comma injection',
+        mount: {
+          type: 'tmpfs',
+          target: '/var/lib/unrelated,dst=/home/node/.codex'
+        }
+      },
+      {
+        name: 'structured quote control',
+        mount: {
+          type: 'bind"',
+          source: '/custom/profile',
+          target: '/var/lib/unrelated'
+        }
+      },
+      {
+        name: 'structured carriage return control',
+        mount: {
+          type: 'bind',
+          source: '/custom/profile\r',
+          target: '/var/lib/unrelated'
+        }
+      },
+      {
+        name: 'structured line feed control',
+        mount: {
+          type: 'bind\n',
+          source: '/custom/profile',
+          target: '/var/lib/unrelated'
+        }
+      },
+      {
+        name: 'structured nul control',
+        mount: {
+          type: 'bind',
+          source: '/custom/profile',
+          target: '/var/lib/unrelated\0dst=/home/node/.codex'
+        }
+      },
+      {
+        name: 'structured non-string serialized field',
+        mount: {
+          type: 'bind',
+          source: 42,
+          target: '/var/lib/unrelated',
+          arbitrary: {
+            preserve: true
+          }
+        }
       }
     ] as const
 
@@ -7701,56 +7797,6 @@ describe('devcontainer config generation', () => {
     }
   })
 
-  test('structured source-only substitutions remain unrelated to canonical profile destinations', () => {
-    const home = tempDir('structured-source-substitution-home')
-    mkdirSync(join(home, '.agents'))
-    mkdirSync(join(home, '.codex'))
-    mkdirSync(join(home, '.claude'))
-    writeFileSync(join(home, '.claude.json'), '{}\n')
-
-    const mount = {
-      type: 'bind',
-      source: '${localEnv:PROFILE_SOURCE}',
-      target: '/var/lib/unrelated',
-      arbitrary: {
-        preserve: true
-      }
-    }
-    const assets = tempDir('structured-source-substitution-assets')
-    writeFileSync(join(assets, 'devcontainer.json'), `${JSON.stringify({ mounts: [mount] })}\n`)
-    const context = createWorkspaceContext({
-      workspace: tempDir('structured-source-substitution-workspace'),
-      env: {
-        HOME: home,
-        BOXDOWN_CACHE_HOME: tempDir('structured-source-substitution-cache'),
-        BOXDOWN_DATA_HOME: tempDir('structured-source-substitution-data')
-      },
-      platform: 'linux',
-      assetsDevcontainerDir: assets
-    })
-
-    const config = buildGeneratedDevcontainerConfig(context, undefined, 'full')
-    assert.deepStrictEqual(config.mounts?.[0], mount)
-    assert.ok(config.mounts?.some(candidate =>
-      typeof candidate === 'string' &&
-      candidate.includes('/opt/boxdown/agent-profile-source')
-    ))
-
-    mkdirSync(context.workspaceCacheDir, { recursive: true })
-    writeFileSync(context.generatedConfigPath, `${JSON.stringify(config, null, 2)}\n`)
-    const status = createStatusInfo(context, 'structured-source-substitution', {
-      id: 'structured-source-substitution-container',
-      state: 'running'
-    }, existsSync, {
-      sshConfigPath: join(tempDir('structured-source-substitution-ssh'), 'config'),
-      agentProfileSelection: resolveAgentProfile(undefined, 'full'),
-      containerAgentProfile: 'full'
-    })
-
-    assert.ok(Object.values(status.agentProfile.sources).every(source => source === 'available'))
-    assert.deepStrictEqual(status.agentProfile.customDestinations, [])
-  })
-
   test('structured mounts are preserved unchanged and use normalized dst ownership in generation and status', () => {
     const home = tempDir('structured-profile-home')
     mkdirSync(join(home, '.agents'))
@@ -7758,23 +7804,38 @@ describe('devcontainer config generation', () => {
     mkdirSync(join(home, '.claude'))
     writeFileSync(join(home, '.claude.json'), '{}\n')
 
-    const cases = [
+    const cases: Array<{
+      name: string
+      dst: string
+      ownsCodex: boolean
+      aliases?: Record<string, string>
+    }> = [
       { name: 'exact', dst: '/home//node/.codex/', ownsCodex: true },
       { name: 'parent', dst: '/home/node/.codex/..', ownsCodex: true },
       { name: 'child', dst: '/home/node/.codex/./cache', ownsCodex: true },
       { name: 'sibling', dst: '/home/node/.codex-other', ownsCodex: false },
-      { name: 'unrelated', dst: '/var/lib/codex', ownsCodex: false }
-    ] as const
+      { name: 'unrelated', dst: '/var/lib/codex', ownsCodex: false },
+      {
+        name: 'repeated-case-alias',
+        dst: '/var/lib/codex',
+        ownsCodex: true,
+        aliases: {
+          DST: BOXDOWN_CONTAINER_CODEX_DIR
+        }
+      }
+    ]
 
     for (const entry of cases) {
       const mount = {
         type: 'bind',
         src: `/custom/${entry.name}`,
         dst: entry.dst,
+        ...entry.aliases,
         consistency: 'cached',
         arbitrary: {
           keep: true,
-          labels: ['opaque', entry.name]
+          labels: ['opaque', entry.name],
+          serializedLooking: 'target=/home/node/.codex,${localEnv:OPAQUE}'
         }
       }
       const assets = tempDir(`structured-profile-assets-${entry.name}`)
