@@ -236,6 +236,8 @@ test('an unreadable credential is a non-fatal warning when reproducible', {
 }, () => {
   const paths = roots('unreadable-credential')
   const credential = writeSourceFile(paths.source, 'codex-auth.json', '{"token":"secret"}\n')
+  mkdirSync(join(paths.home, '.codex'), { recursive: true })
+  writeFileSync(join(paths.home, '.codex', 'auth.json'), '{"token":"stale"}\n')
   chmodSync(credential, 0o000)
   try {
     const result = runBootstrap('auth', paths)
@@ -259,6 +261,8 @@ test('a failed required directory copy preserves the previous destination and om
   writeSourceFile(blocked, 'secret.txt', 'secret\n')
   mkdirSync(join(paths.home, '.agents'), { recursive: true })
   writeFileSync(join(paths.home, '.agents', 'sentinel.txt'), 'previous\n')
+  mkdirSync(join(paths.marker, '..'), { recursive: true })
+  writeFileSync(paths.marker, 'auth\n')
   chmodSync(blocked, 0o000)
   try {
     const result = runBootstrap('auth', paths)
@@ -274,6 +278,55 @@ test('a failed required directory copy preserves the previous destination and om
     )
   } finally {
     chmodSync(blocked, 0o700)
+  }
+})
+
+test('a marker invalidation failure stops before profile copies begin', {
+  skip: typeof process.getuid !== 'function' || process.getuid() === 0
+}, () => {
+  const paths = roots('failed-marker-invalidation')
+  const markerParent = join(paths.marker, '..')
+  writeSourceFile(paths.source, 'agents/new.txt', 'new profile\n')
+  mkdirSync(join(paths.home, '.agents'), { recursive: true })
+  writeFileSync(join(paths.home, '.agents', 'sentinel.txt'), 'previous\n')
+  mkdirSync(markerParent, { recursive: true })
+  writeFileSync(paths.marker, 'auth\n')
+  chmodSync(markerParent, 0o500)
+  try {
+    const result = runBootstrap('auth', paths)
+
+    assert.notStrictEqual(result.status, 0)
+    assert.match(result.stderr, /agent-profile-bootstrap: failed to invalidate agent profile marker/)
+    assert.ok(!result.stderr.includes(markerParent))
+    assert.strictEqual(readFileSync(join(paths.home, '.agents', 'sentinel.txt'), 'utf8'), 'previous\n')
+    assert.strictEqual(lstatSync(join(paths.home, '.agents', 'new.txt'), { throwIfNoEntry: false }), undefined)
+  } finally {
+    chmodSync(markerParent, 0o700)
+  }
+})
+
+test('failure to clear a stale canonical credential fails closed', {
+  skip: typeof process.getuid !== 'function' || process.getuid() === 0
+}, () => {
+  const paths = roots('failed-stale-credential-removal')
+  const credential = writeSourceFile(paths.source, 'codex-auth.json', '{"token":"secret"}\n')
+  const codexHome = join(paths.home, '.codex')
+  mkdirSync(codexHome, { recursive: true })
+  writeFileSync(join(codexHome, 'auth.json'), '{"token":"stale"}\n')
+  chmodSync(credential, 0o000)
+  chmodSync(codexHome, 0o500)
+  try {
+    const result = runBootstrap('auth', paths)
+
+    assert.notStrictEqual(result.status, 0)
+    assert.match(result.stderr, /agent-profile-bootstrap:.*\$CODEX_HOME/)
+    assert.doesNotMatch(result.stderr, /secret|stale/)
+    assert.ok(!result.stderr.includes(codexHome))
+    assert.strictEqual(readFileSync(join(codexHome, 'auth.json'), 'utf8'), '{"token":"stale"}\n')
+    assert.strictEqual(lstatSync(paths.marker, { throwIfNoEntry: false }), undefined)
+  } finally {
+    chmodSync(codexHome, 0o700)
+    chmodSync(credential, 0o600)
   }
 })
 
@@ -334,6 +387,6 @@ test('marker failures report no override path details', () => {
   const result = runBootstrap('none', paths)
 
   assert.notStrictEqual(result.status, 0)
-  assert.match(result.stderr, /agent-profile-bootstrap: failed to write agent profile marker/)
+  assert.match(result.stderr, /agent-profile-bootstrap: failed to invalidate agent profile marker/)
   assert.doesNotMatch(result.stderr, /private-marker-secret/)
 })

@@ -134,6 +134,19 @@ async function copyCredential(source, destination, logicalSource) {
     await replaceFromSource(source, destination, logicalSource)
   } catch {
     warn(`could not copy credential into ${logicalSource}`)
+    try {
+      await rm(destination, { force: true })
+    } catch {
+      throw new Error(`failed to clear credential from ${logicalSource}`)
+    }
+  }
+}
+
+async function invalidateMarker() {
+  try {
+    await rm(markerPath, { force: true })
+  } catch {
+    throw new Error('failed to invalidate agent profile marker')
   }
 }
 
@@ -151,6 +164,7 @@ async function writeMarker(profile) {
 
 async function main() {
   const profile = selectedProfile()
+  await invalidateMarker()
 
   if (profile === 'auth') {
     await copyRequired(
