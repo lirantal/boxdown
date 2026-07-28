@@ -143,7 +143,7 @@ test('creates the Claude credential mount parent for the node user', () => {
 
   assert.match(
     dockerfile,
-    /install -d -m 0700 -o node -g node \/home\/node\/\.claude/
+    /install -d -m 0700 -o node -g node \\\s+\/home\/node\/\.claude/
   )
 })
 
@@ -152,7 +152,16 @@ test('creates the Codex configuration mount parent for the node user', () => {
 
   assert.match(
     dockerfile,
-    /install -d -m 0700 -o node -g node .*\/home\/node\/\.codex/
+    /install -d -m 0700 -o node -g node \\\s+\/home\/node\/\.claude \/home\/node\/\.codex/
+  )
+})
+
+test('creates writable agent profile state owned by the node user', () => {
+  const dockerfile = readFileSync(dockerfilePath, 'utf8')
+
+  assert.match(
+    dockerfile,
+    /install -d -m 0755 -o node -g node \/opt\/boxdown\/state/
   )
 })
 
@@ -164,6 +173,12 @@ test('runs a non-root lifecycle smoke test in the built image', () => {
   assert.match(lifecycleSmoke, /sudo -n true/)
   assert.match(lifecycleSmoke, /ssh-bootstrap\.sh" runtime/)
   assert.match(lifecycleSmoke, /sudo -n -l .*boxdown-ssh-agent-proxy/)
+  assert.match(lifecycleSmoke, /agent-profile-bootstrap\.mjs/)
+  assert.match(lifecycleSmoke, /BOXDOWN_AGENT_PROFILE_SOURCE_DIR=/)
+  assert.match(lifecycleSmoke, /BOXDOWN_AGENT_PROFILE_HOME=/)
+  assert.match(lifecycleSmoke, /BOXDOWN_AGENT_PROFILE_MARKER_PATH=/)
+  assert.match(lifecycleSmoke, /test -w .*auth\.json/)
+  assert.match(lifecycleSmoke, /test -w "\$\{profile_marker\}"/)
   assert.match(ciWorkflow, /lifecycle-smoke-test\.sh/)
   assert.match(
     ciWorkflow,

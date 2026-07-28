@@ -8573,6 +8573,9 @@ describe('packaged assets', () => {
     const postCreate = readFileSync(join(assetsDevcontainerDir, 'hooks', 'post-create.sh'), 'utf8')
     const gitConfigBootstrap = readFileSync(join(assetsDevcontainerDir, 'utils', 'git-config-bootstrap.sh'), 'utf8')
 
+    assert.match(postCreate, /run_step "Copying isolated agent profile" configure_agent_profile/)
+    assert.match(postCreate, /agent-profile-bootstrap\.mjs/)
+    assert.ok(postCreate.indexOf('Copying isolated agent profile') < postCreate.indexOf('Installing workspace dependencies'))
     assert.match(postCreate, /configure_global_git/)
     assert.match(postCreate, /git-config-bootstrap\.sh/)
     assert.match(postCreate, /configure_git_signing/)
