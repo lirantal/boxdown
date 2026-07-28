@@ -12,7 +12,7 @@ permissions: {}
 jobs:
   release:
     permissions:
-      contents: write       # to create release (changesets/action)
+      contents: write       # to create and push the release tag and GitHub Release
       issues: write         # to post issue comments (changesets/action)
       pull-requests: write  # to create pull request (changesets/action)
       id-token: write       # to create release (changesets/action)
@@ -272,9 +272,17 @@ jobs:
           node --import tsx scripts/check-image-release.ts assert-current
       - name: Publish to npm
         if: steps.release-state.outputs.publish == 'true'
-        run: pnpm exec changeset publish
+        run: pnpm exec changeset publish --no-git-tag
         env:
           NPM_CONFIG_PROVENANCE: true
           # Allow Changesets' internal npm calls to warn on pnpm-only devEngines instead of failing the release.
           NPM_CONFIG_FORCE: true
           NPM_TOKEN: ''
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_PACKAGE_NAME: ${{ steps.release-state.outputs.package_name }}
+          RELEASE_VERSION: ${{ steps.release-state.outputs.version }}
+          RELEASE_REVISION: ${{ steps.release-state.outputs.release_revision }}
+          RELEASE_REPOSITORY: ${{ github.repository }}
+        run: node --import tsx scripts/create-github-release.ts
