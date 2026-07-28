@@ -63,6 +63,11 @@ export interface RunCliOptions {
   writeWorkspaceMetadata?: (context: WorkspaceContext, alias: string) => void
   prepareContainerLifecycle?: typeof prepareContainerLifecycle
   findRunningContainerId?: typeof findRunningContainerId
+  startDevcontainer?: typeof startDevcontainer
+  printPortHint?: typeof printPortHint
+  openShell?: typeof openShell
+  ensureContainerCodingAgentCli?: typeof ensureContainerCodingAgentCli
+  openCodingAgentCli?: typeof openCodingAgentCli
 }
 
 export const USAGE = `Usage:
@@ -1544,6 +1549,9 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
       if (agent === undefined) {
         throw new Error('Missing coding-agent command')
       }
+      const start = options.startDevcontainer ?? startDevcontainer
+      const ensureAgent = options.ensureContainerCodingAgentCli ?? ensureContainerCodingAgentCli
+      const openAgent = options.openCodingAgentCli ?? openCodingAgentCli
 
       return runLoggedLifecycle(context, agent, argv, async (logger) => {
         const progress = createCliProgress(parsed, 'stdout', { env: options.env })
@@ -1552,17 +1560,22 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
         ], async () => {
           progress.setSteps(codingAgentProgressSteps(agent))
           await (options.prepareContainerLifecycle ?? prepareContainerLifecycle)(context, alias, progress, options, logger)
-          await startDevcontainer(context, {
+          await start(context, {
             recreate: parsed.recreate,
+            reuseRunning: true,
             progress,
             logger
           })
-          await ensureContainerCodingAgentCli(context, agent, { progress, logger })
+          await ensureAgent(context, agent, { progress, logger })
           showDetailedCommandLogPath(progress, context)
         })
-        return openCodingAgentCli(context, agent, parsed.agentArgs ?? [], { logger })
+        return openAgent(context, agent, parsed.agentArgs ?? [], { logger })
       })
     }
+
+    const start = options.startDevcontainer ?? startDevcontainer
+    const printPort = options.printPortHint ?? printPortHint
+    const shell = options.openShell ?? openShell
 
     return runLoggedLifecycle(context, 'start', argv, async (logger) => {
       const progress = createCliProgress(parsed, 'stdout', { env: options.env })
@@ -1571,15 +1584,16 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
       ], async () => {
         progress.setSteps(startProgressSteps())
         await (options.prepareContainerLifecycle ?? prepareContainerLifecycle)(context, alias, progress, options, logger)
-        return await startDevcontainer(context, {
+        return await start(context, {
           recreate: parsed.recreate,
+          reuseRunning: true,
           progress,
           logger
         })
       })
       showDetailedCommandLogPath(progress, context)
-      await printPortHint(context, containerId, { logger })
-      return openShell(context, { logger })
+      await printPort(context, containerId, { logger })
+      return shell(context, { logger })
     })
   } catch (error) {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`)

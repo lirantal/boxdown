@@ -24,15 +24,17 @@ integration without opening an interactive shell.
 Start does not require a completed setup. It performs a fresh runtime-readiness
 check, then writes workspace inventory metadata and creates the generated state
 needed for the devcontainer. It does not install the setup-only SSH alias or
-external application integrations.
+external application integrations. Start, shell, and all coding-agent commands
+reuse an already-running workspace devcontainer when one is available, while
+still performing this host-side preparation.
 
 `boxdown shell` remains supported as an alias for `boxdown start`, but `start`
 is the canonical command used in help and documentation.
 `boxdown cc` remains supported as an alias for `boxdown claude`, but `claude`
 is the canonical command used in help and documentation.
 
-The coding-agent aliases start or reuse the same workspace devcontainer and
-launch the selected CLI directly:
+The coding-agent aliases reuse the same workspace devcontainer and launch the
+selected CLI directly:
 
 - `boxdown codex` launches `codex`.
 - `boxdown claude` launches `claude`.
@@ -67,13 +69,15 @@ boxdown claude -- --continue
 2. Ensure per-workspace SSH key material exists.
 3. Generate a Boxdown-owned devcontainer config.
 4. Install or reuse the pinned Dev Containers CLI.
-5. Run `devcontainer up --workspace-folder <repo> --override-config <config>`.
+5. Reuse a running devcontainer; otherwise run `devcontainer up` with the
+   workspace and generated config.
 6. Run container lifecycle hooks, including a throttled Codex/Claude refresh.
 7. Print a dynamic port hint when the configured published port is mapped.
 8. Run `devcontainer exec ... bash` to open an interactive shell.
 
 Coding-agent aliases use the same startup flow but skip the port hint, run a
-best-effort refresh for the selected agent, and exec the agent binary instead of
+best-effort refresh for the selected agent, check the selected CLI before
+launching it (including after reuse), and exec the agent binary instead of
 opening `bash`.
 
 Startup progress is concise by default. Raw Docker, Dev Containers CLI,
@@ -119,9 +123,9 @@ BOXDOWN_TTY_NORMALIZE=0 boxdown start
 
 ## Recreate
 
-`--recreate` passes `--remove-existing-container` to the Dev Containers CLI.
-Use it when changing create-time settings such as image, mounts, or Docker
-`runArgs`.
+`--recreate` bypasses reuse and passes `--remove-existing-container` to the Dev
+Containers CLI. Use it when changing create-time settings such as image, mounts,
+or Docker `runArgs`.
 
 Run Claude Code and complete `/login` on the host, then run `boxdown start
 --recreate` to recover the credential in an existing container.
