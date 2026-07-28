@@ -410,3 +410,18 @@ test('keeps retry image identity anchored to the version-introducing merge commi
   assert.match(workflow, /RELEASE_REVISION: \$\{\{ steps\.release-state\.outputs\.release_revision \}\}/)
   assert.match(workflow, /org\.opencontainers\.image\.revision=\$\{\{ steps\.release-state\.outputs\.release_revision \}\}/)
 })
+
+test('creates the GitHub Release after npm publication at the release revision', () => {
+  const workflow = readFileSync(releaseWorkflowPath, 'utf8')
+  const publishNpm = workflow.indexOf('- name: Publish to npm')
+  const createRelease = workflow.indexOf('- name: Create GitHub Release')
+
+  assert.equal(publishNpm >= 0 && createRelease > publishNpm, true)
+
+  const releaseStep = workflow.slice(createRelease)
+  assert.match(releaseStep, /RELEASE_REVISION: \$\{\{ steps\.release-state\.outputs\.release_revision \}\}/)
+  assert.match(releaseStep, /RELEASE_REPOSITORY: \$\{\{ github\.repository \}\}/)
+  assert.match(releaseStep, /GH_TOKEN: \$\{\{ secrets\.GITHUB_TOKEN \}\}/)
+  assert.match(releaseStep, /scripts\/create-github-release\.ts/)
+  assert.match(workflow, /pnpm exec changeset publish --no-git-tag/)
+})
