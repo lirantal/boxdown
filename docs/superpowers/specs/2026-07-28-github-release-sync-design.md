@@ -31,20 +31,18 @@ publish the local Git tag or create the GitHub Release, leaving npm releases
 
 ## Design
 
-The release-state step will model npm publication and GitHub Release existence
-as separate facts. It will continue to decide whether image and npm work is
-required from npm registry metadata, while also checking whether `v<version>`
-already exists as a GitHub Release.
+The release-state step will decide whether image and npm work is required from
+npm registry metadata. A final GitHub Release helper runs on every successful
+workflow execution and independently inspects the release and tag state for
+`v<version>`.
 
 The npm publication step will call Changesets with `--no-git-tag`. This avoids
 an ephemeral tag at the workflow event SHA, which can differ from the release
 merge commit when a failed release is retried.
 
-After npm publication and all image checks, a final GitHub Release phase will
-run when either:
-
-- the current version was published during this run; or
-- npm already contains the version but GitHub lacks its corresponding release.
+After npm publication and all image checks, a final GitHub Release phase runs
+on every successful workflow execution. It verifies correct existing release
+state and repairs a missing release after npm is already published.
 
 The phase will use `release_revision` as the tag target. It will create and
 push an annotated `v<version>` tag only when missing, reject an existing tag
@@ -62,8 +60,9 @@ This makes retries safe at every boundary:
 
 ## Components
 
-- `.github/workflows/release.yml` records GitHub Release state, disables
-  Changesets' automatic local tag, and invokes the final release phase.
+- `.github/workflows/release.yml` disables Changesets' automatic local tag and
+  invokes the final release phase after npm publication on every successful
+  workflow run.
 - `scripts/create-github-release.ts` owns changelog extraction, release/tag
   validation, and the GitHub API calls. It receives release identity through
   environment variables so the workflow remains declarative.

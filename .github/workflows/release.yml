@@ -37,7 +37,6 @@ jobs:
         id: release-state
         shell: bash
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # `npm view` is used only for registry metadata. It must not reject
           # this pnpm-managed project through npm's devEngines validation.
           NPM_CONFIG_FORCE: true
@@ -61,17 +60,6 @@ jobs:
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
           echo "tool_lock_sha256=${tool_lock_sha256}" >> "${GITHUB_OUTPUT}"
           echo "release_revision=${release_revision}" >> "${GITHUB_OUTPUT}"
-
-          tag="v${version}"
-          if gh api --silent "repos/${GITHUB_REPOSITORY}/releases/tags/${tag}" \
-            >/dev/null 2>"${RUNNER_TEMP}/github-release-view-error"; then
-            echo "github_release_exists=true" >> "${GITHUB_OUTPUT}"
-          elif grep -Eq 'HTTP 404|Not Found' "${RUNNER_TEMP}/github-release-view-error"; then
-            echo "github_release_exists=false" >> "${GITHUB_OUTPUT}"
-          else
-            cat "${RUNNER_TEMP}/github-release-view-error" >&2
-            exit 1
-          fi
 
           if npm view "${package_name}@${version}" version >/dev/null 2>"${RUNNER_TEMP}/npm-view-error"; then
             echo "publish=false" >> "${GITHUB_OUTPUT}"
@@ -291,9 +279,6 @@ jobs:
           NPM_CONFIG_FORCE: true
           NPM_TOKEN: ''
       - name: Create GitHub Release
-        if: >-
-          steps.release-state.outputs.publish == 'true' ||
-          steps.release-state.outputs.github_release_exists == 'false'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RELEASE_PACKAGE_NAME: ${{ steps.release-state.outputs.package_name }}

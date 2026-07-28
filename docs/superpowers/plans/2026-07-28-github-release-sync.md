@@ -8,6 +8,15 @@
 
 **Tech Stack:** GitHub Actions YAML, Node.js 24, TypeScript, Node test runner, Changesets, Git, GitHub CLI.
 
+## Review adjustment
+
+The initial plan proposed a workflow output for GitHub Release existence. Code
+review identified that this would skip validation of an already-present but
+mismatched tag. The final helper therefore runs on every successful workflow
+run and owns release existence checks, tag-target validation, and missing
+release repair. This adjustment supersedes the preliminary `releaseAction`
+and conditional-step examples below.
+
 ## Global Constraints
 
 - Preserve image publish, verification, attestation, and moving-tag updates before npm publication.

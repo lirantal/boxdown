@@ -419,6 +419,7 @@ test('creates the GitHub Release after npm publication at the release revision',
   assert.equal(publishNpm >= 0 && createRelease > publishNpm, true)
 
   const releaseStep = workflow.slice(createRelease)
+  assert.match(workflow, /- name: Create GitHub Release\n        env:/)
   assert.match(releaseStep, /RELEASE_REVISION: \$\{\{ steps\.release-state\.outputs\.release_revision \}\}/)
   assert.match(releaseStep, /RELEASE_REPOSITORY: \$\{\{ github\.repository \}\}/)
   assert.match(releaseStep, /GH_TOKEN: \$\{\{ secrets\.GITHUB_TOKEN \}\}/)

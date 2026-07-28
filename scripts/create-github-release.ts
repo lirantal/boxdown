@@ -19,10 +19,6 @@ export interface ReleaseOptions {
   repository: string
 }
 
-export function releaseAction(npmPublished: boolean, githubReleaseExists: boolean): 'create' | 'skip' {
-  return npmPublished || !githubReleaseExists ? 'create' : 'skip'
-}
-
 export function releaseNotesForVersion(changelog: string, version: string): string {
   const heading = `## ${version}`
   const start = changelog.indexOf(`${heading}\n`)
