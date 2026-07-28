@@ -3,9 +3,11 @@ import { join } from 'node:path'
 
 import {
   BOXDOWN_CONTAINER_AGENTS_DIR,
+  BOXDOWN_CONTAINER_CLAUDE_CONFIG_PATH,
   BOXDOWN_CONTAINER_CLAUDE_CREDENTIALS_PATH,
   BOXDOWN_CONTAINER_CLAUDE_DIR,
   BOXDOWN_CONTAINER_CODEX_AUTH_PATH,
+  BOXDOWN_CONTAINER_CODEX_CONFIG_PATH,
   BOXDOWN_CONTAINER_CODEX_DIR,
   BOXDOWN_CONTAINER_DEVCONTAINER_DIR,
   BOXDOWN_CONTAINER_GITCONFIG_PATH,
@@ -96,6 +98,14 @@ export function buildGeneratedDevcontainerConfig (context: WorkspaceContext, sig
   }
 
   if (
+    fileExists(context.hostCodexConfigPath) &&
+    !hasMountTarget(mounts, BOXDOWN_CONTAINER_CODEX_DIR) &&
+    !hasMountTarget(mounts, BOXDOWN_CONTAINER_CODEX_CONFIG_PATH)
+  ) {
+    boxdownMounts.push(`type=bind,source=${context.hostCodexConfigPath},target=${BOXDOWN_CONTAINER_CODEX_CONFIG_PATH},readonly`)
+  }
+
+  if (
     context.hostClaudeCredentialsPath !== undefined &&
     fileExists(context.hostClaudeCredentialsPath) &&
     !hasMountTarget(mounts, BOXDOWN_CONTAINER_CLAUDE_DIR) &&
@@ -104,6 +114,13 @@ export function buildGeneratedDevcontainerConfig (context: WorkspaceContext, sig
     boxdownMounts.push(
       `type=bind,source=${context.hostClaudeCredentialsPath},target=${BOXDOWN_CONTAINER_CLAUDE_CREDENTIALS_PATH}`
     )
+  }
+
+  if (
+    fileExists(context.workspaceClaudeMcpConfigPath) &&
+    !hasMountTarget(mounts, BOXDOWN_CONTAINER_CLAUDE_CONFIG_PATH)
+  ) {
+    boxdownMounts.push(`type=bind,source=${context.workspaceClaudeMcpConfigPath},target=${BOXDOWN_CONTAINER_CLAUDE_CONFIG_PATH}`)
   }
 
   return {

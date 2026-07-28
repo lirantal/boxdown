@@ -14,13 +14,14 @@ import { canonicalCodexRemotePathForWorkspace, codexDiscoveredRemoteHostId, code
 import { codingAgentBinary, codingAgentFromCommand } from '../src/coding-agents.ts'
 import { color, formatPromptEnd, formatPromptTitle, promptRail, selectedMark } from '../src/cli-style.ts'
 import { buildGeneratedDevcontainerConfig, publishContainerPortFromConfig } from '../src/config.ts'
-import { BOXDOWN_CONTAINER_AGENTS_DIR, BOXDOWN_CONTAINER_CLAUDE_CREDENTIALS_PATH, BOXDOWN_CONTAINER_CLAUDE_DIR, BOXDOWN_CONTAINER_CODEX_AUTH_PATH, BOXDOWN_CONTAINER_CODEX_DIR, BOXDOWN_CONTAINER_GITCONFIG_PATH, BOXDOWN_CONTAINER_HOST_GITCONFIG_DIR, BOXDOWN_CONTAINER_SECRET_ENV_BOOTSTRAP, BOXDOWN_CONTAINER_SECRET_ENV_DIR, DEVCONTAINER_CLI_VERSION } from '../src/constants.ts'
+import { BOXDOWN_CONTAINER_AGENTS_DIR, BOXDOWN_CONTAINER_CLAUDE_CONFIG_PATH, BOXDOWN_CONTAINER_CLAUDE_CREDENTIALS_PATH, BOXDOWN_CONTAINER_CLAUDE_DIR, BOXDOWN_CONTAINER_CODEX_AUTH_PATH, BOXDOWN_CONTAINER_CODEX_CONFIG_PATH, BOXDOWN_CONTAINER_CODEX_DIR, BOXDOWN_CONTAINER_GITCONFIG_PATH, BOXDOWN_CONTAINER_HOST_GITCONFIG_DIR, BOXDOWN_CONTAINER_SECRET_ENV_BOOTSTRAP, BOXDOWN_CONTAINER_SECRET_ENV_DIR, DEVCONTAINER_CLI_VERSION } from '../src/constants.ts'
 import { codingAgentDevcontainerExecArgs, isPublishedBoxdownImage, parseDockerInspectImage, sshdProxyDockerArgs, sshTunnelArgs, startDevcontainer } from '../src/devcontainer.ts'
 import { resolveDevcontainerCli } from '../src/devcontainer-cli.ts'
 import { doctorHasFailures, formatDoctorText, runDoctorChecks } from '../src/doctor.ts'
 import { parseSshPublicKey, reportGitSigningPlan, resolveConfiguredSshSigningKey, resolveGitSigningPlan, selectGitSigningKey, type GitSigningPlan, type GitSigningReason } from '../src/git-signing.ts'
 import { canonicalGithubRemoteUrl, configureWorkspaceGithubGitAuth } from '../src/github-git-auth.ts'
 import { parseJsonc } from '../src/jsonc.ts'
+import { prepareClaudeMcpConfig } from '../src/mcp-config.ts'
 import { createWorkspaceListEntries, formatWorkspaceListDetailsText, formatWorkspaceListText } from '../src/list.ts'
 import { createWorkspaceCommandLogger, redactKnownSecretEnvironmentAssignments, withLoggedProcessOutput } from '../src/logging.ts'
 import { commandRequiresContainerRuntime, commandWritesWorkspaceMetadata, parseCliArgs, parseTunnelPort, parseTunnelPortList, prepareContainerLifecycle, runCli, runContainerRuntimePreflight, setupWorkspace, USAGE, type BoxdownCommand } from '../src/main.ts'
@@ -5557,6 +5558,92 @@ describe('Claude Code host credentials', () => {
       assert.ok(config.mounts?.includes(existingMount))
       assert.ok(!config.mounts?.includes(`type=bind,source=${context.hostClaudeCredentialsPath},target=${BOXDOWN_CONTAINER_CLAUDE_CREDENTIALS_PATH}`))
     }
+  })
+})
+
+describe('coding-agent MCP configuration', () => {
+  test('projects global and workspace-local Claude MCP servers into runtime state', () => {
+    const home = tempDir('claude-mcp-home')
+    const workspace = tempDir('claude-mcp-workspace')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        HOME: home,
+        BOXDOWN_CACHE_HOME: tempDir('claude-mcp-cache'),
+        BOXDOWN_DATA_HOME: tempDir('claude-mcp-data'),
+        BOXDOWN_RUNTIME_HOME: tempDir('claude-mcp-runtime')
+      },
+      assetsDevcontainerDir
+    })
+    writeFileSync(join(home, '.claude.json'), `${JSON.stringify({
+      mcpServers: {
+        global: { type: 'stdio', command: 'global-server', args: [], env: {} }
+      },
+      projects: {
+        [context.workspaceFolder]: {
+          mcpServers: {
+            local: { type: 'stdio', command: 'local-server', args: [], env: {} }
+          },
+          enabledMcpjsonServers: ['workspace-server'],
+          disabledMcpjsonServers: ['disabled-server']
+        }
+      }
+    }, null, 2)}\n`)
+    mkdirSync(join(home, '.codex'))
+    writeFileSync(join(home, '.codex', 'config.toml'), '[mcp_servers.global]\ncommand = "global-server"\n')
+    mkdirSync(context.workspaceMcpConfigDir, { recursive: true })
+    writeFileSync(context.workspaceClaudeMcpConfigPath, '{}\n', { mode: 0o644 })
+    chmodSync(context.workspaceClaudeMcpConfigPath, 0o644)
+
+    const result = prepareClaudeMcpConfig(context)
+    const projected = JSON.parse(readFileSync(context.workspaceClaudeMcpConfigPath, 'utf8')) as Record<string, unknown>
+    const config = buildGeneratedDevcontainerConfig(context)
+
+    assert.deepStrictEqual(result, { state: 'prepared', path: context.workspaceClaudeMcpConfigPath })
+    assert.strictEqual(statSync(context.workspaceClaudeMcpConfigPath).mode & 0o777, 0o600)
+    assert.deepStrictEqual(projected, {
+      mcpServers: {
+        global: { type: 'stdio', command: 'global-server', args: [], env: {} }
+      },
+      projects: {
+        [`/workspaces/${context.workspaceBasename}`]: {
+          mcpServers: {
+            local: { type: 'stdio', command: 'local-server', args: [], env: {} }
+          },
+          enabledMcpjsonServers: ['workspace-server'],
+          disabledMcpjsonServers: ['disabled-server']
+        }
+      }
+    })
+    assert.ok(config.mounts?.includes(
+      `type=bind,source=${context.hostCodexConfigPath},target=${BOXDOWN_CONTAINER_CODEX_CONFIG_PATH},readonly`
+    ))
+    assert.ok(config.mounts?.includes(
+      `type=bind,source=${context.workspaceClaudeMcpConfigPath},target=${BOXDOWN_CONTAINER_CLAUDE_CONFIG_PATH}`
+    ))
+  })
+
+  test('does not mount absent or malformed MCP configuration', () => {
+    const home = tempDir('missing-mcp-home')
+    const workspace = tempDir('missing-mcp-workspace')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        HOME: home,
+        BOXDOWN_CACHE_HOME: tempDir('missing-mcp-cache'),
+        BOXDOWN_DATA_HOME: tempDir('missing-mcp-data'),
+        BOXDOWN_RUNTIME_HOME: tempDir('missing-mcp-runtime')
+      },
+      assetsDevcontainerDir
+    })
+    writeFileSync(join(home, '.claude.json'), '{invalid json\n')
+
+    const result = prepareClaudeMcpConfig(context)
+    const config = buildGeneratedDevcontainerConfig(context)
+
+    assert.deepStrictEqual(result, { state: 'invalid', path: context.hostClaudeConfigPath })
+    assert.ok(!config.mounts?.some((mount) => mount.includes(`target=${BOXDOWN_CONTAINER_CODEX_CONFIG_PATH}`)))
+    assert.ok(!config.mounts?.some((mount) => mount.includes(`target=${BOXDOWN_CONTAINER_CLAUDE_CONFIG_PATH}`)))
   })
 })
 

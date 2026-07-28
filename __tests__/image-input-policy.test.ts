@@ -147,6 +147,15 @@ test('creates the Claude credential mount parent for the node user', () => {
   )
 })
 
+test('creates the Codex configuration mount parent for the node user', () => {
+  const dockerfile = readFileSync(dockerfilePath, 'utf8')
+
+  assert.match(
+    dockerfile,
+    /install -d -m 0700 -o node -g node .*\/home\/node\/\.codex/
+  )
+})
+
 test('runs a non-root lifecycle smoke test in the built image', () => {
   const lifecycleSmoke = readFileSync(imageLifecycleSmokePath, 'utf8')
   const ciWorkflow = readFileSync(ciWorkflowPath, 'utf8')

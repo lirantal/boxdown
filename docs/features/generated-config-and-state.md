@@ -95,6 +95,33 @@ stays on the host. On macOS, Claude Code credentials are stored in the Keychain
 and are not automatically forwarded. Other host platforms do not have a
 supported file-backed forwarding path.
 
+## MCP server configuration
+
+When `$CODEX_HOME/config.toml` exists (or `~/.codex/config.toml` when
+`CODEX_HOME` is unset), Boxdown mounts it read-only at
+`/home/node/.codex/config.toml`. This lets Codex use its configured MCP servers
+without allowing the container to change the host configuration.
+
+Claude Code stores user and local MCP configuration in `~/.claude.json`, or
+`$CLAUDE_CONFIG_DIR/.claude.json` when that variable is set. Boxdown creates an
+owner-only runtime projection containing user-scoped servers and the current
+workspace's local MCP configuration. The local entry is remapped from the host
+workspace path to `/workspaces/<repo-name>`, and project-server approval choices
+are retained. The projection is mounted read-write at `/home/node/.claude.json`
+so Claude can keep its container-local session state without changing the host
+file. Project-scoped `.mcp.json` files are already available through the normal
+workspace mount.
+
+MCP definitions can contain command paths and environment-variable references
+that are valid only on the host. Install the required server runtime in the
+container and provide any referenced environment variables there before relying
+on that server. Recreate the container after adding or removing an MCP
+configuration file so Docker receives the updated mount set.
+
+> TODO (#18): Validate and implement a safe forwarding strategy for OAuth token
+> stores used by remote MCP servers. This change forwards server definitions,
+> but does not claim OAuth login reuse across the host and container.
+
 ## External App Config
 
 External app integration config is not Boxdown workspace state. Boxdown writes
@@ -139,8 +166,9 @@ Boxdown starts from `assets/devcontainer/devcontainer.json` and rewrites:
 - `mounts`, to add the read-only asset mount, public-key mount, host Git config
   snapshot mount, runtime secret mount, host `~/.agents` mount when that
   directory exists, host `~/.codex/auth.json` read-only mount when that file
-  exists, and the optional supported Claude credential file as a writable
-  single-file mount.
+  exists, host Codex `config.toml` when present, the optional supported Claude
+  credential file as a writable single-file mount, and a workspace-scoped
+  Claude MCP configuration projection when present.
 - `containerEnv`, to point SSH bootstrap at the mounted public key and actual
   container workspace.
 

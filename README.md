@@ -123,6 +123,13 @@ Optional create-time mounts are also explicit:
   `/home/node/.agents`.
 - If host `~/.codex/auth.json` exists and no custom Codex mount supersedes it,
   Boxdown mounts that file read-only at `/home/node/.codex/auth.json`.
+- If host `$CODEX_HOME/config.toml` (or `~/.codex/config.toml`) exists and no
+  custom Codex mount supersedes it, Boxdown mounts it read-only at
+  `/home/node/.codex/config.toml`, including configured MCP servers.
+- If host Claude configuration contains MCP servers, Boxdown writes a
+  workspace-scoped runtime projection at `/home/node/.claude.json`. It carries
+  user-scoped servers and remaps local server configuration to the container
+  workspace path. Project `.mcp.json` files remain in the mounted repository.
 - When SSH commit signing is enabled, Boxdown mounts the host SSH-agent socket
   at `/run/boxdown/ssh-agent.sock` and mounts public signing-key state read-only
   at `/opt/boxdown/state/git-signing`. Private signing keys remain on the host.
