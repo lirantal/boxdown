@@ -81,16 +81,13 @@ git commit -m "chore: release"
 git push origin HEAD --no-verify
 ```
 
-## Version and publish
+## Automated publishing
 
-After the changeset lands on the release branch, run the configured package scripts when it is time to cut and publish the release:
+Merging the Changesets version pull request to `main` starts the release
+workflow. It publishes and verifies the release-matched image, publishes the
+npm package, then creates the matching annotated Git tag and GitHub Release
+from the version's `CHANGELOG.md` entry.
 
-```sh
-# npm
-npm run version
-npm run release
-
-# pnpm
-pnpm run version
-pnpm run release
-```
+If npm publication succeeds but GitHub Release creation fails, re-run the
+release workflow from GitHub Actions. It detects the published npm version and
+repairs only the missing GitHub Release; it never republishes that npm version.
