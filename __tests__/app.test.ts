@@ -958,6 +958,7 @@ test('documents agent profile tiers', () => {
   const setupDocs = readFileSync(join(process.cwd(), 'docs/features/setup.md'), 'utf8')
   const architecture = readFileSync(join(process.cwd(), 'docs/architecture.md'), 'utf8')
   const assetDocs = readFileSync(join(process.cwd(), 'assets/devcontainer/README.md'), 'utf8')
+  const devcontainerTemplate = readFileSync(join(process.cwd(), 'assets/devcontainer/devcontainer.json'), 'utf8')
 
   assert.match(readme, /\| `none` \| no host user-scoped agent profile or Claude API key \|/)
   assert.match(readme, /\| `auth` \| file-backed auth, Claude API key, complete `~\/\.agents` \|/)
@@ -985,6 +986,8 @@ test('documents agent profile tiers', () => {
   assert.match(assetDocs, /bootstrap.*marker/is)
   assert.match(assetDocs, /non-root\s+remote user/is)
   assert.match(assetDocs, /source-file.*failure.*non-fatal/is)
+  assert.match(devcontainerTemplate, /profile sources are staged read-only.*container-local writable copies/is)
+  assert.doesNotMatch(devcontainerTemplate, /Codex auth\.json is mounted automatically|host-owned writable credential mounts/i)
 })
 
 test('documents interactive container reuse lifecycle', () => {
