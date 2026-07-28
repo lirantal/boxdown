@@ -101,7 +101,11 @@ refresh_runtime_secret_environment() {
     return 0
   fi
 
-  refresh_host_environment_secret "ANTHROPIC_API_KEY"
+  if [[ "${BOXDOWN_AGENT_PROFILE:-auth}" == "none" ]]; then
+    rm -f "${SECRET_ENV_DIR}/ANTHROPIC_API_KEY"
+  else
+    refresh_host_environment_secret "ANTHROPIC_API_KEY"
+  fi
   refresh_host_environment_secret "SNYK_TOKEN"
   refresh_1password_service_account_token
 }

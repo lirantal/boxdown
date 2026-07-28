@@ -6573,6 +6573,67 @@ describe('SSH-agent proxy asset', () => {
 })
 
 describe('devcontainer git config hooks', () => {
+  test('initialization scopes ANTHROPIC_API_KEY by agent profile without changing unrelated runtime secrets', () => {
+    const initializePath = join(assetsDevcontainerDir, 'hooks', 'initialize.sh')
+    const binDir = join(tempDir('agent-profile-initialize-bin'), 'bin')
+    const { ANTHROPIC_API_KEY: _anthropicApiKey, SNYK_TOKEN: _snykToken, ...baseEnv } = process.env
+    mkdirSync(binDir)
+    writeFileSync(join(binDir, 'op'), '#!/usr/bin/env bash\nexit 1\n')
+    chmodSync(join(binDir, 'op'), 0o755)
+
+    for (const { profile, hasAnthropicKey } of [
+      { profile: 'none', hasAnthropicKey: false },
+      { profile: 'auth', hasAnthropicKey: true },
+      { profile: 'full', hasAnthropicKey: true }
+    ]) {
+      const secretDir = join(tempDir(`agent-profile-${profile}-state`), 'secrets')
+      mkdirSync(secretDir)
+      writeFileSync(join(secretDir, 'ANTHROPIC_API_KEY'), 'stale-anthropic-runtime-sentinel')
+      writeFileSync(join(secretDir, 'SNYK_TOKEN'), 'stale-snyk-runtime-sentinel')
+      writeFileSync(join(secretDir, 'OP_SERVICE_ACCOUNT_TOKEN'), 'stale-op-runtime-sentinel')
+
+      execFileSync('bash', [initializePath], {
+        env: {
+          ...baseEnv,
+          PATH: `${binDir}${delimiter}${baseEnv.PATH ?? ''}`,
+          BOXDOWN_SECRET_ENV_DIR: secretDir,
+          BOXDOWN_AGENT_PROFILE: profile,
+          ANTHROPIC_API_KEY: 'anthropic-runtime-sentinel',
+          SNYK_TOKEN: 'snyk-runtime-sentinel'
+        }
+      })
+
+      assert.strictEqual(existsSync(join(secretDir, 'ANTHROPIC_API_KEY')), hasAnthropicKey)
+      if (hasAnthropicKey) {
+        assert.strictEqual(readFileSync(join(secretDir, 'ANTHROPIC_API_KEY'), 'utf8'), 'anthropic-runtime-sentinel')
+      }
+      assert.strictEqual(readFileSync(join(secretDir, 'SNYK_TOKEN'), 'utf8'), 'snyk-runtime-sentinel')
+      assert.strictEqual(existsSync(join(secretDir, 'OP_SERVICE_ACCOUNT_TOKEN')), false)
+    }
+
+    const staleSecretDir = join(tempDir('agent-profile-stale-state'), 'secrets')
+    execFileSync('bash', [initializePath], {
+      env: {
+        ...baseEnv,
+        PATH: `${binDir}${delimiter}${baseEnv.PATH ?? ''}`,
+        BOXDOWN_SECRET_ENV_DIR: staleSecretDir,
+        BOXDOWN_AGENT_PROFILE: 'auth',
+        ANTHROPIC_API_KEY: 'anthropic-runtime-sentinel'
+      }
+    })
+    assert.strictEqual(readFileSync(join(staleSecretDir, 'ANTHROPIC_API_KEY'), 'utf8'), 'anthropic-runtime-sentinel')
+
+    execFileSync('bash', [initializePath], {
+      env: {
+        ...baseEnv,
+        PATH: `${binDir}${delimiter}${baseEnv.PATH ?? ''}`,
+        BOXDOWN_SECRET_ENV_DIR: staleSecretDir,
+        BOXDOWN_AGENT_PROFILE: 'none'
+      }
+    })
+    assert.strictEqual(existsSync(join(staleSecretDir, 'ANTHROPIC_API_KEY')), false)
+  })
+
   test('initialization writes private runtime secrets without changing project environment files', () => {
     const initializePath = join(assetsDevcontainerDir, 'hooks', 'initialize.sh')
     const workspace = tempDir('runtime-secret-initialize-workspace')
