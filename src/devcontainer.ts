@@ -15,8 +15,10 @@ import { assertProgressCommandSucceeded, type ProgressReporter, runProgressComma
 import { interactiveCommandScript, interactiveShellEnvArgs, interactiveShellScript } from './shell.ts'
 import { ensureHostSshKey } from './ssh-key.ts'
 import { type ContainerSummary, parseDockerPsJsonLines } from './status.ts'
+import type { AgentProfile } from './agent-profile.ts'
 
 export interface StartOptions {
+  agentProfile?: AgentProfile
   recreate?: boolean
   proxyMode?: boolean
   progress?: ProgressReporter
@@ -26,6 +28,7 @@ export interface StartOptions {
 }
 
 export interface ContainerCommandOptions {
+  agentProfile?: AgentProfile
   progress?: ProgressReporter
   logger?: WorkspaceCommandLogger
 }

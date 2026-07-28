@@ -12,6 +12,7 @@ import { describe, test } from 'node:test'
 import { claudeSshConfigEntryForWorkspace, defaultClaudeSshConfigsPath, installClaudeSshConfigHost, mergeClaudeSshConfigHost, parseClaudeSshConfigs, removeClaudeSshConfigHost, uninstallClaudeSshConfigHost } from '../src/claude-app-config.ts'
 import { canonicalCodexRemotePathForWorkspace, codexDiscoveredRemoteHostId, codexProjectEntryForWorkspace, defaultCodexAppConfigPath, defaultCodexGlobalStatePath, installCodexAppConfigProject, installCodexGlobalStateProject, legacyCodexRemotePathForWorkspace, mergeCodexAppProject, normalizeCodexGlobalStateProject, parseCodexAppConfig, removeCodexAppProject, removeCodexGlobalStateProject, uninstallCodexAppConfigProject, uninstallCodexGlobalStateProject } from '../src/codex-app-config.ts'
 import { codingAgentBinary, codingAgentFromCommand, type CodingAgentCli } from '../src/coding-agents.ts'
+import { AGENT_PROFILES, isAgentProfile, resolveAgentProfile } from '../src/agent-profile.ts'
 import { color, formatPromptEnd, formatPromptTitle, promptRail, selectedMark } from '../src/cli-style.ts'
 import { buildGeneratedDevcontainerConfig, publishContainerPortFromConfig } from '../src/config.ts'
 import { BOXDOWN_CONTAINER_AGENTS_DIR, BOXDOWN_CONTAINER_CLAUDE_CONFIG_PATH, BOXDOWN_CONTAINER_CLAUDE_CREDENTIALS_PATH, BOXDOWN_CONTAINER_CLAUDE_DIR, BOXDOWN_CONTAINER_CODEX_AUTH_PATH, BOXDOWN_CONTAINER_CODEX_CONFIG_PATH, BOXDOWN_CONTAINER_CODEX_DIR, BOXDOWN_CONTAINER_GITCONFIG_PATH, BOXDOWN_CONTAINER_HOST_GITCONFIG_DIR, BOXDOWN_CONTAINER_SECRET_ENV_BOOTSTRAP, BOXDOWN_CONTAINER_SECRET_ENV_DIR, DEVCONTAINER_CLI_VERSION } from '../src/constants.ts'
@@ -286,6 +287,27 @@ async function withCwd<T> (cwd: string, run: () => Promise<T>): Promise<T> {
 }
 
 describe('CLI parsing', () => {
+  test('resolves agent profiles by explicit, recorded, and default precedence', () => {
+    assert.deepStrictEqual(resolveAgentProfile('full', 'none'), {
+      value: 'full',
+      source: 'explicit'
+    })
+    assert.deepStrictEqual(resolveAgentProfile(undefined, 'none'), {
+      value: 'none',
+      source: 'metadata'
+    })
+    assert.deepStrictEqual(resolveAgentProfile(undefined, undefined), {
+      value: 'auth',
+      source: 'default'
+    })
+  })
+
+  test('recognizes exactly the public agent profile values', () => {
+    assert.deepStrictEqual(AGENT_PROFILES, ['none', 'auth', 'full'])
+    for (const profile of AGENT_PROFILES) assert.strictEqual(isAgentProfile(profile), true)
+    for (const value of ['', 'bare', 'portable', 'other', 'AUTH', 'full ']) assert.strictEqual(isAgentProfile(value), false)
+  })
+
   test('parses setup options', () => {
     assert.deepStrictEqual(parseCliArgs(['setup']), {
       command: 'setup',
@@ -324,6 +346,25 @@ describe('CLI parsing', () => {
       json: false,
       verbose: false
     })
+  })
+
+  test('parses each agent profile on every container-creating command', () => {
+    const commands: Array<{ argv: string[], command: BoxdownCommand }> = [
+      { argv: ['setup'], command: 'setup' },
+      { argv: ['start'], command: 'start' },
+      { argv: ['codex'], command: 'coding-agent' }
+    ]
+
+    for (const { argv, command } of commands) {
+      for (const profile of AGENT_PROFILES) {
+        const before = parseCliArgs(['--agent-profile', profile, ...argv])
+        const after = parseCliArgs([...argv, '--agent-profile', profile])
+
+        assert.strictEqual(before.command, command)
+        assert.strictEqual(before.agentProfile, profile)
+        assert.strictEqual(after.agentProfile, profile)
+      }
+    }
   })
 
   test('maps shell to start', () => {
@@ -678,19 +719,31 @@ describe('CLI parsing', () => {
     assert.throws(() => parseCliArgs(['tunnel', '--port', '0']), /Invalid tunnel port: 0/)
     assert.throws(() => parseCliArgs(['tunnel', '--port', '65536']), /Invalid tunnel port: 65536/)
     assert.throws(() => parseCliArgs(['tunnel', '--port', '3030:3031:3032']), /Invalid tunnel port: 3030:3031:3032/)
+    assert.throws(() => parseCliArgs(['setup', '--agent-profile']), /--agent-profile requires a value/)
+    assert.throws(() => parseCliArgs(['setup', '--agent-profile', 'other']), /Unsupported agent profile: other/)
+    assert.throws(() => parseCliArgs(['setup', '--agent-profile', 'none', '--agent-profile', 'full']), /--agent-profile can only be provided once/)
+
+    for (const command of [
+      'refresh-gh-token-running', 'status', 'list', 'stop', 'down', 'purge', 'doctor', 'ssh', 'ssh uninstall'
+    ]) {
+      assert.throws(
+        () => parseCliArgs([...command.split(' '), '--agent-profile', 'auth']),
+        /--agent-profile is only supported with setup, start, ssh-proxy, tunnel, refresh-gh-token, and coding-agent/
+      )
+    }
   })
 
   test('help describes available commands', () => {
     const usageLines = USAGE.split(/\r?\n/)
 
     assert.match(USAGE, /Commands:/)
-    assert.match(USAGE, /boxdown setup \[--workspace <path>\] \[--alias <name>\] \[--recreate\] \[--target <name>\]\.\.\. \[--verbose\]/)
-    assert.match(USAGE, /boxdown start \[--workspace <path>\] \[--recreate\] \[--verbose\]/)
-    assert.match(USAGE, /boxdown codex \[--workspace <path>\] \[--recreate\] \[--verbose\] \[-- <codex args\.\.\.>\]/)
-    assert.match(USAGE, /boxdown claude \[--workspace <path>\] \[--recreate\] \[--verbose\] \[-- <claude args\.\.\.>\]/)
-    assert.match(USAGE, /boxdown opencode \[--workspace <path>\] \[--recreate\] \[--verbose\] \[-- <opencode args\.\.\.>\]/)
-    assert.match(USAGE, /boxdown antigravity \[--workspace <path>\] \[--recreate\] \[--verbose\] \[-- <agy args\.\.\.>\]/)
-    assert.match(USAGE, /boxdown tunnel \[--port <port>\] \[--port <local:remote>\] \[--workspace <path>\] \[--alias <name>\] \[--verbose\]/)
+    assert.match(USAGE, /boxdown setup \[--workspace <path>\] \[--alias <name>\] \[--recreate\] \[--agent-profile <tier>\] \[--target <name>\]\.\.\. \[--verbose\]/)
+    assert.match(USAGE, /boxdown start \[--workspace <path>\] \[--recreate\] \[--agent-profile <tier>\] \[--verbose\]/)
+    assert.match(USAGE, /boxdown codex \[--workspace <path>\] \[--recreate\] \[--agent-profile <tier>\] \[--verbose\] \[-- <codex args\.\.\.>\]/)
+    assert.match(USAGE, /boxdown claude \[--workspace <path>\] \[--recreate\] \[--agent-profile <tier>\] \[--verbose\] \[-- <claude args\.\.\.>\]/)
+    assert.match(USAGE, /boxdown opencode \[--workspace <path>\] \[--recreate\] \[--agent-profile <tier>\] \[--verbose\] \[-- <opencode args\.\.\.>\]/)
+    assert.match(USAGE, /boxdown antigravity \[--workspace <path>\] \[--recreate\] \[--agent-profile <tier>\] \[--verbose\] \[-- <agy args\.\.\.>\]/)
+    assert.match(USAGE, /boxdown tunnel \[--port <port>\] \[--port <local:remote>\] \[--workspace <path>\] \[--alias <name>\] \[--agent-profile <tier>\] \[--verbose\]/)
     assert.match(USAGE, /boxdown ssh uninstall \[--workspace <path>\] \[--alias <name>\] \[--target <name>\]\.\.\./)
     assert.match(USAGE, /boxdown list \[--details\] \[--json\|--format json\]/)
     assert.match(USAGE, /boxdown status \[--workspace <path>\] \[--alias <name>\] \[--json\|--format json\]/)
@@ -733,6 +786,11 @@ describe('CLI parsing', () => {
     assert.match(USAGE, /ssh-proxy\s+Internal command used by the generated SSH/)
     assert.match(USAGE, /tunnel\s+Start or reuse the devcontainer/)
     assert.match(USAGE, /boxdown tunnel \[--port <port>\]/)
+    assert.match(USAGE, /--agent-profile <tier>/)
+    assert.match(USAGE, /none, auth, full/)
+    assert.match(USAGE, /Defaults to auth/)
+    assert.match(USAGE, /copy-on-create isolation/)
+    assert.match(USAGE, /full\s+profile exposes/)
     assert.match(USAGE, /--port <port>\s+Tunnel a local port/)
     assert.match(USAGE, /refresh-gh-token\s+Start or reuse the devcontainer/)
     assert.match(USAGE, /refresh-gh-token-running\s+Refresh GitHub CLI auth only if/)
@@ -1302,6 +1360,63 @@ describe('CLI execution', () => {
     assert.strictEqual(existsSync(context.generatedConfigPath), false)
   })
 
+  test('invalid agent profiles do not create metadata or invoke the container runtime', async () => {
+    const workspace = tempDir('invalid-agent-profile-workspace')
+    const env = {
+      CI: '1',
+      BOXDOWN_CACHE_HOME: tempDir('invalid-agent-profile-cache'),
+      BOXDOWN_DATA_HOME: tempDir('invalid-agent-profile-data')
+    }
+    const calls: string[] = []
+
+    const code = await withProcessEnv(env, async () => runCli([
+      'start', '--workspace', workspace, '--agent-profile', 'other'
+    ], {
+      env,
+      waitForContainerRuntime: async () => {
+        calls.push('runtime')
+        return { state: 'ready', mode: 'buildx', warnings: [] }
+      },
+      writeWorkspaceMetadata: () => { calls.push('metadata') }
+    }))
+
+    const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+    assert.strictEqual(code, 1)
+    assert.deepStrictEqual(calls, [])
+    assert.strictEqual(existsSync(workspaceMetadataPath(context)), false)
+  })
+
+  test('forwards the resolved agent profile through the start lifecycle', async () => {
+    const workspace = tempDir('agent-profile-lifecycle-workspace')
+    const env = {
+      CI: '1',
+      BOXDOWN_CACHE_HOME: tempDir('agent-profile-lifecycle-cache'),
+      BOXDOWN_DATA_HOME: tempDir('agent-profile-lifecycle-data')
+    }
+    const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+    const calls: string[] = []
+
+    writeWorkspaceMetadata(context, 'agent-profile-devcontainer', undefined, 'full')
+
+    const code = await withProcessEnv(env, async () => runCli([
+      'start', '--workspace', workspace, '--agent-profile', 'none'
+    ], {
+      env,
+      prepareContainerLifecycle: async (_context, _alias, _progress, _options, _logger, profile) => {
+        calls.push(`lifecycle:${profile}`)
+      },
+      startDevcontainer: async (_context, options) => {
+        calls.push(`start:${options.agentProfile}`)
+        return 'agent-profile-container'
+      },
+      printPortHint: async () => { calls.push('port') },
+      openShell: async () => { calls.push('shell'); return 0 }
+    }))
+
+    assert.strictEqual(code, 0)
+    assert.deepStrictEqual(calls, ['lifecycle:none', 'start:none', 'port', 'shell'])
+  })
+
   test('setup continues after a non-blocking readiness warning', async () => {
     const workspace = tempDir('setup-preflight-warning-workspace')
     const dataHome = tempDir('setup-preflight-warning-data')
@@ -1538,6 +1653,22 @@ describe('CLI execution', () => {
     })
 
     assert.deepStrictEqual(calls, ['runtime', 'metadata'])
+  })
+
+  test('container lifecycle persists the default agent profile for direct callers', async () => {
+    const context = createWorkspaceContext({
+      workspace: tempDir('container-lifecycle-default-profile-workspace'),
+      env: { BOXDOWN_CACHE_HOME: tempDir('container-lifecycle-default-profile-cache'), BOXDOWN_DATA_HOME: tempDir('container-lifecycle-default-profile-data') },
+      assetsDevcontainerDir
+    })
+    const progress = createProgress({ mode: 'none' })
+    progress.setSteps([{ id: 'container-runtime', label: 'Checking container runtime' }])
+
+    await prepareContainerLifecycle(context, 'boxdown-default-profile', progress, {
+      waitForContainerRuntime: async () => ({ state: 'ready', mode: 'buildx', warnings: [] })
+    })
+
+    assert.strictEqual(readWorkspaceMetadata(context)?.agentProfile, 'auth')
   })
 
   test('verbose readiness emits a final outcome for Buildx and fallback success', async () => {
@@ -3660,6 +3791,52 @@ describe('host tool path', () => {
 })
 
 describe('workspace metadata', () => {
+  test('migrates legacy agent profile metadata and preserves a selected profile', () => {
+    const workspace = tempDir('metadata-profile-workspace')
+    const data = tempDir('metadata-profile-data')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('metadata-profile-cache'),
+        BOXDOWN_DATA_HOME: data
+      },
+      assetsDevcontainerDir
+    })
+
+    assert.deepStrictEqual(resolveAgentProfile(undefined, readWorkspaceMetadata(context)?.agentProfile), {
+      value: 'auth',
+      source: 'default'
+    })
+
+    mkdirSync(context.workspaceDataDir, { recursive: true })
+    writeFileSync(workspaceMetadataPath(context), `${JSON.stringify({
+      version: 1,
+      workspaceId: context.workspaceId,
+      workspaceFolder: context.workspaceFolder,
+      workspaceBasename: context.workspaceBasename,
+      sshAlias: 'legacy-devcontainer',
+      firstSeenAt: '2026-01-01T00:00:00.000Z',
+      lastSeenAt: '2026-01-01T00:00:00.000Z',
+      dockerImageId: 'sha256:legacy-image',
+      dockerImageName: 'boxdown-legacy:latest',
+      dockerImageLastSeenAt: '2026-01-01T00:00:00.000Z'
+    }, null, 2)}\n`)
+
+    assert.deepStrictEqual(resolveAgentProfile(undefined, readWorkspaceMetadata(context)?.agentProfile), {
+      value: 'auth',
+      source: 'default'
+    })
+
+    writeWorkspaceMetadata(context, 'profile-devcontainer', new Date('2026-01-02T00:00:00.000Z'), 'full')
+    const preserved = writeWorkspaceMetadata(context, 'profile-devcontainer', new Date('2026-01-03T00:00:00.000Z'))
+
+    assert.strictEqual(preserved.agentProfile, 'full')
+    assert.strictEqual(preserved.firstSeenAt, '2026-01-01T00:00:00.000Z')
+    assert.strictEqual(preserved.dockerImageId, 'sha256:legacy-image')
+    assert.strictEqual(preserved.dockerImageName, 'boxdown-legacy:latest')
+    assert.strictEqual(preserved.dockerImageLastSeenAt, '2026-01-01T00:00:00.000Z')
+  })
+
   test('writes stable metadata and preserves firstSeenAt', () => {
     const workspace = tempDir('metadata-workspace')
     const data = tempDir('metadata-data')
