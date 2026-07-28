@@ -1429,6 +1429,58 @@ describe('CLI execution', () => {
     }
   })
 
+  test('preserves recreate for direct interactive commands', async () => {
+    const cases: Array<{ argv: string[], agent: CodingAgentCli }> = [
+      { argv: ['start', '--recreate'], agent: 'codex' },
+      { argv: ['cc', '--recreate'], agent: 'claude' }
+    ]
+
+    for (const entry of cases) {
+      const workspace = tempDir('direct-recreate-' + entry.argv[0] + '-workspace')
+      const env = {
+        CI: '1',
+        BOXDOWN_CACHE_HOME: tempDir('direct-recreate-' + entry.argv[0] + '-cache'),
+        BOXDOWN_DATA_HOME: tempDir('direct-recreate-' + entry.argv[0] + '-data')
+      }
+      const calls: string[] = []
+
+      const code = await runCli([...entry.argv, '--workspace', workspace], {
+        env,
+        prepareContainerLifecycle: async () => { calls.push('lifecycle') },
+        startDevcontainer: async (_context, startOptions) => {
+          assert.strictEqual(startOptions.recreate, true)
+          assert.strictEqual(startOptions.reuseRunning, true)
+          calls.push('start')
+          return 'recreated-container'
+        },
+        ...(entry.argv[0] === 'start'
+          ? {
+              printPortHint: async () => { calls.push('port') },
+              openShell: async () => { calls.push('shell'); return 0 }
+            }
+          : {
+              ensureContainerCodingAgentCli: async (_context, agent) => {
+                assert.strictEqual(agent, entry.agent)
+                calls.push('ensure:' + agent)
+              },
+              openCodingAgentCli: async (_context, agent) => {
+                assert.strictEqual(agent, entry.agent)
+                calls.push('open:' + agent)
+                return 0
+              }
+            })
+      })
+
+      assert.strictEqual(code, 0)
+      assert.deepStrictEqual(
+        calls,
+        entry.argv[0] === 'start'
+          ? ['lifecycle', 'start', 'port', 'shell']
+          : ['lifecycle', 'start', 'ensure:' + entry.agent, 'open:' + entry.agent]
+      )
+    }
+  })
+
   test('running-only GitHub token refresh does not invoke the lifecycle gate', async () => {
     const workspace = tempDir('running-refresh-no-lifecycle-gate-workspace')
     const dataHome = tempDir('running-refresh-no-lifecycle-gate-data')
@@ -1565,6 +1617,7 @@ describe('CLI execution', () => {
       start: async (receivedContext, options) => {
         assert.strictEqual(receivedContext, context)
         assert.deepStrictEqual(options, { recreate: undefined })
+        assert.strictEqual('reuseRunning' in options, false)
         calls.push('start')
         return 'setup-container'
       },
@@ -5453,6 +5506,48 @@ describe('progress output', () => {
     assert.strictEqual(calls.length, 1)
     assert.strictEqual(calls[0]?.label, 'devcontainer up')
     assert.ok(calls[0]?.args.includes('up'))
+  })
+
+  test('recreate bypasses running-container reuse and removes the existing container', async () => {
+    const workspace = tempDir('devcontainer-recreate-workspace')
+
+    await withFakeDocker([{ workspace, id: 'running-container' }], async (logPath, dockerEnv) => {
+      const env = {
+        ...dockerEnv,
+        BOXDOWN_CACHE_HOME: tempDir('devcontainer-recreate-cache'),
+        BOXDOWN_DATA_HOME: tempDir('devcontainer-recreate-data')
+      }
+      const context = createWorkspaceContext({
+        workspace,
+        env,
+        assetsDevcontainerDir
+      })
+      let capturedArgs: string[] | undefined
+
+      mkdirSync(context.sshKeyDir, { recursive: true })
+      writeFileSync(context.sshKeyPath, 'test private key\n')
+      writeFileSync(context.sshPublicKeyPath, 'test public key\n')
+
+      await withProcessEnv(env, async () => {
+        await startDevcontainer(context, {
+          recreate: true,
+          reuseRunning: true,
+          progress: createProgress({ mode: 'none' }),
+          runDevcontainerUp: async (_label, _command, args) => {
+            capturedArgs = args
+            return {
+              code: 0,
+              stdout: '{"containerId":"running-container"}\n',
+              stderr: ''
+            }
+          }
+        })
+      })
+
+      assert.ok(capturedArgs?.includes('up'))
+      assert.ok(capturedArgs?.includes('--remove-existing-container'))
+      assert.strictEqual(fakeDockerCalls(logPath).some(call => call.includes('{{.ID}}')), false)
+    })
   })
 
   test('devcontainer failures advertise the exact managed log when a logger participates', async () => {

@@ -1562,6 +1562,7 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
           await (options.prepareContainerLifecycle ?? prepareContainerLifecycle)(context, alias, progress, options, logger)
           await start(context, {
             recreate: parsed.recreate,
+            reuseRunning: true,
             progress,
             logger
           })
@@ -1585,6 +1586,7 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
         await (options.prepareContainerLifecycle ?? prepareContainerLifecycle)(context, alias, progress, options, logger)
         return await start(context, {
           recreate: parsed.recreate,
+          reuseRunning: true,
           progress,
           logger
         })
