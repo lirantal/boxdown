@@ -82,7 +82,7 @@ test('leaves a correctly tagged existing GitHub Release untouched', () => {
   assert.deepEqual(calls.map(call => call.program), ['git', 'gh'])
 })
 
-test('creates an annotated tag and release when both are missing', () => {
+test('creates an annotated tag and releases it without running local hooks', () => {
   const {calls, command} = commandQueue(
     {stdout: '', stderr: '', status: 0},
     {stdout: '', stderr: '', status: 0},
@@ -95,6 +95,7 @@ test('creates an annotated tag and release when both are missing', () => {
 
   assert.deepEqual(calls.map(call => call.program), ['git', 'git', 'git', 'gh', 'gh'])
   assert.deepEqual(calls[1]?.arguments_, ['tag', '--annotate', 'v2.1.0', release.revision, '--message', 'v2.1.0'])
+  assert.deepEqual(calls[2]?.arguments_, ['push', '--no-verify', 'origin', 'refs/tags/v2.1.0'])
   assert.match(calls[4]?.input ?? '', /### Minor Changes/)
 })
 

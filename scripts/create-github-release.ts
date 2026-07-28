@@ -96,7 +96,7 @@ export function ensureGitHubRelease(options: ReleaseOptions, command: Command = 
 
   if (remoteTagTarget === undefined) {
     run(command, 'git', ['tag', '--annotate', tag, options.revision, '--message', tag])
-    run(command, 'git', ['push', 'origin', `refs/tags/${tag}`])
+    run(command, 'git', ['push', '--no-verify', 'origin', `refs/tags/${tag}`])
   } else if (remoteTagTarget !== options.revision) {
     throw new Error(`existing ${tag} points to ${remoteTagTarget}, expected ${options.revision}`)
   }
