@@ -281,6 +281,23 @@ function recordProgressStepEvents (
   return events
 }
 
+function recordProgressSpinnerEvents (progress: ReturnType<typeof createProgress>): string[] {
+  const events: string[] = []
+  const startSpinner = progress.startSpinner.bind(progress)
+  const stopSpinner = progress.stopSpinner.bind(progress)
+
+  progress.startSpinner = (message) => {
+    events.push(`start:${message}`)
+    startSpinner(message)
+  }
+  progress.stopSpinner = (status = 'clear') => {
+    events.push(`stop:${status}`)
+    stopSpinner(status)
+  }
+
+  return events
+}
+
 const codexPromptChoice = {
   value: 'codex',
   label: 'Codex',
@@ -6115,6 +6132,105 @@ describe('agent profile container lifecycle', () => {
         'start:devcontainer-start',
         'fail:devcontainer-start'
       ])
+    })
+  })
+
+  test('agent profile lifecycle keeps the no-checklist spinner pending through marker validation failure', async () => {
+    const workspace = tempDir('agent-profile-spinner-marker-workspace')
+    const hiddenWorkspace = tempDir('agent-profile-spinner-marker-hidden-workspace')
+
+    await withFakeDocker([{
+      workspace: hiddenWorkspace,
+      id: 'spinner-marker',
+      agentProfileMarker: 'invalid-marker'
+    }], async (_logPath, dockerEnv) => {
+      const env = {
+        ...dockerEnv,
+        BOXDOWN_CACHE_HOME: tempDir('agent-profile-spinner-marker-cache'),
+        BOXDOWN_DATA_HOME: tempDir('agent-profile-spinner-marker-data')
+      }
+      const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+      const rendered: string[] = []
+      const progress = createProgress({
+        mode: 'interactive',
+        isTTY: false,
+        write: (_target, message) => { rendered.push(message) }
+      })
+      const events = recordProgressSpinnerEvents(progress)
+
+      mkdirSync(context.sshKeyDir, { recursive: true })
+      writeFileSync(context.sshKeyPath, 'test private key\n')
+      writeFileSync(context.sshPublicKeyPath, 'test public key\n')
+
+      await withProcessEnv(env as Record<string, string>, async () => {
+        await assert.rejects(startDevcontainer(context, {
+          agentProfile: 'auth',
+          progress,
+          runDevcontainerUp: async (label, _command, _args, runOptions) => {
+            const result = await runProgressCommand(
+              label,
+              'bash',
+              ['-c', 'printf \'%s\\n\' \'{"containerId":"spinner-marker"}\''],
+              runOptions
+            )
+            updateFakeDockerContainer(env, 'spinner-marker', { workspace })
+            return result
+          }
+        }), /Agent profile auth is not active/)
+      })
+
+      assert.ok(events.includes('start:Starting devcontainer'))
+      assert.strictEqual(events.includes('stop:complete'), false)
+      assert.strictEqual(events.at(-1), 'stop:clear')
+      assert.strictEqual(
+        rendered.some((line) => line.includes(`${selectedMark()} Starting devcontainer`)),
+        false
+      )
+    })
+  })
+
+  test('agent profile lifecycle clears the no-checklist spinner when container ID resolution fails', async () => {
+    const workspace = tempDir('agent-profile-spinner-id-workspace')
+
+    await withFakeDocker([], async (_logPath, dockerEnv) => {
+      const env = {
+        ...dockerEnv,
+        BOXDOWN_CACHE_HOME: tempDir('agent-profile-spinner-id-cache'),
+        BOXDOWN_DATA_HOME: tempDir('agent-profile-spinner-id-data')
+      }
+      const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+      const rendered: string[] = []
+      const progress = createProgress({
+        mode: 'interactive',
+        isTTY: false,
+        write: (_target, message) => { rendered.push(message) }
+      })
+      const events = recordProgressSpinnerEvents(progress)
+
+      mkdirSync(context.sshKeyDir, { recursive: true })
+      writeFileSync(context.sshKeyPath, 'test private key\n')
+      writeFileSync(context.sshPublicKeyPath, 'test public key\n')
+
+      await withProcessEnv(env as Record<string, string>, async () => {
+        await assert.rejects(startDevcontainer(context, {
+          agentProfile: 'auth',
+          progress,
+          runDevcontainerUp: async (label, _command, _args, runOptions) => runProgressCommand(
+            label,
+            'bash',
+            ['-c', 'true'],
+            runOptions
+          )
+        }), /Could not resolve devcontainer ID/)
+      })
+
+      assert.ok(events.includes('start:Starting devcontainer'))
+      assert.strictEqual(events.includes('stop:complete'), false)
+      assert.strictEqual(events.at(-1), 'stop:clear')
+      assert.strictEqual(
+        rendered.some((line) => line.includes(`${selectedMark()} Starting devcontainer`)),
+        false
+      )
     })
   })
 

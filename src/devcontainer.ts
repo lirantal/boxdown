@@ -446,6 +446,8 @@ export async function startDevcontainer (context: WorkspaceContext, options: Sta
 
   if (hasStartStep) {
     progress?.startStep('devcontainer-start')
+  } else {
+    progress?.startSpinner('Starting devcontainer')
   }
 
   try {
@@ -456,13 +458,10 @@ export async function startDevcontainer (context: WorkspaceContext, options: Sta
           logger: options.logger
         })
       : await (options.runDevcontainerUp ?? runProgressCommand)('devcontainer up', cli.command, [...cli.argsPrefix, ...args], {
+          manageProgress: false,
           progress,
-          ...(hasStartStep
-            ? {}
-            : {
-                spinnerLabel: 'Starting devcontainer',
-                stepId: 'devcontainer-start'
-              }),
+          spinnerLabel: 'Starting devcontainer',
+          stepId: 'devcontainer-start',
           verboseStdout: proxyMode ? 'stderr' : 'stdout',
           verboseStderr: 'stderr',
           logger: options.logger
@@ -490,12 +489,16 @@ export async function startDevcontainer (context: WorkspaceContext, options: Sta
     await assertContainerAgentProfile(containerId, agentProfile, options.logger)
     if (hasStartStep) {
       progress?.completeStep('devcontainer-start')
+    } else {
+      progress?.stopSpinner('complete')
     }
     await recordContainerImageIfPresent(context, containerId, options.logger)
     return containerId
   } catch (error) {
     if (hasStartStep) {
       progress?.failStep('devcontainer-start')
+    } else {
+      progress?.stopSpinner()
     }
     throw error
   }
