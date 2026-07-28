@@ -17,7 +17,7 @@ import {
 } from './constants.ts'
 import { isAgentProfile, resolveAgentProfile, type AgentProfile, type AgentProfileSelection, type AgentProfileSelectionSource } from './agent-profile.ts'
 import { parseJsonc } from './jsonc.ts'
-import type { WorkspaceContext } from './paths.ts'
+import type { ClaudeCredentialsSupport, WorkspaceContext } from './paths.ts'
 import { buildSshConfigBlock, defaultSshConfigPath } from './ssh-config.ts'
 
 export type SshAliasSource = 'default' | 'provided'
@@ -91,6 +91,8 @@ export interface StatusInfo {
     status?: string
   }
 }
+
+const statusClaudeCredentialsSupport = new WeakMap<StatusInfo, ClaudeCredentialsSupport>()
 
 export interface SshConfigStatus {
   configPath: string
@@ -192,11 +194,13 @@ interface GeneratedAgentProfileInfo {
 }
 
 function mountTarget (mount: string): string | undefined {
-  return mount
+  const target = mount
     .split(',')
     .map(part => part.trim())
     .find(part => part.startsWith('target='))
     ?.slice('target='.length)
+
+  return target?.startsWith('/') === true ? target : undefined
 }
 
 function pathsConflict (left: string, right: string): boolean {
@@ -377,10 +381,10 @@ function inspectGeneratedSources (
     BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CLAUDE_DIR,
     BOXDOWN_CONTAINER_CLAUDE_DIR
   )
-  sources.claudeConfig = sourceIsCustom(generated, BOXDOWN_CONTAINER_CLAUDE_CONFIG_PATH)
-    ? 'custom'
-    : pathIsInside(context.hostClaudeConfigPath, context.hostClaudeDir)
-      ? sources.claudeHome
+  sources.claudeConfig = pathIsInside(context.hostClaudeConfigPath, context.hostClaudeDir)
+    ? sources.claudeHome
+    : sourceIsCustom(generated, BOXDOWN_CONTAINER_CLAUDE_CONFIG_PATH)
+      ? 'custom'
       : generatedSourceState(
         generated,
         'claude-config',
@@ -429,9 +433,11 @@ function inspectCurrentSources (
   sources.claudeHome = sourceIsCustom(generated, BOXDOWN_CONTAINER_CLAUDE_DIR)
     ? 'custom'
     : isDirectoryPath(context.hostClaudeDir) ? 'available' : 'missing'
-  sources.claudeConfig = sourceIsCustom(generated, BOXDOWN_CONTAINER_CLAUDE_CONFIG_PATH)
-    ? 'custom'
-    : isFile(context.hostClaudeConfigPath) ? 'available' : 'missing'
+  sources.claudeConfig = pathIsInside(context.hostClaudeConfigPath, context.hostClaudeDir)
+    ? sources.claudeHome
+    : sourceIsCustom(generated, BOXDOWN_CONTAINER_CLAUDE_CONFIG_PATH)
+      ? 'custom'
+      : isFile(context.hostClaudeConfigPath) ? 'available' : 'missing'
 
   return sources
 }
@@ -563,7 +569,7 @@ export function createStatusInfo (
     options.containerAgentProfile
   )
 
-  return {
+  const status: StatusInfo = {
     workspace: {
       folder: context.workspaceFolder,
       basename: context.workspaceBasename,
@@ -612,6 +618,9 @@ export function createStatusInfo (
       status: container?.status
     }
   }
+
+  statusClaudeCredentialsSupport.set(status, context.claudeCredentialsSupport)
+  return status
 }
 
 export function statusIsHealthy (status: StatusInfo): boolean {
@@ -668,8 +677,15 @@ function profileSelectionSourceText (source: AgentProfileSelectionSource): strin
   return source
 }
 
-function agentProfileSourceText (state: AgentProfileSourceState): string {
-  if (state === 'unsupported') return 'unavailable (macOS Keychain is not copied)'
+function agentProfileSourceText (
+  state: AgentProfileSourceState,
+  claudeCredentialsSupport?: ClaudeCredentialsSupport
+): string {
+  if (state === 'unsupported') {
+    return claudeCredentialsSupport === 'macos-keychain'
+      ? 'unavailable (macOS Keychain is not copied)'
+      : 'unavailable (this host platform does not have a supported file-backed credential path)'
+  }
   if (state === 'not-selected') return 'not selected'
   return state
 }
@@ -688,7 +704,10 @@ export function formatStatusText (status: StatusInfo, options: { color?: boolean
   const agentProfileLines = [
     `Agent profile: ${profile.selected} (${profileSelectionSourceText(profile.selectionSource)})`,
     `  Codex authentication: ${agentProfileSourceText(profile.sources.codexAuthentication)}`,
-    `  Claude authentication: ${agentProfileSourceText(profile.sources.claudeAuthentication)}`,
+    `  Claude authentication: ${agentProfileSourceText(
+      profile.sources.claudeAuthentication,
+      statusClaudeCredentialsSupport.get(status)
+    )}`,
     `  ~/.agents: ${agentProfileSourceText(profile.sources.agents)}`,
     `  Codex home: ${agentProfileSourceText(profile.sources.codexHome)}`,
     `  Claude home: ${agentProfileSourceText(profile.sources.claudeHome)}`,

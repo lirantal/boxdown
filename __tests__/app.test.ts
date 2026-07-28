@@ -4511,6 +4511,49 @@ describe('status output', () => {
     assert.match(formatStatusText(status), /Run `boxdown start --recreate --agent-profile auth`\./)
   })
 
+  test('formats status agent profile unsupported platforms without a macOS explanation or JSON changes', () => {
+    const createUnsupportedStatus = (platform: NodeJS.Platform): ReturnType<typeof createStatusInfo> => {
+      const workspace = tempDir(`status-${platform}-workspace`)
+      const context = createWorkspaceContext({
+        workspace,
+        env: {
+          HOME: tempDir(`status-${platform}-home`),
+          BOXDOWN_CACHE_HOME: tempDir(`status-${platform}-cache`),
+          BOXDOWN_DATA_HOME: tempDir(`status-${platform}-data`)
+        },
+        platform,
+        assetsDevcontainerDir
+      })
+
+      return createStatusInfo(context, 'demo-devcontainer', undefined, () => false, {
+        sshConfigPath: join(tempDir(`status-${platform}-config`), 'config'),
+        agentProfileSelection: resolveAgentProfile(undefined, undefined)
+      })
+    }
+    const macStatus = createUnsupportedStatus('darwin')
+    const freeBsdStatus = createUnsupportedStatus('freebsd')
+    const exactAgentProfile = {
+      selected: 'auth',
+      selectionSource: 'default',
+      containerState: 'not-created',
+      sources: {
+        codexAuthentication: 'missing',
+        claudeAuthentication: 'unsupported',
+        agents: 'missing',
+        codexHome: 'not-selected',
+        claudeHome: 'not-selected',
+        claudeConfig: 'not-selected'
+      },
+      customDestinations: []
+    }
+
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(macStatus.agentProfile)), exactAgentProfile)
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(freeBsdStatus.agentProfile)), exactAgentProfile)
+    assert.match(formatStatusText(macStatus), /Claude authentication: unavailable \(macOS Keychain is not copied\)/)
+    assert.match(formatStatusText(freeBsdStatus), /Claude authentication: unavailable \(this host platform does not have a supported file-backed credential path\)/)
+    assert.doesNotMatch(formatStatusText(freeBsdStatus), /macOS|Keychain/)
+  })
+
   test('status agent profile uses matching generated truth after host sources change', () => {
     const presentWorkspace = tempDir('status-generated-present-workspace')
     const presentContext = createWorkspaceContext({
@@ -4671,6 +4714,129 @@ describe('status output', () => {
       '/home/node/.claude',
       '/home/node/.codex'
     ])
+  })
+
+  test('status agent profile makes nested Claude config inherit generated Claude-home state', () => {
+    const workspace = tempDir('status-generated-nested-claude-config-workspace')
+    const claudeDir = tempDir('status-generated-nested-claude-config-home')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        HOME: tempDir('status-generated-nested-claude-config-user-home'),
+        CLAUDE_CONFIG_DIR: claudeDir,
+        BOXDOWN_CACHE_HOME: tempDir('status-generated-nested-claude-config-cache'),
+        BOXDOWN_DATA_HOME: tempDir('status-generated-nested-claude-config-data')
+      },
+      platform: 'linux',
+      assetsDevcontainerDir
+    })
+    mkdirSync(context.workspaceCacheDir, { recursive: true })
+    writeFileSync(context.generatedConfigPath, `${JSON.stringify({
+      containerEnv: {
+        BOXDOWN_AGENT_PROFILE: 'full',
+        BOXDOWN_AGENT_PROFILE_SOURCES: 'claude-home'
+      },
+      mounts: [
+        `type=bind,source=${claudeDir},target=${BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CLAUDE_DIR},readonly`,
+        'type=bind,source=/tmp/unrelated-config,target=/home/node/.claude.json'
+      ]
+    }, null, 2)}\n`)
+
+    const status = createStatusInfo(context, 'demo-devcontainer', {
+      id: 'generated-nested-claude-config-container',
+      state: 'running'
+    }, existsSync, {
+      sshConfigPath: join(tempDir('status-generated-nested-claude-config-ssh'), 'config'),
+      agentProfileSelection: resolveAgentProfile(undefined, 'full'),
+      containerAgentProfile: 'full'
+    })
+
+    assert.strictEqual(status.agentProfile.sources.claudeHome, 'available')
+    assert.strictEqual(status.agentProfile.sources.claudeConfig, 'available')
+    assert.deepStrictEqual(status.agentProfile.customDestinations, ['/home/node/.claude.json'])
+  })
+
+  test('status agent profile makes nested Claude config inherit live Claude-home state', () => {
+    const workspace = tempDir('status-live-nested-claude-config-workspace')
+    const claudeDir = tempDir('status-live-nested-claude-config-home')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        HOME: tempDir('status-live-nested-claude-config-user-home'),
+        CLAUDE_CONFIG_DIR: claudeDir,
+        BOXDOWN_CACHE_HOME: tempDir('status-live-nested-claude-config-cache'),
+        BOXDOWN_DATA_HOME: tempDir('status-live-nested-claude-config-data')
+      },
+      platform: 'linux',
+      assetsDevcontainerDir
+    })
+    mkdirSync(context.workspaceCacheDir, { recursive: true })
+    writeFileSync(context.generatedConfigPath, JSON.stringify({
+      containerEnv: { BOXDOWN_AGENT_PROFILE: 'auth' },
+      mounts: ['type=bind,source=/tmp/unrelated-config,target=/home/node/.claude.json']
+    }))
+    const fileProbes: string[] = []
+    const status = createStatusInfo(context, 'demo-devcontainer', undefined, existsSync, {
+      sshConfigPath: join(tempDir('status-live-nested-claude-config-ssh'), 'config'),
+      agentProfileSelection: resolveAgentProfile(undefined, 'full'),
+      isFile: (path) => {
+        fileProbes.push(path)
+        return false
+      },
+      isDirectory: (path) => path === context.hostClaudeDir
+    })
+
+    assert.strictEqual(status.agentProfile.sources.claudeHome, 'available')
+    assert.strictEqual(status.agentProfile.sources.claudeConfig, 'available')
+    assert.ok(!fileProbes.includes(context.hostClaudeConfigPath))
+    assert.deepStrictEqual(status.agentProfile.customDestinations, ['/home/node/.claude.json'])
+  })
+
+  test('status agent profile ignores empty and non-absolute mount targets', () => {
+    const workspace = tempDir('status-invalid-custom-target-workspace')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        HOME: tempDir('status-invalid-custom-target-home'),
+        BOXDOWN_CACHE_HOME: tempDir('status-invalid-custom-target-cache'),
+        BOXDOWN_DATA_HOME: tempDir('status-invalid-custom-target-data')
+      },
+      platform: 'linux',
+      assetsDevcontainerDir
+    })
+    mkdirSync(context.workspaceCacheDir, { recursive: true })
+    writeFileSync(context.generatedConfigPath, `${JSON.stringify({
+      containerEnv: {
+        BOXDOWN_AGENT_PROFILE: 'auth',
+        BOXDOWN_AGENT_PROFILE_SOURCES: 'agents,claude-auth,codex-auth'
+      },
+      mounts: [
+        `type=bind,source=/tmp/agents,target=${BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_AGENTS_DIR},readonly`,
+        `type=bind,source=/tmp/codex-auth,target=${BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CODEX_AUTH_PATH},readonly`,
+        `type=bind,source=/tmp/claude-auth,target=${BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CLAUDE_CREDENTIALS_PATH},readonly`,
+        'type=bind,source=/tmp/empty,target=',
+        'type=bind,source=/tmp/relative,target=home/node/.codex'
+      ]
+    }, null, 2)}\n`)
+
+    const status = createStatusInfo(context, 'demo-devcontainer', {
+      id: 'invalid-custom-target-container',
+      state: 'running'
+    }, existsSync, {
+      sshConfigPath: join(tempDir('status-invalid-custom-target-ssh'), 'config'),
+      agentProfileSelection: resolveAgentProfile(undefined, undefined),
+      containerAgentProfile: 'auth'
+    })
+
+    assert.deepStrictEqual(status.agentProfile.sources, {
+      codexAuthentication: 'available',
+      claudeAuthentication: 'available',
+      agents: 'available',
+      codexHome: 'not-selected',
+      claudeHome: 'not-selected',
+      claudeConfig: 'not-selected'
+    })
+    assert.deepStrictEqual(status.agentProfile.customDestinations, [])
   })
 
   test('status agent profile applies exact containerState rules and defensive generated parsing', () => {
