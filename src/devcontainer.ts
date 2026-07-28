@@ -6,7 +6,6 @@ import { codingAgentBinary, type CodingAgentCli } from './coding-agents.ts'
 import { resolveDevcontainerCli } from './devcontainer-cli.ts'
 import { configureWorkspaceGithubGitAuth } from './github-git-auth.ts'
 import { reportGitSigningPlan, resolveGitSigningPlan } from './git-signing.ts'
-import { prepareClaudeMcpConfig } from './mcp-config.ts'
 import type { WorkspaceCommandLogger } from './logging.ts'
 import { recordLegacyImageMigrationNotice, recordWorkspaceDockerImage } from './metadata.ts'
 import type { WorkspaceContext } from './paths.ts'
@@ -66,13 +65,6 @@ function log (message: string, proxyMode = false): void {
     process.stderr.write(`${message}\n`)
   } else {
     process.stdout.write(`${message}\n`)
-  }
-}
-
-function prepareMcpConfig (context: WorkspaceContext): void {
-  const result = prepareClaudeMcpConfig(context)
-  if (result.state === 'invalid') {
-    process.stderr.write(`Warning: ignored invalid Claude MCP configuration: ${result.path}\n`)
   }
 }
 
@@ -329,7 +321,6 @@ export async function startDevcontainer (context: WorkspaceContext, options: Sta
   }
   try {
     const signingPlan = await resolveGitSigningPlan(context)
-    prepareMcpConfig(context)
     reportGitSigningPlan(signingPlan, {
       logger: options.logger,
       quiet: proxyMode,
@@ -341,7 +332,7 @@ export async function startDevcontainer (context: WorkspaceContext, options: Sta
             }
           })
     })
-    writeGeneratedDevcontainerConfig(context, signingPlan)
+    writeGeneratedDevcontainerConfig(context, signingPlan, options.agentProfile)
     if (hasConfigStep) {
       progress?.completeStep('devcontainer-config')
     }
@@ -714,7 +705,6 @@ export async function refreshContainerGhAuth (context: WorkspaceContext, options
       progress
     })
     const signingPlan = await resolveGitSigningPlan(context)
-    prepareMcpConfig(context)
     reportGitSigningPlan(signingPlan, {
       logger: options.logger,
       ...(progress === undefined
@@ -725,7 +715,7 @@ export async function refreshContainerGhAuth (context: WorkspaceContext, options
             }
           })
     })
-    writeGeneratedDevcontainerConfig(context, signingPlan)
+    writeGeneratedDevcontainerConfig(context, signingPlan, options.agentProfile)
     if (hasConfigStep) {
       progress?.completeStep('gh-auth-config')
     }

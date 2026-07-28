@@ -30,12 +30,11 @@ export interface WorkspaceContext {
   workspaceDataDir: string
   workspaceRuntimeDir: string
   workspaceSecretEnvDir: string
-  workspaceMcpConfigDir: string
-  workspaceClaudeMcpConfigPath: string
   generatedConfigPath: string
   hostAgentsDir: string
+  hostCodexDir: string
   hostCodexAuthPath: string
-  hostCodexConfigPath: string
+  hostClaudeDir: string
   claudeCredentialsSupport: ClaudeCredentialsSupport
   hostClaudeCredentialsPath?: string
   hostClaudeConfigPath: string
@@ -124,12 +123,20 @@ export function defaultHostCodexAuthPath (env: NodeJS.ProcessEnv = process.env):
   return join(defaultHostCodexDir(env), 'auth.json')
 }
 
-export function defaultHostCodexConfigPath (env: NodeJS.ProcessEnv = process.env): string {
-  return join(defaultHostCodexDir(env), 'config.toml')
+export function defaultHostCodexDir (env: NodeJS.ProcessEnv = process.env): string {
+  return env.CODEX_HOME ?? join(env.HOME ?? homedir(), '.codex')
 }
 
-function defaultHostCodexDir (env: NodeJS.ProcessEnv): string {
-  return env.CODEX_HOME ?? join(env.HOME ?? homedir(), '.codex')
+export function defaultHostClaudeDir (
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform
+): string {
+  const pathJoin = platform === 'win32' ? win32.join : join
+  const home = platform === 'win32'
+    ? env.USERPROFILE ?? env.HOME ?? homedir()
+    : env.HOME ?? homedir()
+
+  return env.CLAUDE_CONFIG_DIR ?? pathJoin(home, '.claude')
 }
 
 export function defaultHostClaudeCredentialsPath (
@@ -139,18 +146,7 @@ export function defaultHostClaudeCredentialsPath (
   if (platform !== 'linux' && platform !== 'win32') return undefined
 
   const pathJoin = platform === 'win32' ? win32.join : join
-
-  if (env.CLAUDE_CONFIG_DIR) {
-    return pathJoin(env.CLAUDE_CONFIG_DIR, '.credentials.json')
-  }
-
-  const home = platform === 'win32'
-    ? env.USERPROFILE ?? env.HOME ?? homedir()
-    : env.HOME ?? homedir()
-
-  return platform === 'win32'
-    ? pathJoin(home, '.claude.credentials.json')
-    : pathJoin(home, '.claude', '.credentials.json')
+  return pathJoin(defaultHostClaudeDir(env, platform), '.credentials.json')
 }
 
 export function claudeCredentialsSupportFor (
@@ -169,7 +165,9 @@ export function defaultHostClaudeConfigPath (
     ? env.USERPROFILE ?? env.HOME ?? homedir()
     : env.HOME ?? homedir()
 
-  return pathJoin(env.CLAUDE_CONFIG_DIR ?? home, '.claude.json')
+  return env.CLAUDE_CONFIG_DIR
+    ? pathJoin(env.CLAUDE_CONFIG_DIR, '.claude.json')
+    : pathJoin(home, '.claude.json')
 }
 
 export function defaultHostGitconfigPath (env: NodeJS.ProcessEnv = process.env): string {
@@ -188,8 +186,9 @@ export function createWorkspaceContextFromIdentity (
   const dataRoot = defaultDataRoot(env)
   const runtimeRoot = defaultRuntimeRoot(env)
   const hostAgentsDir = defaultHostAgentsDir(env)
+  const hostCodexDir = defaultHostCodexDir(env)
   const hostCodexAuthPath = defaultHostCodexAuthPath(env)
-  const hostCodexConfigPath = defaultHostCodexConfigPath(env)
+  const hostClaudeDir = defaultHostClaudeDir(env, platform)
   const hostClaudeCredentialsPath = defaultHostClaudeCredentialsPath(env, platform)
   const hostClaudeConfigPath = defaultHostClaudeConfigPath(env, platform)
   const workspaceCacheDir = join(cacheRoot, 'workspaces', identity.workspaceId)
@@ -210,12 +209,11 @@ export function createWorkspaceContextFromIdentity (
     workspaceDataDir,
     workspaceRuntimeDir,
     workspaceSecretEnvDir: join(workspaceRuntimeDir, 'secrets'),
-    workspaceMcpConfigDir: join(workspaceRuntimeDir, 'mcp'),
-    workspaceClaudeMcpConfigPath: join(workspaceRuntimeDir, 'mcp', 'claude.json'),
     generatedConfigPath: join(workspaceCacheDir, 'devcontainer.json'),
     hostAgentsDir,
+    hostCodexDir,
     hostCodexAuthPath,
-    hostCodexConfigPath,
+    hostClaudeDir,
     claudeCredentialsSupport: claudeCredentialsSupportFor(platform),
     hostClaudeCredentialsPath,
     hostClaudeConfigPath,
