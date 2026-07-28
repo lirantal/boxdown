@@ -1,16 +1,45 @@
 import { readFileSync, statSync } from 'node:fs'
+import { relative, win32 } from 'node:path'
 
-import type { ClaudeCredentialsSupport, WorkspaceContext } from './paths.ts'
+import {
+  BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_AGENTS_DIR,
+  BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CLAUDE_CONFIG_PATH,
+  BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CLAUDE_CREDENTIALS_PATH,
+  BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CLAUDE_DIR,
+  BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CODEX_AUTH_PATH,
+  BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CODEX_DIR,
+  BOXDOWN_CONTAINER_AGENTS_DIR,
+  BOXDOWN_CONTAINER_CLAUDE_CONFIG_PATH,
+  BOXDOWN_CONTAINER_CLAUDE_CREDENTIALS_PATH,
+  BOXDOWN_CONTAINER_CLAUDE_DIR,
+  BOXDOWN_CONTAINER_CODEX_AUTH_PATH,
+  BOXDOWN_CONTAINER_CODEX_DIR
+} from './constants.ts'
+import { isAgentProfile, resolveAgentProfile, type AgentProfile, type AgentProfileSelection, type AgentProfileSelectionSource } from './agent-profile.ts'
+import { parseJsonc } from './jsonc.ts'
+import type { WorkspaceContext } from './paths.ts'
 import { buildSshConfigBlock, defaultSshConfigPath } from './ssh-config.ts'
 
 export type SshAliasSource = 'default' | 'provided'
 export type SshManagedBlockState = 'missing' | 'installed' | 'outdated'
-export type ClaudeCredentialsState = 'available' | 'missing' | 'unsupported'
+export type AgentProfileSourceState = 'available' | 'missing' | 'unsupported' | 'custom' | 'not-selected'
+export type ContainerProfileState = 'active' | 'recreate-required' | 'not-created' | 'unknown'
 
-export interface ClaudeCredentialsStatus {
-  state: ClaudeCredentialsState
-  path?: string
-  reason?: Exclude<ClaudeCredentialsSupport, 'file'>
+export interface AgentProfileStatus {
+  selected: AgentProfile
+  selectionSource: AgentProfileSelectionSource
+  generated?: AgentProfile
+  container?: AgentProfile
+  containerState: ContainerProfileState
+  sources: {
+    codexAuthentication: AgentProfileSourceState
+    claudeAuthentication: AgentProfileSourceState
+    agents: AgentProfileSourceState
+    codexHome: AgentProfileSourceState
+    claudeHome: AgentProfileSourceState
+    claudeConfig: AgentProfileSourceState
+  }
+  customDestinations: string[]
 }
 
 export interface ContainerSummary {
@@ -52,9 +81,7 @@ export interface StatusInfo {
     assetsDevcontainerDir: string
     assetsDevcontainerExists: boolean
   }
-  claude: {
-    credentials: ClaudeCredentialsStatus
-  }
+  agentProfile: AgentProfileStatus
   container: {
     found: boolean
     running: boolean
@@ -128,24 +155,307 @@ function isRegularFile (path: string): boolean {
   }
 }
 
-function inspectClaudeCredentialsStatus (
-  context: WorkspaceContext,
-  isFile: (path: string) => boolean
-): ClaudeCredentialsStatus {
-  if (context.claudeCredentialsSupport !== 'file') {
-    return { state: 'unsupported', reason: context.claudeCredentialsSupport }
+function isDirectory (path: string): boolean {
+  try {
+    return statSync(path).isDirectory()
+  } catch {
+    return false
+  }
+}
+
+const agentProfileSourceNames = [
+  'agents',
+  'codex-auth',
+  'claude-auth',
+  'codex-home',
+  'claude-home',
+  'claude-config'
+] as const
+
+type AgentProfileSourceName = typeof agentProfileSourceNames[number]
+
+const canonicalAgentProfileDestinations = [
+  BOXDOWN_CONTAINER_AGENTS_DIR,
+  BOXDOWN_CONTAINER_CODEX_DIR,
+  BOXDOWN_CONTAINER_CODEX_AUTH_PATH,
+  BOXDOWN_CONTAINER_CLAUDE_DIR,
+  BOXDOWN_CONTAINER_CLAUDE_CREDENTIALS_PATH,
+  BOXDOWN_CONTAINER_CLAUDE_CONFIG_PATH
+] as const
+
+interface GeneratedAgentProfileInfo {
+  profile?: AgentProfile
+  sources: Set<AgentProfileSourceName>
+  stagingTargets: Set<string>
+  mountTargets: Set<string>
+  customDestinations: string[]
+}
+
+function mountTarget (mount: string): string | undefined {
+  return mount
+    .split(',')
+    .map(part => part.trim())
+    .find(part => part.startsWith('target='))
+    ?.slice('target='.length)
+}
+
+function pathsConflict (left: string, right: string): boolean {
+  return left === right || left.startsWith(`${right}/`) || right.startsWith(`${left}/`)
+}
+
+function normalizedCustomDestinations (targets: string[]): string[] {
+  const destinations = new Set<string>()
+
+  for (const target of targets) {
+    if (canonicalAgentProfileDestinations.includes(target as typeof canonicalAgentProfileDestinations[number])) {
+      destinations.add(target)
+      continue
+    }
+
+    const containingDestinations = canonicalAgentProfileDestinations
+      .filter(destination => target.startsWith(`${destination}/`))
+      .sort((left, right) => right.length - left.length)
+
+    if (containingDestinations[0] !== undefined) {
+      destinations.add(containingDestinations[0])
+      continue
+    }
+
+    const containedDestinations = canonicalAgentProfileDestinations
+      .filter(destination => destination.startsWith(`${target}/`))
+      .filter(destination => !canonicalAgentProfileDestinations.some(parent =>
+        parent !== destination &&
+        destination.startsWith(`${parent}/`) &&
+        parent.startsWith(`${target}/`)
+      ))
+
+    for (const destination of containedDestinations) {
+      destinations.add(destination)
+    }
   }
 
-  const path = context.hostClaudeCredentialsPath
+  return [...destinations].sort()
+}
 
-  if (path === undefined) {
-    return { state: 'missing' }
+function inspectGeneratedAgentProfile (
+  path: string,
+  readFile: (path: string) => string
+): GeneratedAgentProfileInfo {
+  const empty: GeneratedAgentProfileInfo = {
+    sources: new Set(),
+    stagingTargets: new Set(),
+    mountTargets: new Set(),
+    customDestinations: []
   }
+
+  let parsed: unknown
+
+  try {
+    parsed = parseJsonc<unknown>(readFile(path))
+  } catch {
+    return empty
+  }
+
+  if (typeof parsed !== 'object' || parsed === null) return empty
+
+  const config = parsed as { containerEnv?: unknown, mounts?: unknown }
+  const containerEnv = typeof config.containerEnv === 'object' && config.containerEnv !== null
+    ? config.containerEnv as Record<string, unknown>
+    : {}
+  const profileValue = containerEnv.BOXDOWN_AGENT_PROFILE
+  const sourceValue = containerEnv.BOXDOWN_AGENT_PROFILE_SOURCES
+  const sources = new Set<AgentProfileSourceName>()
+
+  if (typeof sourceValue === 'string') {
+    for (const source of sourceValue.split(',').map(value => value.trim())) {
+      if (agentProfileSourceNames.includes(source as AgentProfileSourceName)) {
+        sources.add(source as AgentProfileSourceName)
+      }
+    }
+  }
+
+  const targets = Array.isArray(config.mounts)
+    ? config.mounts
+      .filter((mount): mount is string => typeof mount === 'string')
+      .map(mountTarget)
+      .filter((target): target is string => target !== undefined)
+    : []
 
   return {
-    state: isFile(path) ? 'available' : 'missing',
-    path
+    profile: typeof profileValue === 'string' && isAgentProfile(profileValue) ? profileValue : undefined,
+    sources,
+    stagingTargets: new Set(targets),
+    mountTargets: new Set(targets),
+    customDestinations: normalizedCustomDestinations(targets)
   }
+}
+
+function sourceIsCustom (generated: GeneratedAgentProfileInfo, destination: string): boolean {
+  return [...generated.mountTargets].some(target => pathsConflict(target, destination))
+}
+
+function generatedSourceState (
+  generated: GeneratedAgentProfileInfo,
+  source: AgentProfileSourceName,
+  stagingTarget: string,
+  destination: string
+): AgentProfileSourceState {
+  if (sourceIsCustom(generated, destination)) return 'custom'
+  return generated.sources.has(source) && generated.stagingTargets.has(stagingTarget)
+    ? 'available'
+    : 'missing'
+}
+
+function pathIsInside (path: string, directory: string): boolean {
+  const pathApi = path.includes('\\') || directory.includes('\\')
+    ? win32
+    : { relative, isAbsolute: (candidate: string) => candidate.startsWith('/'), sep: '/' }
+  const pathRelative = pathApi.relative(directory, path)
+
+  return pathRelative === '' || (
+    pathRelative !== '..' &&
+    !pathRelative.startsWith(`..${pathApi.sep}`) &&
+    !pathApi.isAbsolute(pathRelative)
+  )
+}
+
+function notSelectedSources (): AgentProfileStatus['sources'] {
+  return {
+    codexAuthentication: 'not-selected',
+    claudeAuthentication: 'not-selected',
+    agents: 'not-selected',
+    codexHome: 'not-selected',
+    claudeHome: 'not-selected',
+    claudeConfig: 'not-selected'
+  }
+}
+
+function inspectGeneratedSources (
+  context: WorkspaceContext,
+  selected: AgentProfile,
+  generated: GeneratedAgentProfileInfo
+): AgentProfileStatus['sources'] {
+  const sources = notSelectedSources()
+  if (selected === 'none') return sources
+
+  sources.agents = generatedSourceState(
+    generated,
+    'agents',
+    BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_AGENTS_DIR,
+    BOXDOWN_CONTAINER_AGENTS_DIR
+  )
+
+  if (selected === 'auth') {
+    sources.codexAuthentication = generatedSourceState(
+      generated,
+      'codex-auth',
+      BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CODEX_AUTH_PATH,
+      BOXDOWN_CONTAINER_CODEX_AUTH_PATH
+    )
+    sources.claudeAuthentication = sourceIsCustom(generated, BOXDOWN_CONTAINER_CLAUDE_CREDENTIALS_PATH)
+      ? 'custom'
+      : context.claudeCredentialsSupport === 'file'
+        ? generatedSourceState(
+          generated,
+          'claude-auth',
+          BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CLAUDE_CREDENTIALS_PATH,
+          BOXDOWN_CONTAINER_CLAUDE_CREDENTIALS_PATH
+        )
+        : 'unsupported'
+    return sources
+  }
+
+  sources.codexHome = generatedSourceState(
+    generated,
+    'codex-home',
+    BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CODEX_DIR,
+    BOXDOWN_CONTAINER_CODEX_DIR
+  )
+  sources.claudeHome = generatedSourceState(
+    generated,
+    'claude-home',
+    BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CLAUDE_DIR,
+    BOXDOWN_CONTAINER_CLAUDE_DIR
+  )
+  sources.claudeConfig = sourceIsCustom(generated, BOXDOWN_CONTAINER_CLAUDE_CONFIG_PATH)
+    ? 'custom'
+    : pathIsInside(context.hostClaudeConfigPath, context.hostClaudeDir)
+      ? sources.claudeHome
+      : generatedSourceState(
+        generated,
+        'claude-config',
+        BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CLAUDE_CONFIG_PATH,
+        BOXDOWN_CONTAINER_CLAUDE_CONFIG_PATH
+      )
+  sources.codexAuthentication = sources.codexHome
+  sources.claudeAuthentication = sourceIsCustom(generated, BOXDOWN_CONTAINER_CLAUDE_CREDENTIALS_PATH)
+    ? 'custom'
+    : context.claudeCredentialsSupport === 'file'
+      ? sources.claudeHome
+      : 'unsupported'
+
+  return sources
+}
+
+function inspectCurrentSources (
+  context: WorkspaceContext,
+  selected: AgentProfile,
+  generated: GeneratedAgentProfileInfo,
+  isFile: (path: string) => boolean,
+  isDirectoryPath: (path: string) => boolean
+): AgentProfileStatus['sources'] {
+  const sources = notSelectedSources()
+  if (selected === 'none') return sources
+
+  sources.codexAuthentication = sourceIsCustom(generated, BOXDOWN_CONTAINER_CODEX_AUTH_PATH)
+    ? 'custom'
+    : isFile(context.hostCodexAuthPath) ? 'available' : 'missing'
+  sources.claudeAuthentication = sourceIsCustom(generated, BOXDOWN_CONTAINER_CLAUDE_CREDENTIALS_PATH)
+    ? 'custom'
+    : context.claudeCredentialsSupport !== 'file'
+      ? 'unsupported'
+      : context.hostClaudeCredentialsPath !== undefined && isFile(context.hostClaudeCredentialsPath)
+        ? 'available'
+        : 'missing'
+  sources.agents = sourceIsCustom(generated, BOXDOWN_CONTAINER_AGENTS_DIR)
+    ? 'custom'
+    : isDirectoryPath(context.hostAgentsDir) ? 'available' : 'missing'
+
+  if (selected === 'auth') return sources
+
+  sources.codexHome = sourceIsCustom(generated, BOXDOWN_CONTAINER_CODEX_DIR)
+    ? 'custom'
+    : isDirectoryPath(context.hostCodexDir) ? 'available' : 'missing'
+  sources.claudeHome = sourceIsCustom(generated, BOXDOWN_CONTAINER_CLAUDE_DIR)
+    ? 'custom'
+    : isDirectoryPath(context.hostClaudeDir) ? 'available' : 'missing'
+  sources.claudeConfig = sourceIsCustom(generated, BOXDOWN_CONTAINER_CLAUDE_CONFIG_PATH)
+    ? 'custom'
+    : isFile(context.hostClaudeConfigPath) ? 'available' : 'missing'
+
+  return sources
+}
+
+function containerProfileState (
+  selected: AgentProfile,
+  generated: AgentProfile | undefined,
+  container: ContainerSummary | undefined,
+  containerAgentProfile: AgentProfile | undefined
+): ContainerProfileState {
+  if (container === undefined) return 'not-created'
+
+  if (
+    (generated !== undefined && generated !== selected) ||
+    (containerAgentProfile !== undefined && containerAgentProfile !== selected)
+  ) {
+    return 'recreate-required'
+  }
+
+  return container.state?.toLowerCase() === 'running' &&
+    generated === selected &&
+    containerAgentProfile === selected
+    ? 'active'
+    : 'unknown'
 }
 
 function managedSshBlockMarkers (alias: string): { begin: string, end: string } {
@@ -220,15 +530,37 @@ export function createStatusInfo (
     sshConfigPath?: string
     readFile?: (path: string) => string
     isFile?: (path: string) => boolean
+    isDirectory?: (path: string) => boolean
+    agentProfileSelection?: AgentProfileSelection
+    containerAgentProfile?: AgentProfile
   } = {}
 ): StatusInfo {
   const state = container?.state?.toLowerCase()
+  const readFile = options.readFile ?? readFileUtf8
   const sshConfig = inspectSshConfigStatus(
     context,
     alias,
     options.sshConfigPath ?? defaultSshConfigPath(),
     exists,
-    options.readFile
+    readFile
+  )
+  const selection = options.agentProfileSelection ?? resolveAgentProfile(undefined, undefined)
+  const generatedInfo = inspectGeneratedAgentProfile(context.generatedConfigPath, readFile)
+  const generatedMatchesSelection = generatedInfo.profile === selection.value
+  const sources = generatedMatchesSelection
+    ? inspectGeneratedSources(context, selection.value, generatedInfo)
+    : inspectCurrentSources(
+      context,
+      selection.value,
+      generatedInfo,
+      options.isFile ?? isRegularFile,
+      options.isDirectory ?? isDirectory
+    )
+  const profileState = containerProfileState(
+    selection.value,
+    generatedInfo.profile,
+    container,
+    options.containerAgentProfile
   )
 
   return {
@@ -262,8 +594,14 @@ export function createStatusInfo (
       assetsDevcontainerDir: context.assetsDevcontainerDir,
       assetsDevcontainerExists: exists(context.assetsDevcontainerDir)
     },
-    claude: {
-      credentials: inspectClaudeCredentialsStatus(context, options.isFile ?? isRegularFile)
+    agentProfile: {
+      selected: selection.value,
+      selectionSource: selection.source,
+      ...(generatedInfo.profile === undefined ? {} : { generated: generatedInfo.profile }),
+      ...(options.containerAgentProfile === undefined ? {} : { container: options.containerAgentProfile }),
+      containerState: profileState,
+      sources,
+      customDestinations: generatedInfo.customDestinations
     },
     container: {
       found: container !== undefined,
@@ -283,7 +621,8 @@ export function statusIsHealthy (status: StatusInfo): boolean {
     status.ssh.publicKeyExists &&
     status.ssh.publicKeyRuntimeExists &&
     status.container.found &&
-    status.container.running
+    status.container.running &&
+    status.agentProfile.containerState !== 'recreate-required'
 }
 
 const color = {
@@ -324,23 +663,47 @@ function stateText (state: string, healthy: boolean, colorEnabled: boolean): str
   return colorize(state, healthy ? 'green' : 'red', colorEnabled)
 }
 
+function profileSelectionSourceText (source: AgentProfileSelectionSource): string {
+  if (source === 'metadata') return 'workspace metadata'
+  return source
+}
+
+function agentProfileSourceText (state: AgentProfileSourceState): string {
+  if (state === 'unsupported') return 'unavailable (macOS Keychain is not copied)'
+  if (state === 'not-selected') return 'not selected'
+  return state
+}
+
+function containerProfileText (state: ContainerProfileState): string {
+  if (state === 'recreate-required') return 'recreate required'
+  if (state === 'not-created') return 'not created'
+  return state
+}
+
 export function formatStatusText (status: StatusInfo, options: { color?: boolean } = {}): string {
   const colorEnabled = options.color ?? false
   const containerState = status.container.found ? status.container.state ?? 'unknown' : 'absent'
   const healthy = statusIsHealthy(status)
-  const claudeCredentialsLines = status.claude.credentials.state === 'available'
-    ? [
-        `  Claude credentials: ${status.claude.credentials.path} (available on host; host-owned)`,
-        '  Run `boxdown start --recreate` to apply the current credential mount configuration.'
-      ]
-    : status.claude.credentials.state === 'missing'
-      ? [
-          `  Claude credentials: ${status.claude.credentials.path} (missing)`,
-          '  Run Claude Code and /login on the host, then recreate the devcontainer.'
-        ]
-      : status.claude.credentials.reason === 'macos-keychain'
-        ? ['  Claude credentials: macOS Keychain credentials are not automatically forwarded.']
-        : ['  Claude credentials: This host platform does not have a supported file-backed Claude credential forwarding path.']
+  const profile = status.agentProfile
+  const agentProfileLines = [
+    `Agent profile: ${profile.selected} (${profileSelectionSourceText(profile.selectionSource)})`,
+    `  Codex authentication: ${agentProfileSourceText(profile.sources.codexAuthentication)}`,
+    `  Claude authentication: ${agentProfileSourceText(profile.sources.claudeAuthentication)}`,
+    `  ~/.agents: ${agentProfileSourceText(profile.sources.agents)}`,
+    `  Codex home: ${agentProfileSourceText(profile.sources.codexHome)}`,
+    `  Claude home: ${agentProfileSourceText(profile.sources.claudeHome)}`,
+    `  ~/.claude.json: ${agentProfileSourceText(profile.sources.claudeConfig)}`,
+    `  Container profile: ${containerProfileText(profile.containerState)}`
+  ]
+
+  if (profile.customDestinations.length > 0) {
+    agentProfileLines.push(`  Custom destinations: ${profile.customDestinations.join(', ')}`)
+  }
+
+  if (profile.containerState === 'recreate-required') {
+    agentProfileLines.push(`  Run \`boxdown start --recreate --agent-profile ${profile.selected}\`.`)
+  }
+
   const lines = [
     'Boxdown status',
     '',
@@ -359,8 +722,7 @@ export function formatStatusText (status: StatusInfo, options: { color?: boolean
     `  Command log: ${status.paths.logPath} (${existenceText(status.paths.logExists, colorEnabled)})`,
     `  Devcontainer assets: ${status.paths.assetsDevcontainerDir} (${existenceText(status.paths.assetsDevcontainerExists, colorEnabled)})`,
     '',
-    'Claude Code:',
-    ...claudeCredentialsLines,
+    ...agentProfileLines,
     '',
     'SSH:',
     `  SSH config: ${status.ssh.configPath} (${existenceText(status.ssh.configExists, colorEnabled)})`,

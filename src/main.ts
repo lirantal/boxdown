@@ -5,7 +5,7 @@ import { codingAgentBinary, codingAgentFromCommand, type CodingAgentCli } from '
 import { buildGeneratedDevcontainerConfig, publishContainerPortFromConfig } from './config.ts'
 import { formatContainerRuntimeFailure, waitForContainerRuntime, type ContainerRuntimeProbe } from './container-runtime.ts'
 import { doctorHasFailures, formatDoctorText, runDoctorChecks, type DoctorCheck } from './doctor.ts'
-import { startDevcontainer, printPortHint, openShell, openCodingAgentCli, ensureContainerSshRuntime, runSshdProxy, refreshContainerGhAuth, refreshContainerCodingAgentClis, ensureContainerCodingAgentCli, findRunningContainerId, findWorkspaceContainer, stopWorkspaceContainer, removeWorkspaceContainer, listWorkspaceContainers, openSshTunnel, type TunnelPortForward } from './devcontainer.ts'
+import { startDevcontainer, printPortHint, openShell, openCodingAgentCli, ensureContainerSshRuntime, runSshdProxy, refreshContainerGhAuth, refreshContainerCodingAgentClis, ensureContainerCodingAgentCli, findRunningContainerId, findWorkspaceContainer, inspectContainerAgentProfile, stopWorkspaceContainer, removeWorkspaceContainer, listWorkspaceContainers, openSshTunnel, type TunnelPortForward } from './devcontainer.ts'
 import { canPromptInteractively, promptConfirm, promptMultiSelect, promptText, type PromptInput, type PromptOutput } from './interactive-prompts.ts'
 import { createWorkspaceListEntries, formatWorkspaceListDetailsText, formatWorkspaceListText } from './list.ts'
 import { createWorkspaceCommandLogger, withLoggedProcessOutput, type WorkspaceCommandLogger } from './logging.ts'
@@ -1402,7 +1402,14 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
 
     if (parsed.command === 'status') {
       const container = await findWorkspaceContainer(context)
-      const status = createStatusInfo(context, alias, container, existsSync, { aliasSource })
+      const containerAgentProfile = container?.state?.toLowerCase() === 'running'
+        ? await inspectContainerAgentProfile(container.id)
+        : undefined
+      const status = createStatusInfo(context, alias, container, existsSync, {
+        aliasSource,
+        agentProfileSelection: resolveAgentProfile(undefined, recordedMetadata?.agentProfile),
+        containerAgentProfile
+      })
 
       if (parsed.json) {
         process.stdout.write(`${JSON.stringify(status, null, 2)}\n`)
