@@ -14,9 +14,9 @@ import { canonicalCodexRemotePathForWorkspace, codexDiscoveredRemoteHostId, code
 import { codingAgentBinary, codingAgentFromCommand, type CodingAgentCli } from '../src/coding-agents.ts'
 import { AGENT_PROFILES, isAgentProfile, resolveAgentProfile } from '../src/agent-profile.ts'
 import { color, formatPromptEnd, formatPromptTitle, promptRail, selectedMark } from '../src/cli-style.ts'
-import { buildGeneratedDevcontainerConfig, publishContainerPortFromConfig, sourcePathIsInside } from '../src/config.ts'
+import { buildGeneratedDevcontainerConfig, publishContainerPortFromConfig, readGeneratedAgentProfile, sourcePathIsInside, writeGeneratedDevcontainerConfig } from '../src/config.ts'
 import { BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_AGENTS_DIR, BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CLAUDE_CONFIG_PATH, BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CLAUDE_CREDENTIALS_PATH, BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CLAUDE_DIR, BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CODEX_AUTH_PATH, BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CODEX_DIR, BOXDOWN_CONTAINER_AGENTS_DIR, BOXDOWN_CONTAINER_CLAUDE_CONFIG_PATH, BOXDOWN_CONTAINER_CLAUDE_CREDENTIALS_PATH, BOXDOWN_CONTAINER_CLAUDE_DIR, BOXDOWN_CONTAINER_CODEX_AUTH_PATH, BOXDOWN_CONTAINER_CODEX_DIR, BOXDOWN_CONTAINER_GITCONFIG_PATH, BOXDOWN_CONTAINER_HOST_GITCONFIG_DIR, BOXDOWN_CONTAINER_SECRET_ENV_BOOTSTRAP, BOXDOWN_CONTAINER_SECRET_ENV_DIR, DEVCONTAINER_CLI_VERSION } from '../src/constants.ts'
-import { codingAgentDevcontainerExecArgs, isPublishedBoxdownImage, parseDockerInspectImage, sshdProxyDockerArgs, sshTunnelArgs, startDevcontainer } from '../src/devcontainer.ts'
+import { codingAgentDevcontainerExecArgs, inspectContainerAgentProfile, isPublishedBoxdownImage, parseDockerInspectImage, sshdProxyDockerArgs, sshTunnelArgs, startDevcontainer } from '../src/devcontainer.ts'
 import { resolveDevcontainerCli } from '../src/devcontainer-cli.ts'
 import { doctorHasFailures, formatDoctorText, runDoctorChecks } from '../src/doctor.ts'
 import { parseSshPublicKey, reportGitSigningPlan, resolveConfiguredSshSigningKey, resolveGitSigningPlan, selectGitSigningKey, type GitSigningPlan, type GitSigningReason } from '../src/git-signing.ts'
@@ -68,6 +68,7 @@ interface FakeDockerWorkspace {
   imageName?: string
   inspectExitCode?: number
   imageRemoveExitCode?: number
+  agentProfileMarker?: string
 }
 
 function runCliProcess (argv: string[], env: NodeJS.ProcessEnv): { code: number, stdout: string, stderr: string } {
@@ -122,7 +123,7 @@ async function withFakeDocker<T> (workspaces: FakeDockerWorkspace[], run: (logPa
     '    previous="$arg"',
     '  done',
     '  if [ "$filter" = "label=devcontainer.local_folder" ]; then',
-    '    while IFS="$(printf \'\\t\')" read -r folder id container_state remove_exit_code image_id image_name inspect_exit_code image_remove_exit_code; do',
+    '    while IFS="$(printf \'\\t\')" read -r folder id container_state remove_exit_code image_id image_name inspect_exit_code image_remove_exit_code agent_profile_marker; do',
     '      printf \'{"ID":"%s","Names":"%s","State":"%s","Status":"%s","Labels":"devcontainer.local_folder=%s"}\\n\' "$id" "$id" "$container_state" "$container_state" "$folder"',
     '    done < "${BOXDOWN_FAKE_DOCKER_STATE}"',
     '    exit 0',
@@ -131,8 +132,17 @@ async function withFakeDocker<T> (workspaces: FakeDockerWorkspace[], run: (logPa
     '  if [ "$workspace" = "$filter" ]; then',
     '    exit 0',
     '  fi',
-    '  while IFS="$(printf \'\\t\')" read -r folder id container_state remove_exit_code image_id image_name inspect_exit_code image_remove_exit_code; do',
+    '  include_stopped=0',
+    '  for arg in "$@"; do',
+    '    if [ "$arg" = "-a" ]; then',
+    '      include_stopped=1',
+    '    fi',
+    '  done',
+    '  while IFS="$(printf \'\\t\')" read -r folder id container_state remove_exit_code image_id image_name inspect_exit_code image_remove_exit_code agent_profile_marker; do',
     '    if [ "$folder" = "$workspace" ]; then',
+    '      if [ "$include_stopped" = "0" ] && [ "$container_state" != "running" ]; then',
+    '        continue',
+    '      fi',
     '      if [[ "$*" == *\'{{.ID}}\'* ]]; then',
     '        printf \'%s\\n\' "$id"',
     '        exit 0',
@@ -145,7 +155,7 @@ async function withFakeDocker<T> (workspaces: FakeDockerWorkspace[], run: (logPa
     'fi',
     'if [ "${1:-}" = "inspect" ]; then',
     '  id="${@: -1}"',
-    '  while IFS="$(printf \'\\t\')" read -r folder container_id container_state remove_exit_code image_id image_name inspect_exit_code image_remove_exit_code; do',
+    '  while IFS="$(printf \'\\t\')" read -r folder container_id container_state remove_exit_code image_id image_name inspect_exit_code image_remove_exit_code agent_profile_marker; do',
     '    if [ "$container_id" = "$id" ]; then',
     '      if [ "${inspect_exit_code:-0}" != "0" ]; then',
     '        exit "$inspect_exit_code"',
@@ -156,9 +166,25 @@ async function withFakeDocker<T> (workspaces: FakeDockerWorkspace[], run: (logPa
     '  done < "${BOXDOWN_FAKE_DOCKER_STATE}"',
     '  exit 1',
     'fi',
+    'if [ "${1:-}" = "exec" ] && [ "${3:-}" = "cat" ] && [ "${4:-}" = "/opt/boxdown/state/agent-profile" ]; then',
+    '  id="${2:-}"',
+    '  while IFS="$(printf \'\\t\')" read -r folder container_id container_state remove_exit_code image_id image_name inspect_exit_code image_remove_exit_code agent_profile_marker; do',
+    '    if [ "$container_id" = "$id" ]; then',
+    '      if [ "$container_state" != "running" ]; then',
+    '        exit 1',
+    '      fi',
+    '      if [ "${agent_profile_marker:--}" = "-" ]; then',
+    '        exit 1',
+    '      fi',
+    '      printf \'%s\\n\' "$agent_profile_marker"',
+    '      exit 0',
+    '    fi',
+    '  done < "${BOXDOWN_FAKE_DOCKER_STATE}"',
+    '  exit 1',
+    'fi',
     'if [ "${1:-}" = "rm" ]; then',
     '  id="${@: -1}"',
-    '  while IFS="$(printf \'\\t\')" read -r folder container_id container_state remove_exit_code image_id image_name inspect_exit_code image_remove_exit_code; do',
+    '  while IFS="$(printf \'\\t\')" read -r folder container_id container_state remove_exit_code image_id image_name inspect_exit_code image_remove_exit_code agent_profile_marker; do',
     '    if [ "$container_id" = "$id" ]; then',
     '      exit "${remove_exit_code:-0}"',
     '    fi',
@@ -167,7 +193,7 @@ async function withFakeDocker<T> (workspaces: FakeDockerWorkspace[], run: (logPa
     'fi',
     'if [ "${1:-}" = "image" ] && [ "${2:-}" = "rm" ]; then',
     '  image_id="${@: -1}"',
-    '  while IFS="$(printf \'\\t\')" read -r folder container_id container_state remove_exit_code recorded_image_id image_name inspect_exit_code image_remove_exit_code; do',
+    '  while IFS="$(printf \'\\t\')" read -r folder container_id container_state remove_exit_code recorded_image_id image_name inspect_exit_code image_remove_exit_code agent_profile_marker; do',
     '    if [ "$recorded_image_id" = "$image_id" ]; then',
     '      exit "${image_remove_exit_code:-0}"',
     '    fi',
@@ -185,7 +211,8 @@ async function withFakeDocker<T> (workspaces: FakeDockerWorkspace[], run: (logPa
     workspace.imageId ?? `sha256:${workspace.id}-image`,
     workspace.imageName ?? `boxdown-test:${workspace.id}`,
     String(workspace.inspectExitCode ?? 0),
-    String(workspace.imageRemoveExitCode ?? 0)
+    String(workspace.imageRemoveExitCode ?? 0),
+    workspace.agentProfileMarker ?? '-'
   ].join('\t')).join('\n')}\n`)
   writeFileSync(dockerPath, script)
   chmodSync(dockerPath, 0o755)
@@ -204,6 +231,28 @@ function fakeDockerCalls (logPath: string): string[] {
   }
 
   return readFileSync(logPath, 'utf8').trim().split(/\r?\n/).filter((line) => line.length > 0)
+}
+
+async function inspectFakeContainerAgentProfile (containerId: string): Promise<'none' | 'auth' | 'full' | undefined> {
+  return inspectContainerAgentProfile(containerId)
+}
+
+function updateFakeDockerContainer (
+  env: NodeJS.ProcessEnv,
+  containerId: string,
+  updates: { containerState?: string, agentProfileMarker?: string }
+): void {
+  const statePath = env.BOXDOWN_FAKE_DOCKER_STATE
+  assert.notStrictEqual(statePath, undefined)
+  const lines = readFileSync(statePath as string, 'utf8').trimEnd().split('\n')
+  const updated = lines.map((line) => {
+    const fields = line.split('\t')
+    if (fields[1] !== containerId) return line
+    if (updates.containerState !== undefined) fields[2] = updates.containerState
+    if (updates.agentProfileMarker !== undefined) fields[8] = updates.agentProfileMarker
+    return fields.join('\t')
+  })
+  writeFileSync(statePath as string, `${updated.join('\n')}\n`)
 }
 
 const codexPromptChoice = {
@@ -1416,6 +1465,93 @@ describe('CLI execution', () => {
     assert.deepStrictEqual(calls, ['lifecycle:none', 'start:none', 'port', 'shell'])
   })
 
+  test('propagates agent profile through every container lifecycle', async () => {
+    const cases: Array<{
+      name: string
+      argv: string[]
+      explicit?: 'none' | 'auth' | 'full'
+      recorded?: 'none' | 'auth' | 'full'
+      expected: 'none' | 'auth' | 'full'
+      refresh?: boolean
+      shortCircuitAfterStart?: boolean
+    }> = [
+      { name: 'setup explicit', argv: ['setup'], explicit: 'full', recorded: 'none', expected: 'full' },
+      { name: 'start metadata', argv: ['start'], recorded: 'none', expected: 'none' },
+      { name: 'Codex default', argv: ['codex'], expected: 'auth' },
+      { name: 'Claude explicit', argv: ['claude'], explicit: 'full', recorded: 'none', expected: 'full' },
+      { name: 'OpenCode metadata', argv: ['opencode'], recorded: 'none', expected: 'none' },
+      { name: 'Antigravity default', argv: ['antigravity'], expected: 'auth' },
+      { name: 'SSH proxy explicit', argv: ['ssh-proxy'], explicit: 'full', recorded: 'auth', expected: 'full', shortCircuitAfterStart: true },
+      { name: 'tunnel metadata', argv: ['tunnel', '--port', '8080'], recorded: 'none', expected: 'none', shortCircuitAfterStart: true },
+      { name: 'refresh GitHub token default', argv: ['refresh-gh-token'], expected: 'auth', refresh: true }
+    ]
+
+    for (const entry of cases) {
+      const slug = entry.name.toLowerCase().replaceAll(' ', '-')
+      const workspace = tempDir(`propagates-agent-profile-${slug}-workspace`)
+      const env = {
+        CI: '1',
+        BOXDOWN_CACHE_HOME: tempDir(`propagates-agent-profile-${slug}-cache`),
+        BOXDOWN_DATA_HOME: tempDir(`propagates-agent-profile-${slug}-data`),
+        BOXDOWN_SSH_CONFIG: join(tempDir(`propagates-agent-profile-${slug}-ssh`), 'config')
+      }
+      const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+      const starts: Array<'none' | 'auth' | 'full' | undefined> = []
+      const refreshes: Array<'none' | 'auth' | 'full' | undefined> = []
+      const sentinel = new Error(`stop after start: ${entry.name}`)
+
+      if (entry.recorded !== undefined) {
+        writeWorkspaceMetadata(context, 'recorded-profile-devcontainer', undefined, entry.recorded)
+      }
+
+      const argv = [
+        ...entry.argv,
+        '--workspace',
+        workspace,
+        ...(entry.explicit === undefined ? [] : ['--agent-profile', entry.explicit])
+      ]
+      const runCase = async (): Promise<number> => withProcessEnv(env, async () => runCli(argv, {
+        env,
+        waitForContainerRuntime: async () => ({ state: 'ready', mode: 'buildx', warnings: [] }),
+        runDoctorChecks: async () => [],
+        prepareContainerLifecycle: async (receivedContext, alias, progress, lifecycleOptions, logger, profile) => {
+          await prepareContainerLifecycle(receivedContext, alias, progress, lifecycleOptions, logger, profile)
+        },
+        setupWorkspace: async (receivedContext, alias, setupOptions) => {
+          await setupWorkspace(receivedContext, alias, {
+            ...setupOptions,
+            start: async (_startContext, startOptions) => {
+              starts.push(startOptions.agentProfile)
+              return 'profile-container'
+            },
+            installSsh: async () => {},
+            installTarget: async () => {}
+          })
+        },
+        startDevcontainer: async (_startContext, startOptions) => {
+          starts.push(startOptions.agentProfile)
+          if (entry.shortCircuitAfterStart === true) throw sentinel
+          return 'profile-container'
+        },
+        printPortHint: async () => {},
+        openShell: async () => 0,
+        ensureContainerCodingAgentCli: async () => {},
+        openCodingAgentCli: async () => 0,
+        refreshContainerGhAuth: async (_refreshContext, refreshOptions) => {
+          refreshes.push(refreshOptions.agentProfile)
+        }
+      }))
+      const code = entry.shortCircuitAfterStart === true
+        ? await assert.rejects(runCase(), (error: unknown) => error === sentinel).then(() => 1)
+        : await runCase()
+
+      assert.strictEqual(code, entry.shortCircuitAfterStart === true ? 1 : 0, entry.name)
+      assert.deepStrictEqual(starts, [entry.expected], entry.name)
+      assert.strictEqual(readWorkspaceMetadata(context)?.agentProfile, entry.expected, entry.name)
+      assert.deepStrictEqual(refreshes, entry.refresh === true ? [entry.expected] : [], entry.name)
+    }
+  })
+
   test('setup continues after a non-blocking readiness warning', async () => {
     const workspace = tempDir('setup-preflight-warning-workspace')
     const dataHome = tempDir('setup-preflight-warning-data')
@@ -1755,7 +1891,7 @@ describe('CLI execution', () => {
     await setupWorkspace(context, alias, {
       start: async (receivedContext, options) => {
         assert.strictEqual(receivedContext, context)
-        assert.deepStrictEqual(options, { recreate: undefined })
+        assert.deepStrictEqual(options, { agentProfile: 'auth', recreate: undefined })
         assert.strictEqual('reuseRunning' in options, false)
         calls.push('start')
         return 'setup-container'
@@ -1788,7 +1924,7 @@ describe('CLI execution', () => {
       targets: ['codex'],
       start: async (receivedContext, options) => {
         assert.strictEqual(receivedContext, context)
-        assert.deepStrictEqual(options, { recreate: true })
+        assert.deepStrictEqual(options, { agentProfile: 'auth', recreate: true })
         calls.push('start')
         return 'setup-container'
       },
@@ -3934,7 +4070,7 @@ describe('workspace metadata', () => {
     assert.match(readWorkspaceMetadata(migrationContext)?.legacyImageMigrationNotifiedAt ?? '', /^\d{4}-\d{2}-\d{2}T/)
 
     await withFakeDocker([
-      { workspace, id: 'legacy-container', imageId: image.id, imageName: image.name }
+      { workspace, id: 'legacy-container', imageId: image.id, imageName: image.name, agentProfileMarker: 'auth' }
     ], async (logPath, dockerEnv) => {
       process.stderr.write = function capturedStderrWrite (this: typeof process.stderr, chunk: string | Uint8Array): boolean {
         stderr.push(Buffer.isBuffer(chunk) ? chunk.toString('utf8') : chunk)
@@ -5695,26 +5831,30 @@ describe('progress output', () => {
     writeFileSync(context.sshKeyPath, 'test private key\n')
     writeFileSync(context.sshPublicKeyPath, 'test public key\n')
 
-    await assert.rejects(
-      startDevcontainer(context, {
-        progress: createProgress({ mode: 'none' }),
-        runDevcontainerUp: async (label, command, args) => {
-          calls.push({ label, command, args })
-          return {
-            code: 1,
-            stdout: `${wrapper}\n`,
-            stderr: 'failed to solve: registry authentication failed\n'
+    await withFakeDocker([], async (_logPath, dockerEnv) => {
+      await withProcessEnv(dockerEnv as Record<string, string>, async () => {
+        await assert.rejects(
+          startDevcontainer(context, {
+            progress: createProgress({ mode: 'none' }),
+            runDevcontainerUp: async (label, command, args) => {
+              calls.push({ label, command, args })
+              return {
+                code: 1,
+                stdout: `${wrapper}\n`,
+                stderr: 'failed to solve: registry authentication failed\n'
+              }
+            }
+          }),
+          (error: unknown) => {
+            assert.ok(error instanceof Error)
+            assert.match(error.message, /registry authentication failed/)
+            assert.doesNotMatch(error.message, /docker buildx build --load/)
+            assert.doesNotMatch(error.message, /Command log:/)
+            return true
           }
-        }
-      }),
-      (error: unknown) => {
-        assert.ok(error instanceof Error)
-        assert.match(error.message, /registry authentication failed/)
-        assert.doesNotMatch(error.message, /docker buildx build --load/)
-        assert.doesNotMatch(error.message, /Command log:/)
-        return true
-      }
-    )
+        )
+      })
+    })
 
     assert.strictEqual(calls.length, 1)
     assert.strictEqual(calls[0]?.label, 'devcontainer up')
@@ -5724,7 +5864,7 @@ describe('progress output', () => {
   test('recreate bypasses running-container reuse and removes the existing container', async () => {
     const workspace = tempDir('devcontainer-recreate-workspace')
 
-    await withFakeDocker([{ workspace, id: 'running-container' }], async (logPath, dockerEnv) => {
+    await withFakeDocker([{ workspace, id: 'running-container', agentProfileMarker: 'auth' }], async (logPath, dockerEnv) => {
       const env = {
         ...dockerEnv,
         BOXDOWN_CACHE_HOME: tempDir('devcontainer-recreate-cache'),
@@ -5779,22 +5919,268 @@ describe('progress output', () => {
     writeFileSync(context.sshKeyPath, 'test private key\n')
     writeFileSync(context.sshPublicKeyPath, 'test public key\n')
 
-    await assert.rejects(
-      startDevcontainer(context, {
-        logger,
-        progress: createProgress({ mode: 'none' }),
-        runDevcontainerUp: async () => ({
-          code: 1,
-          stdout: '',
-          stderr: 'failed to solve: registry authentication failed\n'
-        })
-      }),
-      (error: unknown) => {
-        assert.ok(error instanceof Error)
-        assert.ok(error.message.includes(`Command log: ${context.workspaceLogPath}`))
-        return true
+    await withFakeDocker([], async (_logPath, dockerEnv) => {
+      await withProcessEnv(dockerEnv as Record<string, string>, async () => {
+        await assert.rejects(
+          startDevcontainer(context, {
+            logger,
+            progress: createProgress({ mode: 'none' }),
+            runDevcontainerUp: async () => ({
+              code: 1,
+              stdout: '',
+              stderr: 'failed to solve: registry authentication failed\n'
+            })
+          }),
+          (error: unknown) => {
+            assert.ok(error instanceof Error)
+            assert.ok(error.message.includes(`Command log: ${context.workspaceLogPath}`))
+            return true
+          }
+        )
+      })
+    })
+  })
+})
+
+describe('agent profile container lifecycle', () => {
+  test('profile marker inspection accepts validated values and ignores invalid or unreadable content', async () => {
+    const workspace = tempDir('profile-marker-workspace')
+    const markers = [
+      { id: 'profile-none', marker: 'none', expected: 'none' },
+      { id: 'profile-auth', marker: 'auth', expected: 'auth' },
+      { id: 'profile-full', marker: ' full ', expected: 'full' },
+      { id: 'profile-whitespace', marker: '   ', expected: undefined },
+      { id: 'profile-invalid', marker: 'host-root', expected: undefined },
+      { id: 'profile-absent', marker: undefined, expected: undefined }
+    ] as const
+
+    await withFakeDocker(markers.map(({ id, marker }) => ({
+      workspace,
+      id,
+      ...(marker === undefined ? {} : { agentProfileMarker: marker })
+    })), async (logPath, dockerEnv) => {
+      await withProcessEnv(dockerEnv as Record<string, string>, async () => {
+        for (const marker of markers) {
+          assert.strictEqual(await inspectFakeContainerAgentProfile(marker.id), marker.expected, marker.id)
+        }
+        assert.strictEqual(await inspectFakeContainerAgentProfile('docker-error'), undefined)
+      })
+
+      const calls = fakeDockerCalls(logPath)
+      for (const marker of markers) {
+        assert.ok(calls.includes(`exec ${marker.id} cat /opt/boxdown/state/agent-profile`), marker.id)
       }
-    )
+      assert.ok(calls.includes('exec docker-error cat /opt/boxdown/state/agent-profile'))
+      assert.strictEqual(calls.some((call) => call.includes('host-root') || call.includes(' full ')), false)
+    })
+  })
+
+  test('agent profile lifecycle rejects a stale running marker before devcontainer up', async () => {
+    const workspace = tempDir('agent-profile-stale-running-workspace')
+
+    await withFakeDocker([{ workspace, id: 'stale-running', agentProfileMarker: 'auth' }], async (logPath, dockerEnv) => {
+      const env = {
+        ...dockerEnv,
+        BOXDOWN_CACHE_HOME: tempDir('agent-profile-stale-running-cache'),
+        BOXDOWN_DATA_HOME: tempDir('agent-profile-stale-running-data')
+      }
+      const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+      let upCalls = 0
+
+      mkdirSync(context.sshKeyDir, { recursive: true })
+      writeFileSync(context.sshKeyPath, 'test private key\n')
+      writeFileSync(context.sshPublicKeyPath, 'test public key\n')
+      writeGeneratedDevcontainerConfig(context, undefined, 'auth')
+
+      await withProcessEnv(env as Record<string, string>, async () => {
+        await assert.rejects(startDevcontainer(context, {
+          agentProfile: 'full',
+          reuseRunning: true,
+          progress: createProgress({ mode: 'none' }),
+          runDevcontainerUp: async () => {
+            upCalls += 1
+            return { code: 0, stdout: '{"containerId":"stale-running"}\n', stderr: '' }
+          }
+        }), /Agent profile full is not active in this devcontainer\.\nRun `boxdown start --recreate --agent-profile full`\./)
+      })
+
+      assert.strictEqual(upCalls, 0)
+      assert.strictEqual(readGeneratedAgentProfile(context), 'auth')
+      assert.ok(fakeDockerCalls(logPath).includes('exec stale-running cat /opt/boxdown/state/agent-profile'))
+    })
+  })
+
+  test('agent profile lifecycle rejects a missing legacy profile marker', async () => {
+    const workspace = tempDir('agent-profile-legacy-marker-workspace')
+
+    await withFakeDocker([{ workspace, id: 'legacy-running' }], async (_logPath, dockerEnv) => {
+      const env = {
+        ...dockerEnv,
+        BOXDOWN_CACHE_HOME: tempDir('agent-profile-legacy-marker-cache'),
+        BOXDOWN_DATA_HOME: tempDir('agent-profile-legacy-marker-data')
+      }
+      const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+      let upCalls = 0
+
+      mkdirSync(context.sshKeyDir, { recursive: true })
+      writeFileSync(context.sshKeyPath, 'test private key\n')
+      writeFileSync(context.sshPublicKeyPath, 'test public key\n')
+
+      await withProcessEnv(env as Record<string, string>, async () => {
+        await assert.rejects(startDevcontainer(context, {
+          agentProfile: 'auth',
+          reuseRunning: true,
+          progress: createProgress({ mode: 'none' }),
+          runDevcontainerUp: async () => {
+            upCalls += 1
+            return { code: 0, stdout: '{"containerId":"legacy-running"}\n', stderr: '' }
+          }
+        }), /Agent profile auth is not active in this devcontainer\.\nRun `boxdown start --recreate --agent-profile auth`\./)
+      })
+
+      assert.strictEqual(upCalls, 0)
+    })
+  })
+
+  test('agent profile lifecycle reuses a container with a matching marker', async () => {
+    const workspace = tempDir('agent-profile-matching-reuse-workspace')
+
+    await withFakeDocker([{ workspace, id: 'matching-running', agentProfileMarker: 'full' }], async (logPath, dockerEnv) => {
+      const env = {
+        ...dockerEnv,
+        BOXDOWN_CACHE_HOME: tempDir('agent-profile-matching-reuse-cache'),
+        BOXDOWN_DATA_HOME: tempDir('agent-profile-matching-reuse-data')
+      }
+      const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+
+      mkdirSync(context.sshKeyDir, { recursive: true })
+      writeFileSync(context.sshKeyPath, 'test private key\n')
+      writeFileSync(context.sshPublicKeyPath, 'test public key\n')
+
+      const containerId = await withProcessEnv(env as Record<string, string>, async () => startDevcontainer(context, {
+        agentProfile: 'full',
+        reuseRunning: true,
+        progress: createProgress({ mode: 'none' })
+      }))
+
+      assert.strictEqual(containerId, 'matching-running')
+      assert.strictEqual(readGeneratedAgentProfile(context), 'full')
+      assert.strictEqual(
+        fakeDockerCalls(logPath).filter((call) => call === 'exec matching-running cat /opt/boxdown/state/agent-profile').length,
+        2
+      )
+    })
+  })
+
+  test('recreate seeds a fresh profile marker through devcontainer up without host bootstrap mutation', async () => {
+    const workspace = tempDir('recreate-fresh-profile-workspace')
+
+    await withFakeDocker([{ workspace, id: 'recreated-profile', agentProfileMarker: 'auth' }], async (logPath, dockerEnv) => {
+      const env = {
+        ...dockerEnv,
+        BOXDOWN_CACHE_HOME: tempDir('recreate-fresh-profile-cache'),
+        BOXDOWN_DATA_HOME: tempDir('recreate-fresh-profile-data')
+      }
+      const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+      let capturedArgs: string[] = []
+
+      mkdirSync(context.sshKeyDir, { recursive: true })
+      writeFileSync(context.sshKeyPath, 'test private key\n')
+      writeFileSync(context.sshPublicKeyPath, 'test public key\n')
+      writeGeneratedDevcontainerConfig(context, undefined, 'auth')
+
+      const containerId = await withProcessEnv(env as Record<string, string>, async () => startDevcontainer(context, {
+        agentProfile: 'full',
+        recreate: true,
+        reuseRunning: true,
+        progress: createProgress({ mode: 'none' }),
+        runDevcontainerUp: async (_label, _command, args) => {
+          capturedArgs = args
+          updateFakeDockerContainer(env, 'recreated-profile', {
+            containerState: 'running',
+            agentProfileMarker: 'full'
+          })
+          return { code: 0, stdout: '{"containerId":"recreated-profile"}\n', stderr: '' }
+        }
+      }))
+
+      const calls = fakeDockerCalls(logPath)
+      assert.strictEqual(containerId, 'recreated-profile')
+      assert.ok(capturedArgs.includes('--remove-existing-container'))
+      assert.ok(calls.includes('exec recreated-profile cat /opt/boxdown/state/agent-profile'))
+      assert.strictEqual(calls.some((call) => call.includes('agent-profile-bootstrap')), false)
+      assert.strictEqual(calls.some((call) => call.startsWith('rm ')), false)
+    })
+  })
+
+  test('container lifecycle restarts a stopped matching profile without invoking the bootstrap on the host', async () => {
+    const workspace = tempDir('container-lifecycle-stopped-profile-workspace')
+
+    await withFakeDocker([{
+      workspace,
+      id: 'stopped-profile',
+      containerState: 'exited',
+      agentProfileMarker: 'full'
+    }], async (logPath, dockerEnv) => {
+      const env = {
+        ...dockerEnv,
+        BOXDOWN_CACHE_HOME: tempDir('container-lifecycle-stopped-profile-cache'),
+        BOXDOWN_DATA_HOME: tempDir('container-lifecycle-stopped-profile-data')
+      }
+      const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+
+      mkdirSync(context.sshKeyDir, { recursive: true })
+      writeFileSync(context.sshKeyPath, 'test private key\n')
+      writeFileSync(context.sshPublicKeyPath, 'test public key\n')
+      writeGeneratedDevcontainerConfig(context, undefined, 'full')
+
+      const containerId = await withProcessEnv(env as Record<string, string>, async () => startDevcontainer(context, {
+        agentProfile: 'full',
+        reuseRunning: true,
+        progress: createProgress({ mode: 'none' }),
+        runDevcontainerUp: async () => {
+          updateFakeDockerContainer(env, 'stopped-profile', { containerState: 'running' })
+          return { code: 0, stdout: '{"containerId":"stopped-profile"}\n', stderr: '' }
+        }
+      }))
+
+      const calls = fakeDockerCalls(logPath)
+      assert.strictEqual(containerId, 'stopped-profile')
+      assert.deepStrictEqual(
+        calls.filter((call) => call === 'exec stopped-profile cat /opt/boxdown/state/agent-profile'),
+        ['exec stopped-profile cat /opt/boxdown/state/agent-profile']
+      )
+      assert.strictEqual(calls.some((call) => call.includes('agent-profile-bootstrap')), false)
+    })
+  })
+
+  test('agent profile lifecycle rejects a newly created container without a marker', async () => {
+    const workspace = tempDir('agent-profile-new-missing-marker-workspace')
+
+    await withFakeDocker([], async (_logPath, dockerEnv) => {
+      const env = {
+        ...dockerEnv,
+        BOXDOWN_CACHE_HOME: tempDir('agent-profile-new-missing-marker-cache'),
+        BOXDOWN_DATA_HOME: tempDir('agent-profile-new-missing-marker-data')
+      }
+      const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+
+      mkdirSync(context.sshKeyDir, { recursive: true })
+      writeFileSync(context.sshKeyPath, 'test private key\n')
+      writeFileSync(context.sshPublicKeyPath, 'test public key\n')
+
+      await withProcessEnv(env as Record<string, string>, async () => {
+        await assert.rejects(startDevcontainer(context, {
+          agentProfile: 'none',
+          progress: createProgress({ mode: 'none' }),
+          runDevcontainerUp: async () => ({
+            code: 0,
+            stdout: '{"containerId":"new-without-marker"}\n',
+            stderr: ''
+          })
+        }), /Agent profile none is not active in this devcontainer\.\nRun `boxdown start --recreate --agent-profile none`\./)
+      })
+    })
   })
 })
 

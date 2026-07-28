@@ -1,7 +1,7 @@
 import {
   BOXDOWN_CONTAINER_DEVCONTAINER_DIR
 } from './constants.ts'
-import { buildGeneratedDevcontainerConfig, publishContainerPortFromConfig, writeGeneratedDevcontainerConfig } from './config.ts'
+import { buildGeneratedDevcontainerConfig, publishContainerPortFromConfig, readGeneratedAgentProfile, writeGeneratedDevcontainerConfig } from './config.ts'
 import { codingAgentBinary, type CodingAgentCli } from './coding-agents.ts'
 import { resolveDevcontainerCli } from './devcontainer-cli.ts'
 import { configureWorkspaceGithubGitAuth } from './github-git-auth.ts'
@@ -14,7 +14,7 @@ import { assertProgressCommandSucceeded, type ProgressReporter, runProgressComma
 import { interactiveCommandScript, interactiveShellEnvArgs, interactiveShellScript } from './shell.ts'
 import { ensureHostSshKey } from './ssh-key.ts'
 import { type ContainerSummary, parseDockerPsJsonLines } from './status.ts'
-import type { AgentProfile } from './agent-profile.ts'
+import { DEFAULT_AGENT_PROFILE, isAgentProfile, type AgentProfile } from './agent-profile.ts'
 
 export interface StartOptions {
   agentProfile?: AgentProfile
@@ -143,6 +143,27 @@ export async function findRunningContainerId (context: WorkspaceContext, options
   }
 
   return result.stdout.split(/\r?\n/).find((line) => line.length > 0)
+}
+
+export async function inspectContainerAgentProfile (
+  containerId: string,
+  options: { logger?: WorkspaceCommandLogger } = {}
+): Promise<AgentProfile | undefined> {
+  const result = await runBuffered('docker', [
+    'exec',
+    containerId,
+    'cat',
+    '/opt/boxdown/state/agent-profile'
+  ], {
+    logger: options.logger,
+    mirrorStdout: false,
+    mirrorStderr: false
+  })
+
+  if (result.code !== 0) return undefined
+
+  const agentProfile = result.stdout.trim()
+  return isAgentProfile(agentProfile) ? agentProfile : undefined
 }
 
 export function parseDockerInspectImage (output: string, containerId: string): DockerImageInfo | undefined {
@@ -285,7 +306,22 @@ export async function removeDockerImage (imageId: string, options: { logger?: Wo
   return true
 }
 
+function agentProfileMismatchMessage (agentProfile: AgentProfile): string {
+  return `Agent profile ${agentProfile} is not active in this devcontainer.\nRun \`boxdown start --recreate --agent-profile ${agentProfile}\`.`
+}
+
+async function assertContainerAgentProfile (
+  containerId: string,
+  agentProfile: AgentProfile,
+  logger?: WorkspaceCommandLogger
+): Promise<void> {
+  if (await inspectContainerAgentProfile(containerId, { logger }) !== agentProfile) {
+    throw new Error(agentProfileMismatchMessage(agentProfile))
+  }
+}
+
 export async function startDevcontainer (context: WorkspaceContext, options: StartOptions = {}): Promise<string> {
+  const agentProfile = options.agentProfile ?? DEFAULT_AGENT_PROFILE
   const progress = options.progress
   const proxyMode = options.proxyMode ?? false
   const hasSshIdentityStep = progress?.hasStep('ssh-identity') === true
@@ -313,6 +349,21 @@ export async function startDevcontainer (context: WorkspaceContext, options: Sta
     throw error
   }
 
+  const existingContainer = options.recreate === true
+    ? undefined
+    : await findWorkspaceContainer(context, { logger: options.logger })
+  const priorGeneratedAgentProfile = readGeneratedAgentProfile(context)
+  if (existingContainer !== undefined) {
+    const runningAgentProfile = existingContainer.state?.toLowerCase() === 'running'
+      ? await inspectContainerAgentProfile(existingContainer.id, { logger: options.logger })
+      : undefined
+    const activeAgentProfile = runningAgentProfile ?? priorGeneratedAgentProfile
+
+    if (activeAgentProfile !== agentProfile) {
+      throw new Error(agentProfileMismatchMessage(agentProfile))
+    }
+  }
+
   if (hasConfigStep) {
     progress?.startStep('devcontainer-config')
   } else if (progress !== undefined) {
@@ -332,7 +383,7 @@ export async function startDevcontainer (context: WorkspaceContext, options: Sta
             }
           })
     })
-    writeGeneratedDevcontainerConfig(context, signingPlan, options.agentProfile)
+    writeGeneratedDevcontainerConfig(context, signingPlan, agentProfile)
     if (hasConfigStep) {
       progress?.completeStep('devcontainer-config')
     }
@@ -356,6 +407,7 @@ export async function startDevcontainer (context: WorkspaceContext, options: Sta
         progress.item('Using running devcontainer')
         progress.detail(runningContainerId)
       }
+      await assertContainerAgentProfile(runningContainerId, agentProfile, options.logger)
       await recordContainerImageIfPresent(context, runningContainerId, options.logger)
       return runningContainerId
     }
@@ -417,6 +469,7 @@ export async function startDevcontainer (context: WorkspaceContext, options: Sta
     throw new Error(`Could not resolve devcontainer ID for ${context.workspaceFolder}`)
   }
 
+  await assertContainerAgentProfile(containerId, agentProfile, options.logger)
   await recordContainerImageIfPresent(context, containerId, options.logger)
   return containerId
 }
@@ -688,6 +741,7 @@ async function hostGhTokenOrEmpty (): Promise<string> {
 }
 
 export async function refreshContainerGhAuth (context: WorkspaceContext, options: ContainerCommandOptions = {}): Promise<void> {
+  const agentProfile = options.agentProfile ?? DEFAULT_AGENT_PROFILE
   const progress = options.progress
   const hasConfigStep = progress?.hasStep('gh-auth-config') === true
   const hasTokenStep = progress?.hasStep('gh-token-read') === true
@@ -715,7 +769,7 @@ export async function refreshContainerGhAuth (context: WorkspaceContext, options
             }
           })
     })
-    writeGeneratedDevcontainerConfig(context, signingPlan, options.agentProfile)
+    writeGeneratedDevcontainerConfig(context, signingPlan, agentProfile)
     if (hasConfigStep) {
       progress?.completeStep('gh-auth-config')
     }

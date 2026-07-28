@@ -70,6 +70,7 @@ export interface RunCliOptions {
   openShell?: typeof openShell
   ensureContainerCodingAgentCli?: typeof ensureContainerCodingAgentCli
   openCodingAgentCli?: typeof openCodingAgentCli
+  refreshContainerGhAuth?: typeof refreshContainerGhAuth
 }
 
 export const USAGE = `Usage:
@@ -1035,7 +1036,7 @@ export async function setupWorkspace (
   options: SetupWorkspaceOptions = {}
 ): Promise<void> {
   await (options.start ?? startDevcontainer)(context, {
-    ...(options.agentProfile === undefined ? {} : { agentProfile: options.agentProfile }),
+    agentProfile: options.agentProfile ?? DEFAULT_AGENT_PROFILE,
     recreate: options.recreate,
     ...(options.logger === undefined ? {} : { logger: options.logger }),
     ...(options.progress === undefined ? {} : { progress: options.progress })
@@ -1466,6 +1467,7 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
     }
 
     if (parsed.command === 'ssh-proxy') {
+      const start = options.startDevcontainer ?? startDevcontainer
       return runLoggedLifecycle(context, 'ssh-proxy', argv, async (logger) => {
         const progress = createCliProgress(parsed, 'stderr', { env: options.env })
         const containerId = await withProgressSection(progress, 'Boxdown SSH proxy', [
@@ -1482,7 +1484,7 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
             progress.failStep('ssh-alias')
             throw error
           }
-          const startedContainerId = await startDevcontainer(context, {
+          const startedContainerId = await start(context, {
             agentProfile: agentProfile.value,
             recreate: parsed.recreate,
             proxyMode: true,
@@ -1500,6 +1502,7 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
     }
 
     if (parsed.command === 'tunnel') {
+      const start = options.startDevcontainer ?? startDevcontainer
       const resolvedTunnelPorts = await resolveTunnelPorts(parsed, context, options)
 
       if (resolvedTunnelPorts.cancelled) {
@@ -1528,7 +1531,7 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
             progress.failStep('ssh-alias')
             throw error
           }
-          await startDevcontainer(context, {
+          await start(context, {
             agentProfile: agentProfile.value,
             recreate: parsed.recreate,
             progress,
@@ -1550,6 +1553,7 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
     }
 
     if (parsed.command === 'refresh-gh-token-running') {
+      const refreshGhAuth = options.refreshContainerGhAuth ?? refreshContainerGhAuth
       return runLoggedLifecycle(context, 'refresh-gh-token-running', argv, async (logger) => {
         const containerId = await (options.findRunningContainerId ?? findRunningContainerId)(context, { logger })
         if (containerId === undefined) {
@@ -1562,7 +1566,7 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
           progress.setSteps(ghAuthProgressSteps(false))
           progress.startStep('devcontainer-running')
           progress.completeStep('devcontainer-running')
-          await refreshContainerGhAuth(context, { agentProfile: agentProfile.value, progress, logger })
+          await refreshGhAuth(context, { agentProfile: agentProfile.value, progress, logger })
           showDetailedCommandLogPath(progress, context)
         })
         return 0
@@ -1570,6 +1574,8 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
     }
 
     if (parsed.command === 'refresh-gh-token') {
+      const start = options.startDevcontainer ?? startDevcontainer
+      const refreshGhAuth = options.refreshContainerGhAuth ?? refreshContainerGhAuth
       return runLoggedLifecycle(context, 'refresh-gh-token', argv, async (logger) => {
         const progress = createCliProgress(parsed, 'stdout', { env: options.env })
         await withProgressSection(progress, 'Boxdown GitHub auth refresh', [
@@ -1577,8 +1583,8 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
         ], async () => {
           progress.setSteps(ghAuthProgressSteps(true))
           await (options.prepareContainerLifecycle ?? prepareContainerLifecycle)(context, alias, progress, options, logger, agentProfile.value)
-          await startDevcontainer(context, { agentProfile: agentProfile.value, progress, logger })
-          await refreshContainerGhAuth(context, { agentProfile: agentProfile.value, progress, logger })
+          await start(context, { agentProfile: agentProfile.value, progress, logger })
+          await refreshGhAuth(context, { agentProfile: agentProfile.value, progress, logger })
           showDetailedCommandLogPath(progress, context)
         })
         return 0
