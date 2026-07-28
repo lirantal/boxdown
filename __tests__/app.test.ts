@@ -11,7 +11,7 @@ import { describe, test } from 'node:test'
 
 import { claudeSshConfigEntryForWorkspace, defaultClaudeSshConfigsPath, installClaudeSshConfigHost, mergeClaudeSshConfigHost, parseClaudeSshConfigs, removeClaudeSshConfigHost, uninstallClaudeSshConfigHost } from '../src/claude-app-config.ts'
 import { canonicalCodexRemotePathForWorkspace, codexDiscoveredRemoteHostId, codexProjectEntryForWorkspace, defaultCodexAppConfigPath, defaultCodexGlobalStatePath, installCodexAppConfigProject, installCodexGlobalStateProject, legacyCodexRemotePathForWorkspace, mergeCodexAppProject, normalizeCodexGlobalStateProject, parseCodexAppConfig, removeCodexAppProject, removeCodexGlobalStateProject, uninstallCodexAppConfigProject, uninstallCodexGlobalStateProject } from '../src/codex-app-config.ts'
-import { codingAgentBinary, codingAgentFromCommand } from '../src/coding-agents.ts'
+import { codingAgentBinary, codingAgentFromCommand, type CodingAgentCli } from '../src/coding-agents.ts'
 import { color, formatPromptEnd, formatPromptTitle, promptRail, selectedMark } from '../src/cli-style.ts'
 import { buildGeneratedDevcontainerConfig, publishContainerPortFromConfig } from '../src/config.ts'
 import { BOXDOWN_CONTAINER_AGENTS_DIR, BOXDOWN_CONTAINER_CLAUDE_CONFIG_PATH, BOXDOWN_CONTAINER_CLAUDE_CREDENTIALS_PATH, BOXDOWN_CONTAINER_CLAUDE_DIR, BOXDOWN_CONTAINER_CODEX_AUTH_PATH, BOXDOWN_CONTAINER_CODEX_CONFIG_PATH, BOXDOWN_CONTAINER_CODEX_DIR, BOXDOWN_CONTAINER_GITCONFIG_PATH, BOXDOWN_CONTAINER_HOST_GITCONFIG_DIR, BOXDOWN_CONTAINER_SECRET_ENV_BOOTSTRAP, BOXDOWN_CONTAINER_SECRET_ENV_DIR, DEVCONTAINER_CLI_VERSION } from '../src/constants.ts'
@@ -1369,6 +1369,63 @@ describe('CLI execution', () => {
       assert.strictEqual(existsSync(workspaceMetadataPath(context)), false, entry.name)
       assert.strictEqual(existsSync(context.generatedConfigPath), false, entry.name)
       assert.strictEqual(existsSync(context.sshKeyPath), false, entry.name)
+    }
+  })
+
+  test('reuses a running devcontainer for direct interactive commands', async () => {
+    const cases: Array<{ argv: string[], agent?: CodingAgentCli }> = [
+      { argv: ['start'] },
+      { argv: ['shell'] },
+      { argv: ['codex'], agent: 'codex' },
+      { argv: ['claude'], agent: 'claude' },
+      { argv: ['cc'], agent: 'claude' },
+      { argv: ['opencode'], agent: 'opencode' },
+      { argv: ['antigravity'], agent: 'antigravity' }
+    ]
+
+    for (const entry of cases) {
+      const workspace = tempDir('direct-reuse-' + entry.argv[0] + '-workspace')
+      const env = {
+        CI: '1',
+        BOXDOWN_CACHE_HOME: tempDir('direct-reuse-' + entry.argv[0] + '-cache'),
+        BOXDOWN_DATA_HOME: tempDir('direct-reuse-' + entry.argv[0] + '-data')
+      }
+      const calls: string[] = []
+
+      const code = await runCli([...entry.argv, '--workspace', workspace], {
+        env,
+        prepareContainerLifecycle: async () => { calls.push('lifecycle') },
+        startDevcontainer: async (_context, startOptions) => {
+          assert.strictEqual(startOptions.recreate, false)
+          assert.strictEqual(startOptions.reuseRunning, true)
+          calls.push('start')
+          return 'running-container'
+        },
+        ...(entry.agent === undefined
+          ? {
+              printPortHint: async () => { calls.push('port') },
+              openShell: async () => { calls.push('shell'); return 0 }
+            }
+          : {
+              ensureContainerCodingAgentCli: async (_context, agent) => {
+                assert.strictEqual(agent, entry.agent)
+                calls.push('ensure:' + agent)
+              },
+              openCodingAgentCli: async (_context, agent) => {
+                assert.strictEqual(agent, entry.agent)
+                calls.push('open:' + agent)
+                return 0
+              }
+            })
+      })
+
+      assert.strictEqual(code, 0)
+      assert.deepStrictEqual(
+        calls,
+        entry.agent === undefined
+          ? ['lifecycle', 'start', 'port', 'shell']
+          : ['lifecycle', 'start', 'ensure:' + entry.agent, 'open:' + entry.agent]
+      )
     }
   })
 
