@@ -42,6 +42,27 @@ export interface MultiSelectPromptOptions<T extends string> {
   env?: NodeJS.ProcessEnv
 }
 
+export interface SelectPromptChoice<T extends string> {
+  value: T
+  label: string
+  description: string
+}
+
+export type SelectPromptResult<T extends string> =
+  | { status: 'selected', value: T }
+  | { status: 'cancelled' }
+  | { status: 'non-interactive' }
+
+export interface SelectPromptOptions<T extends string> {
+  title: string
+  choices: readonly SelectPromptChoice<T>[]
+  defaultValue: T
+  summaryLabel?: string
+  input?: PromptInput
+  output?: PromptOutput
+  env?: NodeJS.ProcessEnv
+}
+
 export type TextPromptResult =
   | { status: 'submitted', value: string }
   | { status: 'cancelled', value?: undefined }
@@ -163,6 +184,18 @@ function formatMultiSelectFinalLine <T extends string> (
   return `${summaryLabel}: ${selectedLabels}`
 }
 
+function formatSelectFinalLine <T extends string> (
+  result: SelectPromptResult<T>,
+  choices: readonly SelectPromptChoice<T>[],
+  summaryLabel: string
+): string {
+  if (result.status === 'cancelled') return `${summaryLabel}: canceled`
+  if (result.status === 'non-interactive') return `${summaryLabel}: skipped`
+
+  const label = choices.find((choice) => choice.value === result.value)?.label
+  return `${summaryLabel}: ${label ?? result.value}`
+}
+
 function formatTextFinalLine (result: TextPromptResult, summaryLabel: string): string {
   if (result.status === 'cancelled') {
     return `${summaryLabel}: canceled`
@@ -222,7 +255,35 @@ function parseLineSelection <T extends string> (
   return { values: [...selected] }
 }
 
+function parseLineSelect <T extends string> (
+  answer: string,
+  choices: readonly SelectPromptChoice<T>[],
+  defaultValue: T
+): { value: T } | { error: string } {
+  const trimmed = answer.trim()
+  if (trimmed === '') return { value: defaultValue }
+
+  const byNumber = /^[0-9]+$/u.test(trimmed) ? Number(trimmed) : undefined
+  const choice = byNumber === undefined
+    ? choices.find((candidate) => candidate.value === trimmed)
+    : choices[byNumber - 1]
+
+  return choice === undefined
+    ? { error: `Unknown selection: ${trimmed}` }
+    : { value: choice.value }
+}
+
+const bufferedLineAnswers = new WeakMap<PromptInput, string[]>()
+
 function askLine (input: PromptInput, output: PromptOutput, question: string): Promise<string | undefined> {
+  const buffered = bufferedLineAnswers.get(input)
+  const answer = buffered?.shift()
+
+  if (answer !== undefined) {
+    output.write(question)
+    return Promise.resolve(answer)
+  }
+
   const rl = createInterface({
     input,
     output,
@@ -246,10 +307,46 @@ function askLine (input: PromptInput, output: PromptOutput, question: string): P
       settle(undefined)
     })
 
-    rl.question(question, (answer) => {
-      settle(answer)
+    output.write(question)
+    rl.on('line', (line) => {
+      if (settled) {
+        const answers = bufferedLineAnswers.get(input) ?? []
+        answers.push(line)
+        bufferedLineAnswers.set(input, answers)
+        return
+      }
+
+      settle(line)
     })
   })
+}
+
+async function promptLineSelect <T extends string> (
+  options: Required<Pick<SelectPromptOptions<T>, 'title' | 'choices' | 'defaultValue' | 'summaryLabel' | 'input' | 'output'>>
+): Promise<SelectPromptResult<T>> {
+  options.output.write(`${formatPromptTitle(options.title)}\n`)
+  options.choices.forEach((choice, index) => {
+    const current = choice.value === options.defaultValue ? ' (current)' : ''
+    options.output.write(
+      `${promptRail()}  ${index + 1}) ${choice.label}${current} - ${choice.description}\n`
+    )
+  })
+
+  while (true) {
+    const answer = await askLine(options.input, options.output, `${promptRail()}  `)
+    if (answer === undefined) return { status: 'cancelled' }
+
+    const parsed = parseLineSelect(answer, options.choices, options.defaultValue)
+    if ('value' in parsed) {
+      const result = { status: 'selected', value: parsed.value } as const
+      options.output.write(
+        `${formatPromptEnd()}\n${formatSelectFinalLine(result, options.choices, options.summaryLabel)}\n`
+      )
+      return result
+    }
+
+    options.output.write(`${promptRail()}  ${parsed.error}\n`)
+  }
 }
 
 async function promptLineMultiSelect <T extends string> (
@@ -280,6 +377,108 @@ async function promptLineMultiSelect <T extends string> (
 
     options.output.write(`${promptRail()}  ${parsed.error}\n`)
   }
+}
+
+function promptRawSelect <T extends string> (
+  options: Required<Pick<SelectPromptOptions<T>, 'title' | 'choices' | 'defaultValue' | 'summaryLabel' | 'input' | 'output'>>
+): Promise<SelectPromptResult<T>> {
+  return new Promise((resolve) => {
+    let focusedIndex = options.choices.findIndex(
+      (choice) => choice.value === options.defaultValue
+    )
+    let settled = false
+    let renderedRows = 0
+
+    function lines (): string[] {
+      return [
+        formatPromptTitle(options.title),
+        promptRail(),
+        ...options.choices.map((choice, index) => formatChoiceLine(
+          choice,
+          focusedIndex === index,
+          focusedIndex === index
+        )),
+        formatPromptEnd()
+      ]
+    }
+
+    function render (): void {
+      renderedRows = renderPromptLines(options.output, lines(), renderedRows)
+    }
+
+    function cleanup (): void {
+      options.input.removeListener('data', onData)
+      try {
+        options.input.setRawMode?.(false)
+      } catch {
+        // Continue restoring the remaining terminal state.
+      }
+      options.input.pause()
+      options.output.write('\u001B[?25h')
+    }
+
+    function finish (result: SelectPromptResult<T>): void {
+      if (settled) return
+      settled = true
+      cleanup()
+      options.output.write(
+        `${formatSelectFinalLine(result, options.choices, options.summaryLabel)}\n`
+      )
+      resolve(result)
+    }
+
+    function moveFocus (direction: 1 | -1): void {
+      focusedIndex = (
+        focusedIndex + direction + options.choices.length
+      ) % options.choices.length
+      render()
+    }
+
+    function handleKey (key: string): void {
+      if (key === '\u0003' || key === '\u0004' || key === '\u001B') {
+        finish({ status: 'cancelled' })
+      } else if (key === '\r' || key === '\n') {
+        const choice = options.choices[focusedIndex]
+        if (choice !== undefined) {
+          finish({ status: 'selected', value: choice.value })
+        }
+      } else if (key === 'k') {
+        moveFocus(-1)
+      } else if (key === 'j') {
+        moveFocus(1)
+      }
+    }
+
+    function handleText (text: string): void {
+      for (let index = 0; index < text.length;) {
+        if (text.startsWith('\u001B[A', index)) {
+          moveFocus(-1)
+          index += 3
+        } else if (text.startsWith('\u001B[B', index)) {
+          moveFocus(1)
+          index += 3
+        } else {
+          handleKey(text[index] ?? '')
+          index += 1
+        }
+      }
+    }
+
+    function onData (chunk: string | Buffer): void {
+      handleText(Buffer.isBuffer(chunk) ? chunk.toString('utf8') : chunk)
+    }
+
+    try {
+      options.output.write('\u001B[?25l')
+      options.input.setRawMode?.(true)
+      options.input.resume()
+      options.input.on('data', onData)
+      render()
+    } catch (error) {
+      cleanup()
+      throw error
+    }
+  })
 }
 
 function promptRawMultiSelect <T extends string> (
@@ -416,6 +615,44 @@ function promptRawMultiSelect <T extends string> (
     options.input.on('data', onData)
     render()
   })
+}
+
+export async function promptSelect <T extends string> (
+  options: SelectPromptOptions<T>
+): Promise<SelectPromptResult<T>> {
+  const input = options.input ?? process.stdin
+  const output = options.output ?? process.stdout
+  const env = options.env ?? process.env
+  const summaryLabel = options.summaryLabel ?? 'Selection'
+
+  if (!options.choices.some((choice) => choice.value === options.defaultValue)) {
+    throw new Error(
+      `Select prompt default is not one of its choices: ${options.defaultValue}`
+    )
+  }
+
+  if (!canPromptInteractively(input, output, env)) {
+    return { status: 'non-interactive' }
+  }
+
+  const resolved = {
+    title: options.title,
+    choices: options.choices,
+    defaultValue: options.defaultValue,
+    summaryLabel,
+    input,
+    output
+  }
+
+  if (typeof input.setRawMode !== 'function') {
+    return promptLineSelect(resolved)
+  }
+
+  try {
+    return await promptRawSelect(resolved)
+  } catch {
+    return promptLineSelect(resolved)
+  }
 }
 
 export async function promptMultiSelect <T extends string> (

@@ -29,7 +29,7 @@ import { listWorkspaceMetadata, readWorkspaceMetadata, recordLegacyImageMigratio
 import { readPackageVersion } from '../src/package-info.ts'
 import { createWorkspaceContext, defaultHostClaudeCredentialsPath, defaultHostClaudeDir, defaultHostCodexDir } from '../src/paths.ts'
 import { createPurgePlan, formatPurgePlanText } from '../src/purge.ts'
-import { promptConfirm, promptMultiSelect, promptText, type PromptInput, type PromptOutput } from '../src/interactive-prompts.ts'
+import { promptConfirm, promptMultiSelect, promptSelect, promptText, type PromptInput, type PromptOutput } from '../src/interactive-prompts.ts'
 import { buildHostToolPath, runBuffered, runInteractive } from '../src/process.ts'
 import { createProgress, formatCommandFailure, resolveProgressMode, runProgressCommand } from '../src/progress.ts'
 import { DEFAULT_TTY_MAX_COLUMNS, interactiveCommandScript, interactiveShellEnvArgs, interactiveShellScript } from '../src/shell.ts'
@@ -1032,6 +1032,183 @@ test('documents interactive container reuse lifecycle', () => {
 })
 
 describe('interactive install target prompt', () => {
+  describe('single-choice prompt', () => {
+    const profilePromptChoices = [
+      { value: 'none', label: 'No agent profile', description: 'Copy no host user-scoped agent data.' },
+      { value: 'auth', label: 'Authentication and ~/.agents', description: 'Copy agent authentication and ~/.agents; Boxdown default.' },
+      { value: 'full', label: 'Full agent profiles', description: 'Copy complete Codex, Claude, and ~/.agents profiles; may include sensitive data.' }
+    ] as const
+
+    test('selects the current single-choice default with Enter', async () => {
+      const { input, output, outputText } = fakePromptStreams()
+      const resultPromise = promptSelect({
+        title: 'How much host agent data should Boxdown copy into the container?',
+        choices: profilePromptChoices,
+        defaultValue: 'auth',
+        summaryLabel: 'Agent profile',
+        input,
+        output,
+        env: { CI: 'false' }
+      })
+
+      input.write('\r')
+
+      assert.deepStrictEqual(await resultPromise, { status: 'selected', value: 'auth' })
+      assert.match(outputText(), /Agent profile: Authentication and ~\/\.agents/)
+    })
+
+    test('moves and wraps a raw single-choice prompt', async () => {
+      for (const entry of [
+        { keys: '\u001B[B\r', expected: 'full' },
+        { keys: 'j\r', expected: 'full' },
+        { keys: '\u001B[A\r', expected: 'none' },
+        { keys: 'k\r', expected: 'none' },
+        { keys: '\u001B[B\u001B[B\r', expected: 'none' }
+      ] as const) {
+        const { input, output } = fakePromptStreams()
+        const resultPromise = promptSelect({
+          title: 'Agent profile?',
+          choices: profilePromptChoices,
+          defaultValue: 'auth',
+          input,
+          output,
+          env: { CI: 'false' }
+        })
+
+        input.write(entry.keys)
+        assert.deepStrictEqual(await resultPromise, {
+          status: 'selected',
+          value: entry.expected
+        })
+      }
+    })
+
+    test('cancels a raw single-choice prompt and restores terminal state', async () => {
+      for (const key of ['\u001B', '\u0003', '\u0004']) {
+        const rawModes: boolean[] = []
+        const { input, output, outputText } = fakePromptStreams()
+        input.setRawMode = (mode) => {
+          rawModes.push(mode)
+        }
+        const resultPromise = promptSelect({
+          title: 'Agent profile?',
+          choices: profilePromptChoices,
+          defaultValue: 'auth',
+          input,
+          output,
+          env: { CI: 'false' }
+        })
+
+        input.write(key)
+        assert.deepStrictEqual(await resultPromise, { status: 'cancelled' })
+        assert.deepStrictEqual(rawModes, [true, false])
+        assert.match(outputText(), /\u001B\[\?25l/)
+        assert.match(outputText(), /\u001B\[\?25h/)
+      }
+    })
+
+    test('restores terminal state before raw-mode failure falls back to line mode', async () => {
+      const { input, output, outputText } = fakePromptStreams()
+      input.setRawMode = (mode) => {
+        if (mode) throw new Error('raw mode unavailable')
+      }
+      const resultPromise = promptSelect({
+        title: 'Agent profile?',
+        choices: profilePromptChoices,
+        defaultValue: 'auth',
+        input,
+        output,
+        env: { CI: 'false' }
+      })
+
+      await waitForPromptOutput(outputText, /1\) No agent profile/)
+      input.write('\n')
+
+      assert.deepStrictEqual(await resultPromise, { status: 'selected', value: 'auth' })
+      assert.match(outputText(), /\u001B\[\?25l/)
+      assert.match(outputText(), /\u001B\[\?25h/)
+    })
+
+    test('selects by number, value, and blank default in line mode', async () => {
+      for (const entry of [
+        { answer: '3\n', expected: 'full' },
+        { answer: 'none\n', expected: 'none' },
+        { answer: '\n', expected: 'auth' }
+      ] as const) {
+        const { input, output } = fakePromptStreams({ rawMode: false })
+        const resultPromise = promptSelect({
+          title: 'Agent profile?',
+          choices: profilePromptChoices,
+          defaultValue: 'auth',
+          input,
+          output,
+          env: { CI: 'false' }
+        })
+
+        input.write(entry.answer)
+        assert.deepStrictEqual(await resultPromise, {
+          status: 'selected',
+          value: entry.expected
+        })
+      }
+    })
+
+    test('retries invalid line input and cancels on EOF', async () => {
+      const retry = fakePromptStreams({ rawMode: false })
+      const retryPromise = promptSelect({
+        title: 'Agent profile?',
+        choices: profilePromptChoices,
+        defaultValue: 'auth',
+        input: retry.input,
+        output: retry.output,
+        env: { CI: 'false' }
+      })
+      retry.input.write('other\nfull\n')
+      assert.deepStrictEqual(await retryPromise, { status: 'selected', value: 'full' })
+      assert.match(retry.outputText(), /Unknown selection: other/)
+
+      const eof = fakePromptStreams({ rawMode: false })
+      const eofPromise = promptSelect({
+        title: 'Agent profile?',
+        choices: profilePromptChoices,
+        defaultValue: 'auth',
+        input: eof.input,
+        output: eof.output,
+        env: { CI: 'false' }
+      })
+      eof.input.end()
+      assert.deepStrictEqual(await eofPromise, { status: 'cancelled' })
+    })
+
+    test('is silent when single-choice prompting is unavailable', async () => {
+      const input = new PassThrough() as PassThrough & PromptInput
+      const output = new PassThrough() as PassThrough & PromptOutput
+      const outputChunks: Buffer[] = []
+      input.isTTY = false
+      output.isTTY = false
+      output.on('data', (chunk: Buffer) => outputChunks.push(chunk))
+
+      assert.deepStrictEqual(await promptSelect({
+        title: 'Agent profile?',
+        choices: profilePromptChoices,
+        defaultValue: 'auth',
+        input,
+        output,
+        env: { CI: 'false' }
+      }), { status: 'non-interactive' })
+      assert.strictEqual(Buffer.concat(outputChunks).toString('utf8'), '')
+    })
+
+    test('rejects a default that is not a choice', async () => {
+      await assert.rejects(promptSelect({
+        title: 'Agent profile?',
+        choices: profilePromptChoices,
+        defaultValue: 'other',
+        env: { CI: '1' }
+      }), /Select prompt default is not one of its choices: other/)
+    })
+  })
+
   test('uses the shared prompt style primitives', () => {
     assert.strictEqual(formatPromptTitle('Install optional SSH targets?'), '\u001B[36m◆\u001B[0m  \u001B[1mInstall optional SSH targets?\u001B[0m')
     assert.strictEqual(promptRail(), '\u001B[36m│\u001B[0m')
