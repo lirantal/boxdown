@@ -1,5 +1,18 @@
 # boxdown
 
+## 3.0.0
+
+### Major Changes
+
+- [`b8e73cf`](https://github.com/lirantal/boxdown/commit/b8e73cfd62650a8692d7edb111bfca3d585d0927) Thanks [@lirantal](https://github.com/lirantal)! - Add isolated `none`, `auth`, and `full` agent profiles. The new `auth`
+  default copies file-backed authentication and `~/.agents` into each
+  container; user-scoped Codex config and Claude MCP projection now require
+  `full` or repository-scoped configuration.
+
+### Minor Changes
+
+- [`e9fc446`](https://github.com/lirantal/boxdown/commit/e9fc446b5cae758ef6e3830b293ca198907148a4) Thanks [@lirantal](https://github.com/lirantal)! - feat: add agent capability setup to include 3 tiers of mounted agents directories
+
 ## 2.1.2
 
 ### Patch Changes
