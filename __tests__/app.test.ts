@@ -8073,7 +8073,7 @@ describe('git signing selection', () => {
     assert.match(readFileSync(context.workspaceLogPath, 'utf8'), /reason=agent-unavailable/)
   })
 
-  test('preserves the default GPG signing preference without probing the SSH agent', async () => {
+  test('classifies the default GPG signing preference without probing the SSH agent', async () => {
     const context = createWorkspaceContext({
       workspace: tempDir('git-signing-gpg-preference-workspace'),
       env: {
@@ -8090,6 +8090,7 @@ describe('git signing selection', () => {
         if (command === 'git' && args.includes('gpg.format')) return { code: 1, stdout: '', stderr: '' }
         if (command === 'git' && args.includes('gpg.program')) return { code: 1, stdout: '', stderr: '' }
         if (command === 'git' && args.includes('user.signingkey')) return { code: 0, stdout: '0123456789ABCDEF\n', stderr: '' }
+        if (command === 'git' && args.includes('commit.gpgsign')) return { code: 0, stdout: 'true\n', stderr: '' }
         if (command === 'ssh-add') return { code: 1, stdout: '', stderr: 'agent unavailable\n' }
         throw new Error(`unexpected command: ${command} ${args.join(' ')}`)
       }
@@ -8097,12 +8098,12 @@ describe('git signing selection', () => {
 
     assert.deepStrictEqual(plan, {
       enabled: false,
-      reason: 'user-signing-preference'
+      reason: 'gpg-signing-unavailable'
     })
     assert.ok(!calls.some((call) => call.startsWith('ssh-add ')))
   })
 
-  test('preserves a repository-local GPG signing preference without probing the SSH agent', async () => {
+  test('classifies a repository-local GPG signing preference without probing the SSH agent', async () => {
     const workspace = tempDir('git-signing-local-gpg-preference-workspace')
     const context = createWorkspaceContext({
       workspace,
@@ -8125,12 +8126,12 @@ describe('git signing selection', () => {
 
     assert.deepStrictEqual(plan, {
       enabled: false,
-      reason: 'user-signing-preference'
+      reason: 'gpg-signing-unavailable'
     })
     assert.ok(!calls.some((call) => call.startsWith('ssh-add ')))
   })
 
-  test('preserves a Git boolean alias that enables default GPG signing without probing the SSH agent', async () => {
+  test('classifies a GPG signing preference enabled by a Git boolean alias without probing the SSH agent', async () => {
     const workspace = tempDir('git-signing-gpg-boolean-workspace')
     const context = createWorkspaceContext({
       workspace,
@@ -8153,9 +8154,54 @@ describe('git signing selection', () => {
 
     assert.deepStrictEqual(plan, {
       enabled: false,
-      reason: 'user-signing-preference'
+      reason: 'gpg-signing-unavailable'
     })
     assert.ok(!calls.some((call) => call.startsWith('ssh-add ')))
+  })
+
+  test('classifies an explicit GPG program without probing the SSH agent', async () => {
+    const context = createWorkspaceContext({
+      workspace: tempDir('git-signing-gpg-program-workspace'),
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('git-signing-gpg-program-cache'),
+        BOXDOWN_DATA_HOME: tempDir('git-signing-gpg-program-data')
+      },
+      assetsDevcontainerDir
+    })
+    const calls: string[] = []
+    const plan = await resolveGitSigningPlan(context, {
+      runCommand: async (command, args) => {
+        calls.push(`${command} ${args.join(' ')}`)
+        if (command === 'git' && args.includes('gpg.program')) {
+          return { code: 0, stdout: 'gpg2\n', stderr: '' }
+        }
+        if (command === 'ssh-add') throw new Error('SSH agent must not be queried')
+        return { code: 1, stdout: '', stderr: '' }
+      }
+    })
+    assert.deepStrictEqual(plan, { enabled: false, reason: 'gpg-signing-unavailable' })
+    assert.ok(!calls.some((call) => call.startsWith('ssh-add ')))
+  })
+
+  test('keeps a non-GPG X.509 preference generic', async () => {
+    const context = createWorkspaceContext({
+      workspace: tempDir('git-signing-x509-preference-workspace'),
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('git-signing-x509-preference-cache'),
+        BOXDOWN_DATA_HOME: tempDir('git-signing-x509-preference-data')
+      },
+      assetsDevcontainerDir
+    })
+    const plan = await resolveGitSigningPlan(context, {
+      runCommand: async (command, args) => {
+        if (command === 'git' && args.includes('gpg.format')) {
+          return { code: 0, stdout: 'x509\n', stderr: '' }
+        }
+        if (command === 'ssh-add') throw new Error('SSH agent must not be queried')
+        return { code: 1, stdout: '', stderr: '' }
+      }
+    })
+    assert.deepStrictEqual(plan, { enabled: false, reason: 'user-signing-preference' })
   })
 
   test('reports an explicit signing preference without claiming commits are unsigned', () => {
@@ -8179,6 +8225,28 @@ describe('git signing selection', () => {
       'boxdown: preserving your existing Git signing configuration; Boxdown SSH signing is skipped.\n'
     ])
     assert.match(readFileSync(context.workspaceLogPath, 'utf8'), /reason=user-signing-preference/)
+  })
+
+  test('reports unavailable GPG signing without changing the preference', () => {
+    const workspace = tempDir('git-signing-gpg-report-workspace')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('git-signing-gpg-report-cache'),
+        BOXDOWN_DATA_HOME: tempDir('git-signing-gpg-report-data')
+      },
+      assetsDevcontainerDir
+    })
+    const messages: string[] = []
+    const logger = createWorkspaceCommandLogger(context)
+    reportGitSigningPlan({ enabled: false, reason: 'gpg-signing-unavailable' }, {
+      logger,
+      writeWarning: (message) => messages.push(message)
+    })
+    assert.deepStrictEqual(messages, [
+      'boxdown: GPG commit signing is configured, but the default Boxdown image does not provide GnuPG or GPG-agent forwarding; commits in this container may fail to sign.\n'
+    ])
+    assert.match(readFileSync(context.workspaceLogPath, 'utf8'), /reason=gpg-signing-unavailable/)
   })
 
   test('full preflight resolves an explicit public-key path without GitHub fallback', async () => {

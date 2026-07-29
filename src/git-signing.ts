@@ -5,7 +5,7 @@ import type { WorkspaceCommandLogger } from './logging.ts'
 import type { WorkspaceContext } from './paths.ts'
 import { runBuffered, type CommandResult } from './process.ts'
 
-export type GitSigningReason = 'user-signing-preference' | 'agent-unavailable' | 'no-identities' | 'ambiguous-identities' | 'configured-key-unreadable' | 'configured-key-invalid' | 'configured-key-not-loaded' | 'agent-socket-unavailable' | 'docker-probe-image-unavailable' | 'agent-mount-unavailable'
+export type GitSigningReason = 'gpg-signing-unavailable' | 'user-signing-preference' | 'agent-unavailable' | 'no-identities' | 'ambiguous-identities' | 'configured-key-unreadable' | 'configured-key-invalid' | 'configured-key-not-loaded' | 'agent-socket-unavailable' | 'docker-probe-image-unavailable' | 'agent-mount-unavailable'
 
 export interface GitSigningPlan {
   enabled: boolean
@@ -16,6 +16,7 @@ export interface GitSigningPlan {
 }
 
 const GIT_SIGNING_REASON_MESSAGES: Record<GitSigningReason, string> = {
+  'gpg-signing-unavailable': 'GPG commit signing is configured, but the default Boxdown image does not provide GnuPG or GPG-agent forwarding; commits in this container may fail to sign',
   'user-signing-preference': 'your existing Git signing configuration is being preserved',
   'agent-unavailable': 'the host SSH agent is unavailable',
   'no-identities': 'the host SSH agent has no loaded identities',
@@ -28,25 +29,35 @@ const GIT_SIGNING_REASON_MESSAGES: Record<GitSigningReason, string> = {
   'agent-mount-unavailable': 'Docker could not mount the host SSH-agent socket'
 }
 
+export function classifyGitSigningPreference (
+  format: Pick<CommandResult, 'code' | 'stdout'>,
+  program?: Pick<CommandResult, 'code' | 'stdout'>,
+  signingKey?: Pick<CommandResult, 'code' | 'stdout'>,
+  commitSign?: Pick<CommandResult, 'code' | 'stdout'>
+): Extract<GitSigningReason, 'gpg-signing-unavailable' | 'user-signing-preference'> | undefined {
+  const formatValue = format.code === 0 ? format.stdout.trim() : ''
+  const programIsConfigured = program?.code === 0 && program.stdout.trim().length > 0
+
+  if (formatValue.length > 0 && formatValue !== 'ssh') {
+    return formatValue === 'openpgp' ? 'gpg-signing-unavailable' : 'user-signing-preference'
+  }
+  if (programIsConfigured) return 'gpg-signing-unavailable'
+  if (formatValue === 'ssh') return undefined
+  const signingKeyIsConfigured = signingKey?.code === 0 && signingKey.stdout.trim().length > 0
+  const commitSigningIsEnabled = commitSign?.code === 0 && isGitBooleanTrue(commitSign.stdout)
+  if (signingKeyIsConfigured && commitSigningIsEnabled) return 'gpg-signing-unavailable'
+  if (signingKeyIsConfigured) return 'user-signing-preference'
+  if (commitSigningIsEnabled) return 'gpg-signing-unavailable'
+  return undefined
+}
+
 export function hasExplicitNonSshSigningPreference (
   format: Pick<CommandResult, 'code' | 'stdout'>,
   program?: Pick<CommandResult, 'code' | 'stdout'>,
   signingKey?: Pick<CommandResult, 'code' | 'stdout'>,
   commitSign?: Pick<CommandResult, 'code' | 'stdout'>
 ): boolean {
-  if (format.code === 0 && format.stdout.trim().length > 0 && format.stdout.trim() !== 'ssh') {
-    return true
-  }
-
-  if (program?.code === 0 && program.stdout.trim().length > 0) {
-    return true
-  }
-
-  const formatIsSsh = format.code === 0 && format.stdout.trim() === 'ssh'
-  return !formatIsSsh && (
-    (signingKey?.code === 0 && signingKey.stdout.trim().length > 0) ||
-    (commitSign?.code === 0 && isGitBooleanTrue(commitSign.stdout))
-  )
+  return classifyGitSigningPreference(format, program, signingKey, commitSign) !== undefined
 }
 
 function isGitBooleanTrue (value: string): boolean {
@@ -81,7 +92,9 @@ export function reportGitSigningPlan (
 
   if (options.quiet !== true) {
     const writeWarning = options.writeWarning ?? ((message: string) => process.stderr.write(message))
-    if (reason === 'user-signing-preference') {
+    if (reason === 'gpg-signing-unavailable') {
+      writeWarning(`boxdown: ${GIT_SIGNING_REASON_MESSAGES[reason]}.\n`)
+    } else if (reason === 'user-signing-preference') {
       writeWarning('boxdown: preserving your existing Git signing configuration; Boxdown SSH signing is skipped.\n')
     } else {
       writeWarning(`boxdown: commit signing disabled: ${GIT_SIGNING_REASON_MESSAGES[reason]}; commits will remain unsigned.\n`)
@@ -246,29 +259,22 @@ async function probeDockerAgentMount (source: string, runCommand: GitSigningComm
 export async function resolveGitSigningPlan (context: WorkspaceContext, options: ResolveGitSigningPlanOptions = {}): Promise<GitSigningPlan> {
   const runCommand = options.runCommand ?? runGitSigningCommand
   const format = await readGitSigningConfigValue(context.workspaceFolder, runCommand, 'gpg.format')
-  if (hasExplicitNonSshSigningPreference(format)) {
-    return { enabled: false, reason: 'user-signing-preference' }
-  }
+  let preference = classifyGitSigningPreference(format)
+  if (preference !== undefined) return { enabled: false, reason: preference }
 
   const program = await readGitSigningConfigValue(context.workspaceFolder, runCommand, 'gpg.program')
-  if (hasExplicitNonSshSigningPreference(format, program)) {
-    return { enabled: false, reason: 'user-signing-preference' }
-  }
+  preference = classifyGitSigningPreference(format, program)
+  if (preference !== undefined) return { enabled: false, reason: preference }
 
   const formatIsSsh = format.code === 0 && format.stdout.trim() === 'ssh'
   const defaultSigningKey = formatIsSsh
     ? undefined
     : await readGitSigningConfigValue(context.workspaceFolder, runCommand, 'user.signingkey')
-  if (hasExplicitNonSshSigningPreference(format, program, defaultSigningKey)) {
-    return { enabled: false, reason: 'user-signing-preference' }
-  }
-
   const defaultCommitSign = formatIsSsh
     ? undefined
     : await readGitSigningConfigValue(context.workspaceFolder, runCommand, 'commit.gpgsign')
-  if (hasExplicitNonSshSigningPreference(format, program, defaultSigningKey, defaultCommitSign)) {
-    return { enabled: false, reason: 'user-signing-preference' }
-  }
+  preference = classifyGitSigningPreference(format, program, defaultSigningKey, defaultCommitSign)
+  if (preference !== undefined) return { enabled: false, reason: preference }
 
   const result = await runCommand('ssh-add', ['-L'])
   if (result.code !== 0) {
