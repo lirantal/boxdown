@@ -9,7 +9,7 @@ import {
 import { resolveDevcontainerCli } from './devcontainer-cli.ts'
 import { buildGeneratedDevcontainerConfig, type DevcontainerConfig } from './config.ts'
 import { BOXDOWN_SECRET_ENV_NAMES } from './constants.ts'
-import { hasExplicitNonSshSigningPreference, readGitSigningConfigValue, resolveConfiguredSshSigningKey, selectGitSigningKey, type GitSigningReason } from './git-signing.ts'
+import { classifyGitSigningPreference, readGitSigningConfigValue, resolveConfiguredSshSigningKey, selectGitSigningKey, type GitSigningReason } from './git-signing.ts'
 import type { WorkspaceContext } from './paths.ts'
 import { runBuffered } from './process.ts'
 
@@ -104,25 +104,30 @@ export async function runDoctorChecks (context: WorkspaceContext, options: RunDo
   ))
 
   const format = await readGitSigningConfigValue(context.workspaceFolder, runCommand, 'gpg.format')
-  const program = hasExplicitNonSshSigningPreference(format)
-    ? undefined
-    : await readGitSigningConfigValue(context.workspaceFolder, runCommand, 'gpg.program')
+  let signingPreference = classifyGitSigningPreference(format)
+  const program = signingPreference === undefined
+    ? await readGitSigningConfigValue(context.workspaceFolder, runCommand, 'gpg.program')
+    : undefined
+  signingPreference = classifyGitSigningPreference(format, program)
   const formatIsSsh = format.code === 0 && format.stdout.trim() === 'ssh'
-  const defaultSigningKey = formatIsSsh || hasExplicitNonSshSigningPreference(format, program)
+  const defaultSigningKey = formatIsSsh || signingPreference !== undefined
     ? undefined
     : await readGitSigningConfigValue(context.workspaceFolder, runCommand, 'user.signingkey')
-  const defaultCommitSign = formatIsSsh || hasExplicitNonSshSigningPreference(format, program, defaultSigningKey)
+  const defaultCommitSign = formatIsSsh || signingPreference !== undefined
     ? undefined
     : await readGitSigningConfigValue(context.workspaceFolder, runCommand, 'commit.gpgsign')
-  const preservesExistingSigning = hasExplicitNonSshSigningPreference(format, program, defaultSigningKey, defaultCommitSign)
-  const sshAgent = preservesExistingSigning ? undefined : await runCommand('ssh-add', ['-L'])
+  signingPreference = classifyGitSigningPreference(format, program, defaultSigningKey, defaultCommitSign)
+  const preservesExistingSigning = signingPreference === 'user-signing-preference'
+  const gpgSigningUnavailable = signingPreference === 'gpg-signing-unavailable'
+  const skipsSshSigning = signingPreference !== undefined
+  const sshAgent = skipsSshSigning ? undefined : await runCommand('ssh-add', ['-L'])
   const identityLines = sshAgent?.code === 0
     ? sshAgent.stdout.split(/\r?\n/).filter((line) => line.trim().startsWith('ssh-'))
     : []
   const identities = identityLines.length
   let configuredKey: string | undefined
   let configuredFailure: { reason: GitSigningReason, detail?: string } | undefined
-  if (!preservesExistingSigning && formatIsSsh) {
+  if (!skipsSshSigning && formatIsSsh) {
     const signingKey = await readGitSigningConfigValue(context.workspaceFolder, runCommand, 'user.signingkey')
     if (signingKey.code === 0 && signingKey.stdout.trim().length > 0) {
       const resolved = resolveConfiguredSshSigningKey(signingKey.stdout.trim(), {
@@ -145,7 +150,7 @@ export async function runDoctorChecks (context: WorkspaceContext, options: RunDo
   let ghAuth = false
   let githubLogin: string | undefined
   let githubAuthKeys: string[] | undefined
-  if (includeOptional) {
+  if (includeOptional && !skipsSshSigning) {
     ghAvailable = await commandWorks(runCommand, 'gh', ['--version'])
     if (ghAvailable) {
       ghAuth = await commandWorks(runCommand, 'gh', ['auth', 'status', '--hostname', 'github.com'])
@@ -160,12 +165,13 @@ export async function runDoctorChecks (context: WorkspaceContext, options: RunDo
     }
   }
 
-  const selected: { key?: string, reason?: GitSigningReason } | undefined = preservesExistingSigning
+  const selected: { key?: string, reason?: GitSigningReason } | undefined = skipsSshSigning
     ? undefined
     : configuredFailure ?? selectGitSigningKey(identityLines, configuredKey, githubAuthKeys)
   const selectedByConfiguration = selected?.key !== undefined && configuredKey !== undefined
   const selectedByGithub = selected?.key !== undefined && configuredKey === undefined && identities > 1
   const signingMessages: Record<GitSigningReason, string> = {
+    'gpg-signing-unavailable': 'GPG commit signing is configured, but the default Boxdown image does not provide GnuPG or GPG-agent forwarding; commits in this container may fail to sign',
     'user-signing-preference': 'Existing non-SSH Git signing configuration detected; Boxdown SSH signing is skipped',
     'agent-unavailable': 'SSH agent is unavailable; Boxdown commits will remain unsigned',
     'no-identities': 'SSH agent has no identities; Boxdown commits will remain unsigned',
@@ -180,7 +186,9 @@ export async function runDoctorChecks (context: WorkspaceContext, options: RunDo
   checks.push({
     name: 'git-signing-agent',
     level: preservesExistingSigning || (sshAgent?.code === 0 && selected?.key !== undefined) ? 'ok' : 'warn',
-    message: preservesExistingSigning
+    message: gpgSigningUnavailable
+      ? signingMessages['gpg-signing-unavailable']
+      : preservesExistingSigning
       ? 'Existing non-SSH Git signing configuration detected; Boxdown SSH signing is skipped'
       : sshAgent?.code !== 0
         ? signingMessages['agent-unavailable']
