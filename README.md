@@ -127,6 +127,7 @@ Agent profiles control host user-scoped coding-agent data. Choose one when a
 command creates or recreates a container:
 
 ```sh
+npx boxdown setup --agent-profile full
 npx boxdown start --agent-profile none|auth|full
 ```
 
@@ -360,6 +361,7 @@ Shared options:
 --target <name>     # with setup/ssh install/ssh uninstall, optional target; repeatable; supported: codex, claude
 --port <port>       # tunnel port for `boxdown tunnel`; repeatable
 --recreate          # recreate the devcontainer before starting
+--agent-profile <tier> # host agent data copied into a new container; none, auth (default), or full
 --json              # JSON output for status and list
 --format json       # JSON output for status and list; equivalent to --json
 --details           # detailed human output for list
