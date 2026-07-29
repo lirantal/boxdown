@@ -84,19 +84,19 @@ or for GitHub to verify a commit.
 ## GPG and WSL
 
 Boxdown's automatic signing integration supports SSH signing through the host
-SSH agent. It does not install GnuPG, mount `~/.gnupg`, or forward a GPG agent
-into the container. When Boxdown detects a non-SSH Git signing configuration,
-such as GPG/OpenPGP, it preserves that configuration and reports that its SSH
-signing setup was skipped. It does not present an unavailable SSH agent as a
-failure of the existing GPG configuration.
+SSH agent. When Git is configured for GPG/OpenPGP signing, Boxdown preserves
+that configuration but warns during lifecycle setup and in `boxdown doctor`:
+the default image does not include GnuPG or GPG-agent forwarding, so commits in
+the container may fail to sign. The warning is non-blocking and does not change
+Git configuration.
 
 Detection respects repository-local Git configuration as well as global
 configuration. It also recognizes the standard Git boolean spellings for
 `commit.gpgsign`, including `true`, `yes`, `on`, and `1`.
 
-GPG signing inside a Boxdown container therefore requires a custom devcontainer
-configuration today. Boxdown never copies a private GPG key into its workspace
-state or image.
+A custom devcontainer image may provide its own GPG and GPG-agent integration.
+Boxdown does not mount `~/.gnupg`, copy private keys, forward a GPG agent, or
+validate custom GPG integrations.
 
 For the supported SSH-signing path in WSL, confirm that the WSL environment can
 reach a running SSH agent and that the intended identity is loaded:
