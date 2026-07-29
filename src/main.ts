@@ -15,6 +15,7 @@ import { createWorkspaceContext, createWorkspaceContextFromIdentity, defaultData
 import { createProgress, resolveProgressMode, type ProgressReporter, type ProgressOutputTarget, type ProgressStepDefinition } from './progress.ts'
 import { runBuffered } from './process.ts'
 import { createPurgePlan, formatPurgePlanDetails, formatPurgePlanText, purgeWorkspace, removeWorkspaceRuntimeState, type PurgePlan } from './purge.ts'
+import { resolveSetupAgentProfile } from './setup-agent-profile.ts'
 import { defaultSshAlias, installSshConfig, uninstallSshConfig, validateSshAlias } from './ssh-config.ts'
 import { dedupeSshInstallTargets, installSshInstallTarget, isSshConfigInstallTarget, SSH_INSTALL_TARGETS, sshInstallTargetFlagHintsText, supportedSshInstallTargetsText, uninstallSshInstallTarget, type SshConfigInstallTarget } from './ssh-install-targets.ts'
 import { createStatusInfo, formatStatusText, statusIsHealthy } from './status.ts'
@@ -1442,7 +1443,21 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
         return 1
       }
 
-      writeWorkspaceMetadata(context, alias, undefined, agentProfile.value)
+      const setupAgentProfile = await resolveSetupAgentProfile({
+        explicitProfile: parsed.agentProfile,
+        recordedProfile: recordedMetadata?.agentProfile,
+        targets: resolvedTargets.targets,
+        input: options.promptInput,
+        output: options.promptOutput,
+        env: options.env
+      })
+
+      if (setupAgentProfile.cancelled) {
+        process.stderr.write('Canceled setup.\n')
+        return 1
+      }
+
+      writeWorkspaceMetadata(context, alias, undefined, setupAgentProfile.profile)
       const progress = createCliProgress(parsed, 'stdout', { env: options.env })
       await runLoggedLifecycle(context, 'setup', argv, async (logger) => {
         await withProgressSection(progress, 'Boxdown setup', [
@@ -1452,7 +1467,7 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
         ], async () => {
           progress.setSteps(setupProgressSteps(resolvedTargets.targets))
           await (options.setupWorkspace ?? setupWorkspace)(context, alias, {
-            agentProfile: agentProfile.value,
+            agentProfile: setupAgentProfile.profile,
             recreate: parsed.recreate,
             targets: resolvedTargets.targets,
             progress,

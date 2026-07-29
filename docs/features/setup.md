@@ -8,6 +8,7 @@ boxdown setup --target codex
 boxdown setup --target claude
 boxdown setup --recreate
 boxdown setup --agent-profile full
+boxdown setup --target codex --agent-profile auth
 ```
 
 `setup` prepares the current workspace for remote tools without opening an
@@ -22,10 +23,22 @@ interactive shell. It accepts:
 --verbose
 ```
 
-`--agent-profile` accepts `none`, `auth`, or `full`; `auth` is the default.
-The selected profile is recorded for later container-starting commands. Changing
-it requires `--recreate` when a container already exists, because Docker mount
-configuration and the container-local profile copy are created together.
+`--agent-profile` accepts `none`, `auth`, or `full`. Setup retains recorded
+agent-profile metadata; only a workspace without a recorded profile defaults to
+`auth`. The selected profile is recorded for later container-starting commands.
+Changing it requires `--recreate` when a container already exists, because
+Docker mount configuration and the container-local profile copy are created
+together.
+
+The profile-selector eligibility matrix is: during interactive setup, selecting
+or explicitly supplying at least one Codex or Claude app target opens the
+single-choice agent-profile selector when `--agent-profile` was not supplied.
+An explicit `--agent-profile` skips the selector. Skipping every app target
+retains the recorded profile, or uses `auth` for a new workspace, without
+another selector. Non-interactive setup never asks and uses that same fallback.
+
+Canceling either the target or agent-profile selector stops setup before
+workspace state is written.
 
 Setup readiness runs before prompts or workspace state is written. A missing
 Docker CLI fails immediately; a starting Docker daemon or discoverable Buildx
@@ -45,13 +58,14 @@ the workspace container is already running.
 
 ## Flow
 
-1. Resolve the workspace to a real absolute path.
-2. Ensure per-workspace SSH key material exists.
-3. Resolve and record the agent-profile selection, then generate a
-   Boxdown-owned devcontainer config with its read-only staging mounts.
-4. Run `devcontainer up --workspace-folder <repo> --override-config <config>`.
-5. Install or update the Boxdown-managed SSH alias.
-6. Optionally install selected SSH targets such as Codex or Claude.
+1. Resolve the workspace to a real absolute path and run setup readiness.
+2. Resolve app targets, using the optional target selector when appropriate.
+3. Resolve the agent profile after target resolution, using its selector only
+   when eligible.
+4. Persist the resolved profile, then generate a Boxdown-owned devcontainer
+   config with its read-only staging mounts.
+5. Run `devcontainer up --workspace-folder <repo> --override-config <config>`.
+6. Install or update the Boxdown-managed SSH alias and selected app targets.
 
 `setup` prints concise progress by default. In an interactive terminal,
 `--verbose` shows a detailed lifecycle trace without streaming raw child

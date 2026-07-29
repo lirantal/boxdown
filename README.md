@@ -135,6 +135,23 @@ npx boxdown start --agent-profile none|auth|full
 the normal workspace mount in every tier, including committed `AGENTS.md`,
 `CLAUDE.md`, `.agents`, `.codex`, `.claude`, and `.mcp.json` files.
 
+During interactive `boxdown setup`, selecting or explicitly supplying at least
+one Codex or Claude app target opens a single-choice agent profile prompt unless
+`--agent-profile` was supplied. An explicit `--agent-profile` suppresses this
+prompt. Skipping every app target keeps the workspace's recorded profile, or
+`auth` for a new workspace, without another prompt. Non-interactive setup never
+asks.
+
+Use both flags for a fully explicit setup:
+
+```sh
+boxdown setup --target codex --agent-profile auth
+```
+
+App registration and profile exposure are separate: choosing profile `none`
+still allows app registration, and profiles are container-wide rather than
+filtered to the selected app.
+
 | CLI | Contents |
 | --- | --- |
 | `none` | no host user-scoped agent profile or Claude API key |

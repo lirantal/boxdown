@@ -12,7 +12,7 @@ import { describe, test } from 'node:test'
 import { claudeSshConfigEntryForWorkspace, defaultClaudeSshConfigsPath, installClaudeSshConfigHost, mergeClaudeSshConfigHost, parseClaudeSshConfigs, removeClaudeSshConfigHost, uninstallClaudeSshConfigHost } from '../src/claude-app-config.ts'
 import { canonicalCodexRemotePathForWorkspace, codexDiscoveredRemoteHostId, codexProjectEntryForWorkspace, defaultCodexAppConfigPath, defaultCodexGlobalStatePath, installCodexAppConfigProject, installCodexGlobalStateProject, legacyCodexRemotePathForWorkspace, mergeCodexAppProject, normalizeCodexGlobalStateProject, parseCodexAppConfig, removeCodexAppProject, removeCodexGlobalStateProject, uninstallCodexAppConfigProject, uninstallCodexGlobalStateProject } from '../src/codex-app-config.ts'
 import { codingAgentBinary, codingAgentFromCommand, type CodingAgentCli } from '../src/coding-agents.ts'
-import { AGENT_PROFILES, isAgentProfile, resolveAgentProfile } from '../src/agent-profile.ts'
+import { AGENT_PROFILES, isAgentProfile, resolveAgentProfile, type AgentProfile } from '../src/agent-profile.ts'
 import { color, formatPromptEnd, formatPromptTitle, promptRail, selectedMark } from '../src/cli-style.ts'
 import { buildGeneratedDevcontainerConfig, publishContainerPortFromConfig, readGeneratedAgentProfile, sourcePathIsInside, writeGeneratedDevcontainerConfig } from '../src/config.ts'
 import { BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_AGENTS_DIR, BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CLAUDE_CONFIG_PATH, BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CLAUDE_CREDENTIALS_PATH, BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CLAUDE_DIR, BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CODEX_AUTH_PATH, BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CODEX_DIR, BOXDOWN_CONTAINER_AGENTS_DIR, BOXDOWN_CONTAINER_CLAUDE_CONFIG_PATH, BOXDOWN_CONTAINER_CLAUDE_CREDENTIALS_PATH, BOXDOWN_CONTAINER_CLAUDE_DIR, BOXDOWN_CONTAINER_CODEX_AUTH_PATH, BOXDOWN_CONTAINER_CODEX_DIR, BOXDOWN_CONTAINER_GITCONFIG_PATH, BOXDOWN_CONTAINER_HOST_GITCONFIG_DIR, BOXDOWN_CONTAINER_SECRET_ENV_BOOTSTRAP, BOXDOWN_CONTAINER_SECRET_ENV_DIR, DEVCONTAINER_CLI_VERSION } from '../src/constants.ts'
@@ -29,7 +29,7 @@ import { listWorkspaceMetadata, readWorkspaceMetadata, recordLegacyImageMigratio
 import { readPackageVersion } from '../src/package-info.ts'
 import { createWorkspaceContext, defaultHostClaudeCredentialsPath, defaultHostClaudeDir, defaultHostCodexDir } from '../src/paths.ts'
 import { createPurgePlan, formatPurgePlanText } from '../src/purge.ts'
-import { promptConfirm, promptMultiSelect, promptText, type PromptInput, type PromptOutput } from '../src/interactive-prompts.ts'
+import { promptConfirm, promptMultiSelect, promptSelect, promptText, type PromptInput, type PromptOutput } from '../src/interactive-prompts.ts'
 import { buildHostToolPath, runBuffered, runInteractive } from '../src/process.ts'
 import { createProgress, formatCommandFailure, resolveProgressMode, runProgressCommand } from '../src/progress.ts'
 import { DEFAULT_TTY_MAX_COLUMNS, interactiveCommandScript, interactiveShellEnvArgs, interactiveShellScript } from '../src/shell.ts'
@@ -956,6 +956,7 @@ test('documents agent profile tiers', () => {
   const startDocs = readFileSync(join(process.cwd(), 'docs/features/start-and-shell.md'), 'utf8')
   const lifecycleDocs = readFileSync(join(process.cwd(), 'docs/features/lifecycle.md'), 'utf8')
   const setupDocs = readFileSync(join(process.cwd(), 'docs/features/setup.md'), 'utf8')
+  const testingDocs = readFileSync(join(process.cwd(), 'docs/testing.md'), 'utf8')
   const architecture = readFileSync(join(process.cwd(), 'docs/architecture.md'), 'utf8')
   const assetDocs = readFileSync(join(process.cwd(), 'assets/devcontainer/README.md'), 'utf8')
   const profileDesign = readFileSync(join(process.cwd(), 'docs/superpowers/specs/2026-07-28-agent-profile-tiers-design.md'), 'utf8')
@@ -974,8 +975,21 @@ test('documents agent profile tiers', () => {
   assert.match(readme, /custom mount.*canonical.*externally managed/is)
   assert.match(readme, /changes the previous forwarding model.*Codex\s+config.*Claude MCP projection.*writable host mount/is)
   assert.match(readme, /user-scoped MCP.*repository.*`full`/is)
+  assert.match(
+    readme,
+    /setup.*app target.*agent profile.*--agent-profile.*suppress/is
+  )
 
   assert.match(setupDocs, /--agent-profile <tier>/)
+  assert.match(
+    setupDocs,
+    /at least one.*Codex.*Claude.*--agent-profile.*not supplied/is
+  )
+  assert.match(setupDocs, /boxdown setup --target codex --agent-profile auth/)
+  assert.match(
+    testingDocs,
+    /profile selector.*fully explicit.*non-interactive/is
+  )
   assert.match(startDocs, /--agent-profile <tier>/)
   assert.match(stateDocs, /read-only staging.*container-local writable cop(?:y|ies)/is)
   assert.match(stateDocs, /no reverse\s+synchronization/is)
@@ -1032,6 +1046,208 @@ test('documents interactive container reuse lifecycle', () => {
 })
 
 describe('interactive install target prompt', () => {
+  describe('single-choice prompt', () => {
+    const profilePromptChoices = [
+      { value: 'none', label: 'No agent profile', description: 'Copy no host user-scoped agent data.' },
+      { value: 'auth', label: 'Authentication and ~/.agents', description: 'Copy agent authentication and ~/.agents; Boxdown default.' },
+      { value: 'full', label: 'Full agent profiles', description: 'Copy complete Codex, Claude, and ~/.agents profiles; may include sensitive data.' }
+    ] as const
+
+    test('focuses and selects each raw single-choice default with Enter', async () => {
+      for (const entry of profilePromptChoices) {
+        const { input, output, outputText } = fakePromptStreams()
+        const resultPromise = promptSelect({
+          title: 'How much host agent data should Boxdown copy into the container?',
+          choices: profilePromptChoices,
+          defaultValue: entry.value,
+          summaryLabel: 'Agent profile',
+          input,
+          output,
+          env: { CI: 'false' }
+        })
+
+        assert.ok(outputText().includes(`${selectedMark()} ${color(entry.label, 'bold')}`))
+        input.write('\r')
+
+        assert.deepStrictEqual(await resultPromise, { status: 'selected', value: entry.value })
+        assert.ok(outputText().includes(`Agent profile: ${entry.label}`))
+      }
+    })
+
+    test('moves and wraps a raw single-choice prompt', async () => {
+      for (const entry of [
+        { keys: '\u001B[B\r', expected: 'full' },
+        { keys: 'j\r', expected: 'full' },
+        { keys: '\u001B[A\r', expected: 'none' },
+        { keys: 'k\r', expected: 'none' },
+        { keys: '\u001B[B\u001B[B\r', expected: 'none' }
+      ] as const) {
+        const { input, output } = fakePromptStreams()
+        const resultPromise = promptSelect({
+          title: 'Agent profile?',
+          choices: profilePromptChoices,
+          defaultValue: 'auth',
+          input,
+          output,
+          env: { CI: 'false' }
+        })
+
+        input.write(entry.keys)
+        assert.deepStrictEqual(await resultPromise, {
+          status: 'selected',
+          value: entry.expected
+        })
+      }
+    })
+
+    test('cancels a raw single-choice prompt and restores terminal state', async () => {
+      for (const key of ['\u001B', '\u0003', '\u0004']) {
+        const rawModes: boolean[] = []
+        const { input, output, outputText } = fakePromptStreams()
+        input.setRawMode = (mode) => {
+          rawModes.push(mode)
+        }
+        const resultPromise = promptSelect({
+          title: 'Agent profile?',
+          choices: profilePromptChoices,
+          defaultValue: 'auth',
+          input,
+          output,
+          env: { CI: 'false' }
+        })
+
+        input.write(key)
+        assert.deepStrictEqual(await resultPromise, { status: 'cancelled' })
+        assert.deepStrictEqual(rawModes, [true, false])
+        assert.match(outputText(), /\u001B\[\?25l/)
+        assert.match(outputText(), /\u001B\[\?25h/)
+      }
+    })
+
+    test('ignores trailing raw input after selection or cancellation', async () => {
+      for (const entry of [
+        { keys: '\rj', expected: { status: 'selected', value: 'auth' } },
+        { keys: '\u0003j', expected: { status: 'cancelled' } }
+      ] as const) {
+        const { input, output, outputText } = fakePromptStreams()
+        const resultPromise = promptSelect({
+          title: 'Agent profile?',
+          choices: profilePromptChoices,
+          defaultValue: 'auth',
+          input,
+          output,
+          env: { CI: 'false' }
+        })
+
+        input.write(entry.keys)
+
+        assert.deepStrictEqual(await resultPromise, entry.expected)
+        assert.match(outputText(), /Selection: (?:Authentication and ~\/\.agents|canceled)\n$/)
+      }
+    })
+
+    test('restores terminal state before raw-mode failure falls back to line mode', async () => {
+      const { input, output, outputText } = fakePromptStreams()
+      input.setRawMode = (mode) => {
+        if (mode) throw new Error('raw mode unavailable')
+      }
+      const resultPromise = promptSelect({
+        title: 'Agent profile?',
+        choices: profilePromptChoices,
+        defaultValue: 'auth',
+        input,
+        output,
+        env: { CI: 'false' }
+      })
+
+      await waitForPromptOutput(outputText, /1\) No agent profile/)
+      input.write('\n')
+
+      assert.deepStrictEqual(await resultPromise, { status: 'selected', value: 'auth' })
+      assert.match(outputText(), /\u001B\[\?25l/)
+      assert.match(outputText(), /\u001B\[\?25h/)
+    })
+
+    test('selects by number, value, and blank default in line mode', async () => {
+      for (const entry of [
+        { answer: '3\n', expected: 'full' },
+        { answer: 'none\n', expected: 'none' },
+        { answer: '\n', expected: 'auth' }
+      ] as const) {
+        const { input, output } = fakePromptStreams({ rawMode: false })
+        const resultPromise = promptSelect({
+          title: 'Agent profile?',
+          choices: profilePromptChoices,
+          defaultValue: 'auth',
+          input,
+          output,
+          env: { CI: 'false' }
+        })
+
+        input.write(entry.answer)
+        assert.deepStrictEqual(await resultPromise, {
+          status: 'selected',
+          value: entry.expected
+        })
+      }
+    })
+
+    test('retries invalid line input and cancels on EOF', async () => {
+      const retry = fakePromptStreams({ rawMode: false })
+      const retryPromise = promptSelect({
+        title: 'Agent profile?',
+        choices: profilePromptChoices,
+        defaultValue: 'auth',
+        input: retry.input,
+        output: retry.output,
+        env: { CI: 'false' }
+      })
+      retry.input.write('other\nfull\n')
+      assert.deepStrictEqual(await retryPromise, { status: 'selected', value: 'full' })
+      assert.match(retry.outputText(), /Unknown selection: other/)
+
+      const eof = fakePromptStreams({ rawMode: false })
+      const eofPromise = promptSelect({
+        title: 'Agent profile?',
+        choices: profilePromptChoices,
+        defaultValue: 'auth',
+        input: eof.input,
+        output: eof.output,
+        env: { CI: 'false' }
+      })
+      eof.input.end()
+      assert.deepStrictEqual(await eofPromise, { status: 'cancelled' })
+    })
+
+    test('is silent when single-choice prompting is unavailable', async () => {
+      const input = new PassThrough() as PassThrough & PromptInput
+      const output = new PassThrough() as PassThrough & PromptOutput
+      const outputChunks: Buffer[] = []
+      input.isTTY = false
+      output.isTTY = false
+      output.on('data', (chunk: Buffer) => outputChunks.push(chunk))
+
+      assert.deepStrictEqual(await promptSelect({
+        title: 'Agent profile?',
+        choices: profilePromptChoices,
+        defaultValue: 'auth',
+        input,
+        output,
+        env: { CI: 'false' }
+      }), { status: 'non-interactive' })
+      assert.strictEqual(Buffer.concat(outputChunks).toString('utf8'), '')
+    })
+
+    test('rejects a default that is not a choice', async () => {
+      await assert.rejects(promptSelect({
+        title: 'Agent profile?',
+        choices: profilePromptChoices,
+        defaultValue: 'other',
+        env: { CI: '1' }
+      }), /Select prompt default is not one of its choices: other/)
+    })
+  })
+
   test('uses the shared prompt style primitives', () => {
     assert.strictEqual(formatPromptTitle('Install optional SSH targets?'), '\u001B[36m◆\u001B[0m  \u001B[1mInstall optional SSH targets?\u001B[0m')
     assert.strictEqual(promptRail(), '\u001B[36m│\u001B[0m')
@@ -1281,6 +1497,25 @@ describe('interactive install target prompt', () => {
     assert.match(outputText(), /Invalid tunnel port: nope/)
   })
 
+  test('text prompt consumes a corrected retry from the same input chunk', async () => {
+    const { input, output } = fakePromptStreams({ rawMode: false })
+    const resultPromise = promptText({
+      title: 'Tunnel port(s) to forward?',
+      summaryLabel: 'Tunnel ports',
+      validate: (value) => value === 'valid' ? undefined : 'Enter valid',
+      input,
+      output,
+      env: { CI: 'false' }
+    })
+
+    input.write('invalid\nvalid\n')
+
+    assert.deepStrictEqual(await resultPromise, {
+      status: 'submitted',
+      value: 'valid'
+    })
+  })
+
   test('confirm prompt defaults to cancel', async () => {
     const { input, output, outputText } = fakePromptStreams()
     const resultPromise = promptConfirm({
@@ -1344,6 +1579,23 @@ describe('interactive install target prompt', () => {
     assert.deepStrictEqual(await resultPromise, {
       status: 'cancelled'
     })
+  })
+
+  test('confirm prompt consumes a corrected retry from the same input chunk', async () => {
+    const { input, output } = fakePromptStreams({ rawMode: false })
+    const resultPromise = promptConfirm({
+      title: 'Purge Boxdown workspace?',
+      confirmLabel: 'Purge',
+      cancelLabel: 'Cancel',
+      summaryLabel: 'Purge',
+      input,
+      output,
+      env: { CI: 'false' }
+    })
+
+    input.write('maybe\ny\n')
+
+    assert.deepStrictEqual(await resultPromise, { status: 'confirmed' })
   })
 
   test('new prompt types skip without blocking when input is not interactive', async () => {
@@ -1487,13 +1739,16 @@ describe('CLI execution', () => {
     const dataHome = tempDir('setup-preflight-failure-data')
     const cacheHome = tempDir('setup-preflight-failure-cache')
     const calls: string[] = []
+    const { input, output, outputText } = fakePromptStreams()
 
     const code = await withProcessEnv({
       BOXDOWN_DATA_HOME: dataHome,
       BOXDOWN_CACHE_HOME: cacheHome,
-      CI: '1'
+      CI: 'false'
     }, async () => runCli(['setup', '--workspace', workspace], {
-      env: { CI: '1', BOXDOWN_DATA_HOME: dataHome, BOXDOWN_CACHE_HOME: cacheHome },
+      env: { CI: 'false', BOXDOWN_DATA_HOME: dataHome, BOXDOWN_CACHE_HOME: cacheHome },
+      promptInput: input,
+      promptOutput: output,
       waitForContainerRuntime: async () => {
         calls.push('runtime')
         return {
@@ -1525,6 +1780,289 @@ describe('CLI execution', () => {
     assert.strictEqual(existsSync(context.workspaceDataDir), false)
     assert.strictEqual(existsSync(context.sshKeyPath), false)
     assert.strictEqual(existsSync(context.generatedConfigPath), false)
+    assert.doesNotMatch(outputText(), /Add this project to an AI coding app/)
+    assert.doesNotMatch(outputText(), /How much host agent data should Boxdown copy/)
+  })
+
+  test('prompts for an agent profile after an explicit setup target', async () => {
+    const workspace = tempDir('setup-profile-explicit-target-workspace')
+    const env = {
+      CI: 'false',
+      BOXDOWN_CACHE_HOME: tempDir('setup-profile-explicit-target-cache'),
+      BOXDOWN_DATA_HOME: tempDir('setup-profile-explicit-target-data')
+    }
+    const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+    const { input, output, outputText } = fakePromptStreams()
+    let receivedProfile: AgentProfile | undefined
+
+    const runPromise = withProcessEnv(env, async () => runCli([
+      'setup', '--workspace', workspace, '--target', 'codex'
+    ], {
+      env,
+      promptInput: input,
+      promptOutput: output,
+      waitForContainerRuntime: async () => ({ state: 'ready', mode: 'buildx', warnings: [] }),
+      runDoctorChecks: async () => [],
+      setupWorkspace: async (_context, _alias, setupOptions) => {
+        receivedProfile = setupOptions.agentProfile
+      }
+    }))
+
+    await waitForPromptOutput(
+      outputText,
+      /How much host agent data should Boxdown copy into the container\?/
+    )
+    input.write('\u001B[B\r')
+
+    assert.strictEqual(await runPromise, 0)
+    assert.strictEqual(receivedProfile, 'full')
+    assert.strictEqual(readWorkspaceMetadata(context)?.agentProfile, 'full')
+  })
+
+  test('prompts for profile after a prompt-selected app target', async () => {
+    const workspace = tempDir('setup-profile-sequential-workspace')
+    const env = {
+      CI: 'false',
+      BOXDOWN_CACHE_HOME: tempDir('setup-profile-sequential-cache'),
+      BOXDOWN_DATA_HOME: tempDir('setup-profile-sequential-data')
+    }
+    const { input, output, outputText } = fakePromptStreams()
+    let receivedProfile: AgentProfile | undefined
+
+    const runPromise = withProcessEnv(env, async () => runCli([
+      'setup', '--workspace', workspace
+    ], {
+      env,
+      promptInput: input,
+      promptOutput: output,
+      waitForContainerRuntime: async () => ({ state: 'ready', mode: 'buildx', warnings: [] }),
+      runDoctorChecks: async () => [],
+      setupWorkspace: async (_context, _alias, setupOptions) => {
+        receivedProfile = setupOptions.agentProfile
+      }
+    }))
+
+    await waitForPromptOutput(outputText, /Add this project to an AI coding app/)
+    input.write('\u001B[A\u001B[A \r')
+    await waitForPromptOutput(outputText, /How much host agent data should Boxdown copy/)
+    input.write('\u001B[A\r')
+
+    assert.strictEqual(await runPromise, 0)
+    assert.strictEqual(receivedProfile, 'none')
+  })
+
+  test('skipping interactive targets suppresses the profile prompt and uses recorded or default fallback', async () => {
+    for (const entry of [
+      { name: 'recorded profile', recorded: 'full' as const, expected: 'full' as const },
+      { name: 'default profile', expected: 'auth' as const }
+    ]) {
+      const slug = entry.name.replaceAll(' ', '-')
+      const workspace = tempDir(`setup-profile-target-skip-${slug}-workspace`)
+      const env = {
+        CI: 'false',
+        BOXDOWN_CACHE_HOME: tempDir(`setup-profile-target-skip-${slug}-cache`),
+        BOXDOWN_DATA_HOME: tempDir(`setup-profile-target-skip-${slug}-data`)
+      }
+      const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+      const { input, output, outputText } = fakePromptStreams()
+      let receivedProfile: AgentProfile | undefined
+
+      if (entry.recorded !== undefined) {
+        writeWorkspaceMetadata(context, 'recorded-profile-devcontainer', undefined, entry.recorded)
+      }
+
+      const runPromise = withProcessEnv(env, async () => runCli([
+        'setup', '--workspace', workspace
+      ], {
+        env,
+        promptInput: input,
+        promptOutput: output,
+        waitForContainerRuntime: async () => ({ state: 'ready', mode: 'buildx', warnings: [] }),
+        runDoctorChecks: async () => [],
+        setupWorkspace: async (_context, _alias, setupOptions) => {
+          receivedProfile = setupOptions.agentProfile
+        }
+      }))
+
+      await waitForPromptOutput(outputText, /Add this project to an AI coding app/)
+      input.write('\r')
+
+      assert.strictEqual(await runPromise, 0, entry.name)
+      assert.strictEqual(receivedProfile, entry.expected, entry.name)
+      assert.strictEqual(readWorkspaceMetadata(context)?.agentProfile, entry.expected, entry.name)
+      assert.doesNotMatch(outputText(), /How much host agent data should Boxdown copy/, entry.name)
+    }
+  })
+
+  test('cancelling interactive target selection suppresses the profile prompt and setup mutations', async () => {
+    const workspace = tempDir('setup-profile-target-cancel-workspace')
+    const env = {
+      CI: 'false',
+      BOXDOWN_CACHE_HOME: tempDir('setup-profile-target-cancel-cache'),
+      BOXDOWN_DATA_HOME: tempDir('setup-profile-target-cancel-data')
+    }
+    const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+    const { input, output, outputText } = fakePromptStreams()
+    let setupCalls = 0
+
+    const runPromise = withProcessEnv(env, async () => runCli([
+      'setup', '--workspace', workspace
+    ], {
+      env,
+      promptInput: input,
+      promptOutput: output,
+      waitForContainerRuntime: async () => ({ state: 'ready', mode: 'buildx', warnings: [] }),
+      runDoctorChecks: async () => [],
+      setupWorkspace: async () => {
+        setupCalls += 1
+      }
+    }))
+
+    await waitForPromptOutput(outputText, /Add this project to an AI coding app/)
+    input.write('\u0003')
+
+    assert.strictEqual(await runPromise, 1)
+    assert.strictEqual(setupCalls, 0)
+    assert.strictEqual(existsSync(context.workspaceDataDir), false)
+    assert.strictEqual(existsSync(context.generatedConfigPath), false)
+    assert.doesNotMatch(outputText(), /How much host agent data should Boxdown copy/)
+  })
+
+  test('persists and forwards prompted default auth', async () => {
+    const workspace = tempDir('setup-profile-prompted-default-workspace')
+    const env = {
+      CI: 'false',
+      BOXDOWN_CACHE_HOME: tempDir('setup-profile-prompted-default-cache'),
+      BOXDOWN_DATA_HOME: tempDir('setup-profile-prompted-default-data')
+    }
+    const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+    const { input, output, outputText } = fakePromptStreams()
+    let receivedProfile: AgentProfile | undefined
+
+    const runPromise = withProcessEnv(env, async () => runCli([
+      'setup', '--workspace', workspace, '--target', 'codex'
+    ], {
+      env,
+      promptInput: input,
+      promptOutput: output,
+      waitForContainerRuntime: async () => ({ state: 'ready', mode: 'buildx', warnings: [] }),
+      runDoctorChecks: async () => [],
+      setupWorkspace: async (_context, _alias, setupOptions) => {
+        receivedProfile = setupOptions.agentProfile
+      }
+    }))
+
+    await waitForPromptOutput(outputText, /How much host agent data should Boxdown copy/)
+    input.write('\r')
+
+    assert.strictEqual(await runPromise, 0)
+    assert.strictEqual(receivedProfile, 'auth')
+    assert.strictEqual(readWorkspaceMetadata(context)?.agentProfile, 'auth')
+  })
+
+  test('cancelling the profile prompt preserves existing metadata without invoking setup lifecycle', async () => {
+    const workspace = tempDir('setup-profile-cancel-workspace')
+    const env = {
+      CI: 'false',
+      BOXDOWN_CACHE_HOME: tempDir('setup-profile-cancel-cache'),
+      BOXDOWN_DATA_HOME: tempDir('setup-profile-cancel-data')
+    }
+    const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+    const { input, output, outputText } = fakePromptStreams()
+    let setupCalls = 0
+
+    writeWorkspaceMetadata(context, 'preserved-profile-devcontainer', undefined, 'full')
+
+    const runPromise = withProcessEnv(env, async () => runCli([
+      'setup', '--workspace', workspace, '--target', 'claude'
+    ], {
+      env,
+      promptInput: input,
+      promptOutput: output,
+      waitForContainerRuntime: async () => ({ state: 'ready', mode: 'buildx', warnings: [] }),
+      runDoctorChecks: async () => [],
+      setupWorkspace: async () => {
+        setupCalls += 1
+      }
+    }))
+
+    await waitForPromptOutput(outputText, /How much host agent data should Boxdown copy/)
+    input.write('\u0003')
+
+    assert.strictEqual(await runPromise, 1)
+    assert.strictEqual(setupCalls, 0)
+    assert.strictEqual(readWorkspaceMetadata(context)?.agentProfile, 'full')
+    assert.strictEqual(existsSync(context.generatedConfigPath), false)
+    assert.strictEqual(existsSync(context.sshKeyPath), false)
+  })
+
+  test('uses setup agent profile precedence without unnecessary prompts', async () => {
+    const cases = [
+      {
+        name: 'explicit profile suppresses prompt',
+        argv: ['--target', 'codex', '--agent-profile', 'none'],
+        recorded: 'full',
+        expected: 'none'
+      },
+      {
+        name: 'no target retains metadata',
+        argv: [],
+        recorded: 'full',
+        expected: 'full'
+      },
+      {
+        name: 'no target defaults to auth',
+        argv: [],
+        expected: 'auth'
+      },
+      {
+        name: 'non-interactive target retains metadata',
+        argv: ['--target', 'claude'],
+        recorded: 'none',
+        expected: 'none',
+        ci: true
+      }
+    ] as const
+
+    for (const entry of cases) {
+      const slug = entry.name.replaceAll(' ', '-')
+      const workspace = tempDir(`setup-profile-${slug}-workspace`)
+      const env = {
+        CI: entry.ci === true ? '1' : 'false',
+        BOXDOWN_CACHE_HOME: tempDir(`setup-profile-${slug}-cache`),
+        BOXDOWN_DATA_HOME: tempDir(`setup-profile-${slug}-data`)
+      }
+      const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+      const input = new PassThrough() as PassThrough & PromptInput
+      const output = new PassThrough() as PassThrough & PromptOutput
+      const outputChunks: Buffer[] = []
+      input.isTTY = false
+      output.isTTY = false
+      output.on('data', (chunk: Buffer) => outputChunks.push(chunk))
+      let receivedProfile: AgentProfile | undefined
+
+      if (entry.recorded !== undefined) {
+        writeWorkspaceMetadata(context, 'recorded-profile-devcontainer', undefined, entry.recorded)
+      }
+
+      const code = await withProcessEnv(env, async () => runCli([
+        'setup', '--workspace', workspace, ...entry.argv
+      ], {
+        env,
+        promptInput: input,
+        promptOutput: output,
+        waitForContainerRuntime: async () => ({ state: 'ready', mode: 'buildx', warnings: [] }),
+        runDoctorChecks: async () => [],
+        setupWorkspace: async (_context, _alias, setupOptions) => {
+          receivedProfile = setupOptions.agentProfile
+        }
+      }))
+
+      assert.strictEqual(code, 0, entry.name)
+      assert.strictEqual(receivedProfile, entry.expected, entry.name)
+      assert.strictEqual(readWorkspaceMetadata(context)?.agentProfile, entry.expected, entry.name)
+      assert.doesNotMatch(Buffer.concat(outputChunks).toString('utf8'), /How much host agent data/, entry.name)
+    }
   })
 
   test('invalid agent profiles do not create metadata or invoke the container runtime', async () => {

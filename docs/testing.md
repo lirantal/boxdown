@@ -23,6 +23,8 @@ Unit tests should avoid starting Docker. Prefer pure tests for:
 - SSH config block creation and idempotent replacement.
 - SSH install target parsing and prompt behavior, including explicit target
   flags, prompt selection, prompt skip/cancel, and non-TTY fallback.
+- Setup agent-profile selection, including single-choice raw and line input,
+  cancellation before state writes, and non-interactive fallback.
 - Codex app/global-state target installation, legacy path migration,
   and idempotent project injection.
 - Lifecycle status and doctor output formatting.
@@ -58,6 +60,8 @@ Manual Docker acceptance is heavier and should be done intentionally:
 boxdown setup --workspace /path/to/repo
 boxdown setup --workspace /path/to/repo --target codex
 boxdown setup --workspace /path/to/repo --target claude
+boxdown setup --workspace /path/to/repo --target codex --agent-profile auth
+CI=1 boxdown setup --workspace /path/to/repo --target codex
 boxdown start --workspace /path/to/repo
 boxdown list
 boxdown list --json
@@ -77,6 +81,10 @@ The plain `ssh install` command should show the optional target selector when
 run in an interactive terminal. The explicit `--target codex` and
 `--target claude` commands verify scriptable target installation, and the `CI=1`
 command verifies the non-interactive skip path without blocking.
+
+The first `setup --target codex` command should show the profile selector. The
+`setup --target codex --agent-profile auth` command is fully explicit, and the
+`CI=1 setup --target codex` command verifies the non-interactive fallback.
 
 The plain `tunnel` command should prompt for ports in an interactive terminal.
 Use `boxdown tunnel --workspace /path/to/repo --port 3030` when testing the
