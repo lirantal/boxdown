@@ -5344,6 +5344,37 @@ describe('doctor output', () => {
     assert.ok(!calls.some((call) => call.startsWith('gh ')))
   })
 
+  test('continues SSH diagnostics when SSH format has a legacy GPG program', async () => {
+    const context = createWorkspaceContext({
+      workspace: tempDir('doctor-ssh-format-legacy-gpg-program-workspace'),
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('doctor-ssh-format-legacy-gpg-program-cache'),
+        BOXDOWN_DATA_HOME: tempDir('doctor-ssh-format-legacy-gpg-program-data')
+      },
+      assetsDevcontainerDir
+    })
+    const calls: string[] = []
+
+    const checks = await runDoctorChecks(context, {
+      includeOptional: false,
+      includeDockerMountProbe: false,
+      runCommand: async (command, args) => {
+        calls.push(`${command} ${args.join(' ')}`)
+        if (command === 'git' && args.includes('gpg.format')) return { code: 0, stdout: 'ssh\n', stderr: '' }
+        if (command === 'git' && args.includes('gpg.program')) return { code: 0, stdout: 'gpg2\n', stderr: '' }
+        if (command === 'ssh-add') return { code: 1, stdout: '', stderr: 'agent unavailable\n' }
+        return { code: 1, stdout: '', stderr: '' }
+      }
+    })
+
+    assert.deepStrictEqual(checks.find((check) => check.name === 'git-signing-agent'), {
+      name: 'git-signing-agent',
+      level: 'warn',
+      message: 'SSH agent is unavailable; Boxdown commits will remain unsigned'
+    })
+    assert.ok(calls.some((call) => call.startsWith('ssh-add ')))
+  })
+
   test('keeps an X.509 preference generic', async () => {
     const context = createWorkspaceContext({
       workspace: tempDir('doctor-x509-preference-workspace'),
@@ -8261,6 +8292,34 @@ describe('git signing selection', () => {
     })
     assert.deepStrictEqual(plan, { enabled: false, reason: 'gpg-signing-unavailable' })
     assert.ok(!calls.some((call) => call.startsWith('ssh-add ')))
+  })
+
+  test('uses SSH format before a legacy GPG program', async () => {
+    const context = createWorkspaceContext({
+      workspace: tempDir('git-signing-ssh-format-legacy-gpg-program-workspace'),
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('git-signing-ssh-format-legacy-gpg-program-cache'),
+        BOXDOWN_DATA_HOME: tempDir('git-signing-ssh-format-legacy-gpg-program-data')
+      },
+      assetsDevcontainerDir
+    })
+    const calls: string[] = []
+
+    const plan = await resolveGitSigningPlan(context, {
+      runCommand: async (command, args) => {
+        calls.push(`${command} ${args.join(' ')}`)
+        if (command === 'git' && args.includes('gpg.format')) return { code: 0, stdout: 'ssh\n', stderr: '' }
+        if (command === 'git' && args.includes('gpg.program')) return { code: 0, stdout: 'gpg2\n', stderr: '' }
+        if (command === 'ssh-add') return { code: 1, stdout: '', stderr: 'agent unavailable\n' }
+        throw new Error(`unexpected command: ${command} ${args.join(' ')}`)
+      }
+    })
+
+    assert.deepStrictEqual({ enabled: plan.enabled, reason: plan.reason }, {
+      enabled: false,
+      reason: 'agent-unavailable'
+    })
+    assert.ok(calls.some((call) => call.startsWith('ssh-add ')))
   })
 
   test('keeps a non-GPG X.509 preference generic', async () => {

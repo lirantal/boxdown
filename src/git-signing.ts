@@ -41,8 +41,8 @@ export function classifyGitSigningPreference (
   if (formatValue.length > 0 && formatValue !== 'ssh') {
     return formatValue === 'openpgp' ? 'gpg-signing-unavailable' : 'user-signing-preference'
   }
-  if (programIsConfigured) return 'gpg-signing-unavailable'
   if (formatValue === 'ssh') return undefined
+  if (programIsConfigured) return 'gpg-signing-unavailable'
   const signingKeyIsConfigured = signingKey?.code === 0 && signingKey.stdout.trim().length > 0
   const commitSigningIsEnabled = commitSign?.code === 0 && isGitBooleanTrue(commitSign.stdout)
   if (signingKeyIsConfigured && commitSigningIsEnabled) return 'gpg-signing-unavailable'
