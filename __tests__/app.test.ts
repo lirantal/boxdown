@@ -1107,6 +1107,28 @@ describe('interactive install target prompt', () => {
       }
     })
 
+    test('ignores trailing raw input after selection or cancellation', async () => {
+      for (const entry of [
+        { keys: '\rj', expected: { status: 'selected', value: 'auth' } },
+        { keys: '\u0003j', expected: { status: 'cancelled' } }
+      ] as const) {
+        const { input, output, outputText } = fakePromptStreams()
+        const resultPromise = promptSelect({
+          title: 'Agent profile?',
+          choices: profilePromptChoices,
+          defaultValue: 'auth',
+          input,
+          output,
+          env: { CI: 'false' }
+        })
+
+        input.write(entry.keys)
+
+        assert.deepStrictEqual(await resultPromise, entry.expected)
+        assert.match(outputText(), /Selection: (?:Authentication and ~\/\.agents|canceled)\n$/)
+      }
+    })
+
     test('restores terminal state before raw-mode failure falls back to line mode', async () => {
       const { input, output, outputText } = fakePromptStreams()
       input.setRawMode = (mode) => {
@@ -1458,6 +1480,25 @@ describe('interactive install target prompt', () => {
     assert.match(outputText(), /Invalid tunnel port: nope/)
   })
 
+  test('text prompt consumes a corrected retry from the same input chunk', async () => {
+    const { input, output } = fakePromptStreams({ rawMode: false })
+    const resultPromise = promptText({
+      title: 'Tunnel port(s) to forward?',
+      summaryLabel: 'Tunnel ports',
+      validate: (value) => value === 'valid' ? undefined : 'Enter valid',
+      input,
+      output,
+      env: { CI: 'false' }
+    })
+
+    input.write('invalid\nvalid\n')
+
+    assert.deepStrictEqual(await resultPromise, {
+      status: 'submitted',
+      value: 'valid'
+    })
+  })
+
   test('confirm prompt defaults to cancel', async () => {
     const { input, output, outputText } = fakePromptStreams()
     const resultPromise = promptConfirm({
@@ -1521,6 +1562,23 @@ describe('interactive install target prompt', () => {
     assert.deepStrictEqual(await resultPromise, {
       status: 'cancelled'
     })
+  })
+
+  test('confirm prompt consumes a corrected retry from the same input chunk', async () => {
+    const { input, output } = fakePromptStreams({ rawMode: false })
+    const resultPromise = promptConfirm({
+      title: 'Purge Boxdown workspace?',
+      confirmLabel: 'Purge',
+      cancelLabel: 'Cancel',
+      summaryLabel: 'Purge',
+      input,
+      output,
+      env: { CI: 'false' }
+    })
+
+    input.write('maybe\ny\n')
+
+    assert.deepStrictEqual(await resultPromise, { status: 'confirmed' })
   })
 
   test('new prompt types skip without blocking when input is not interactive', async () => {

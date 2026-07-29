@@ -450,7 +450,7 @@ function promptRawSelect <T extends string> (
     }
 
     function handleText (text: string): void {
-      for (let index = 0; index < text.length;) {
+      for (let index = 0; index < text.length && !settled;) {
         if (text.startsWith('\u001B[A', index)) {
           moveFocus(-1)
           index += 3
