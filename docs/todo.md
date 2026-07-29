@@ -27,11 +27,11 @@ refresh commands.
 
 ### Claude Code macOS Credential Forwarding (future investigation)
 
-Boxdown forwards Claude Code's documented file-backed host credentials on
-Linux, WSL, and native Windows. macOS stores Claude Code credentials in
-Keychain, so Boxdown does not automatically forward them. Investigate a secure,
-user-consented macOS solution without scraping, exporting, or persisting
-Keychain secrets in Boxdown state.
+Boxdown copies Claude Code's documented file-backed host credentials into new
+`auth` and `full` containers on Linux, WSL, and native Windows. macOS stores
+Claude Code credentials in Keychain, so Boxdown does not automatically copy
+them. Investigate a secure, user-consented macOS solution without scraping,
+exporting, or persisting Keychain secrets in Boxdown state.
 
 ### 1. Manual Acceptance and Runtime Fixes (completed)
 

@@ -1,13 +1,18 @@
 import { mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, relative, win32 } from 'node:path'
 
 import {
+  BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_AGENTS_DIR,
+  BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CLAUDE_CONFIG_PATH,
+  BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CLAUDE_CREDENTIALS_PATH,
+  BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CLAUDE_DIR,
+  BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CODEX_AUTH_PATH,
+  BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CODEX_DIR,
   BOXDOWN_CONTAINER_AGENTS_DIR,
   BOXDOWN_CONTAINER_CLAUDE_CONFIG_PATH,
   BOXDOWN_CONTAINER_CLAUDE_CREDENTIALS_PATH,
   BOXDOWN_CONTAINER_CLAUDE_DIR,
   BOXDOWN_CONTAINER_CODEX_AUTH_PATH,
-  BOXDOWN_CONTAINER_CODEX_CONFIG_PATH,
   BOXDOWN_CONTAINER_CODEX_DIR,
   BOXDOWN_CONTAINER_DEVCONTAINER_DIR,
   BOXDOWN_CONTAINER_GITCONFIG_PATH,
@@ -17,6 +22,13 @@ import {
   BOXDOWN_CONTAINER_SSH_DIR,
   BOXDOWN_CONTAINER_SSH_PUBLIC_KEY_PATH
 } from './constants.ts'
+import { DEFAULT_AGENT_PROFILE, isAgentProfile, type AgentProfile } from './agent-profile.ts'
+import {
+  isDevcontainerMount,
+  mountConflictsWithDestination,
+  mountTargetsDestination,
+  type DevcontainerMount
+} from './devcontainer-mount.ts'
 import { parseJsonc } from './jsonc.ts'
 import type { WorkspaceContext } from './paths.ts'
 import type { GitSigningPlan } from './git-signing.ts'
@@ -24,7 +36,7 @@ import { shellQuote } from './shell.ts'
 
 export interface DevcontainerConfig {
   name?: string
-  mounts?: string[]
+  mounts?: DevcontainerMount[]
   containerEnv?: Record<string, string>
   runArgs?: string[]
   initializeCommand?: string
@@ -54,20 +66,96 @@ function fileExists (path: string): boolean {
   }
 }
 
-function mountHasTarget (mount: string, target: string): boolean {
-  return mount.split(',').some((part) => part.trim() === `target=${target}`)
+function hasMountConflict (mounts: DevcontainerMount[], destination: string): boolean {
+  return mounts.some(mount => mountConflictsWithDestination(mount, destination))
 }
 
-function hasMountTarget (mounts: string[], target: string): boolean {
-  return mounts.some((mount) => mountHasTarget(mount, target))
+export function sourcePathIsInside (path: string, directory: string): boolean {
+  const pathApi = path.includes('\\') || directory.includes('\\')
+    ? win32
+    : { relative, isAbsolute: (candidate: string) => candidate.startsWith('/'), sep: '/' }
+  const pathRelative = pathApi.relative(directory, path)
+
+  return pathRelative === '' || (
+    pathRelative !== '..' &&
+    !pathRelative.startsWith(`..${pathApi.sep}`) &&
+    !pathApi.isAbsolute(pathRelative)
+  )
 }
 
-export function buildGeneratedDevcontainerConfig (context: WorkspaceContext, signing?: GitSigningPlan): DevcontainerConfig {
+interface AgentProfileSource {
+  availability: string
+  source: string
+  stagingTarget: string
+  canonicalDestination: string
+  exists: () => boolean
+}
+
+function agentProfileSources (context: WorkspaceContext, profile: AgentProfile): AgentProfileSource[] {
+  if (profile === 'none') return []
+
+  const sources: AgentProfileSource[] = [
+    {
+      availability: 'agents',
+      source: context.hostAgentsDir,
+      stagingTarget: BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_AGENTS_DIR,
+      canonicalDestination: BOXDOWN_CONTAINER_AGENTS_DIR,
+      exists: () => directoryExists(context.hostAgentsDir)
+    }
+  ]
+
+  if (profile === 'auth') {
+    sources.push(
+      {
+        availability: 'codex-auth',
+        source: context.hostCodexAuthPath,
+        stagingTarget: BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CODEX_AUTH_PATH,
+        canonicalDestination: BOXDOWN_CONTAINER_CODEX_AUTH_PATH,
+        exists: () => fileExists(context.hostCodexAuthPath)
+      },
+      {
+        availability: 'claude-auth',
+        source: context.hostClaudeCredentialsPath ?? '',
+        stagingTarget: BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CLAUDE_CREDENTIALS_PATH,
+        canonicalDestination: BOXDOWN_CONTAINER_CLAUDE_CREDENTIALS_PATH,
+        exists: () => context.hostClaudeCredentialsPath !== undefined && fileExists(context.hostClaudeCredentialsPath)
+      }
+    )
+  } else {
+    sources.push(
+      {
+        availability: 'codex-home',
+        source: context.hostCodexDir,
+        stagingTarget: BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CODEX_DIR,
+        canonicalDestination: BOXDOWN_CONTAINER_CODEX_DIR,
+        exists: () => directoryExists(context.hostCodexDir)
+      },
+      {
+        availability: 'claude-home',
+        source: context.hostClaudeDir,
+        stagingTarget: BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CLAUDE_DIR,
+        canonicalDestination: BOXDOWN_CONTAINER_CLAUDE_DIR,
+        exists: () => directoryExists(context.hostClaudeDir)
+      },
+      {
+        availability: 'claude-config',
+        source: context.hostClaudeConfigPath,
+        stagingTarget: BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CLAUDE_CONFIG_PATH,
+        canonicalDestination: BOXDOWN_CONTAINER_CLAUDE_CONFIG_PATH,
+        exists: () => !sourcePathIsInside(context.hostClaudeConfigPath, context.hostClaudeDir) && fileExists(context.hostClaudeConfigPath)
+      }
+    )
+  }
+
+  return sources
+}
+
+export function buildGeneratedDevcontainerConfig (context: WorkspaceContext, signing?: GitSigningPlan, agentProfile: AgentProfile = DEFAULT_AGENT_PROFILE): DevcontainerConfig {
   const baseConfig = readBaseDevcontainerConfig(context.assetsDevcontainerDir)
   const mounts = Array.isArray(baseConfig.mounts)
     ? baseConfig.mounts
-      .filter((mount): mount is string => typeof mount === 'string')
-      .filter((mount) => !mountHasTarget(mount, BOXDOWN_CONTAINER_GITCONFIG_PATH))
+      .filter(isDevcontainerMount)
+      .filter((mount) => !mountTargetsDestination(mount, BOXDOWN_CONTAINER_GITCONFIG_PATH))
     : []
 
   const boxdownMounts = [
@@ -77,50 +165,16 @@ export function buildGeneratedDevcontainerConfig (context: WorkspaceContext, sig
     `type=bind,source=${context.workspaceSecretEnvDir},target=${BOXDOWN_CONTAINER_SECRET_ENV_DIR},readonly`
   ]
 
-  if (
-    directoryExists(context.hostAgentsDir) &&
-    !hasMountTarget(mounts, BOXDOWN_CONTAINER_AGENTS_DIR)
-  ) {
-    boxdownMounts.push(`type=bind,source=${context.hostAgentsDir},target=${BOXDOWN_CONTAINER_AGENTS_DIR},readonly`)
-  }
-
   if (signing?.enabled === true && signing.agentSocketSource !== undefined) {
     boxdownMounts.push(`type=bind,source=${signing.agentSocketSource},target=/run/boxdown/ssh-agent.sock`)
     boxdownMounts.push(`type=bind,source=${context.gitSigningStateDir},target=/opt/boxdown/state/git-signing,readonly`)
   }
 
-  if (
-    fileExists(context.hostCodexAuthPath) &&
-    !hasMountTarget(mounts, BOXDOWN_CONTAINER_CODEX_DIR) &&
-    !hasMountTarget(mounts, BOXDOWN_CONTAINER_CODEX_AUTH_PATH)
-  ) {
-    boxdownMounts.push(`type=bind,source=${context.hostCodexAuthPath},target=${BOXDOWN_CONTAINER_CODEX_AUTH_PATH},readonly`)
-  }
-
-  if (
-    fileExists(context.hostCodexConfigPath) &&
-    !hasMountTarget(mounts, BOXDOWN_CONTAINER_CODEX_DIR) &&
-    !hasMountTarget(mounts, BOXDOWN_CONTAINER_CODEX_CONFIG_PATH)
-  ) {
-    boxdownMounts.push(`type=bind,source=${context.hostCodexConfigPath},target=${BOXDOWN_CONTAINER_CODEX_CONFIG_PATH},readonly`)
-  }
-
-  if (
-    context.hostClaudeCredentialsPath !== undefined &&
-    fileExists(context.hostClaudeCredentialsPath) &&
-    !hasMountTarget(mounts, BOXDOWN_CONTAINER_CLAUDE_DIR) &&
-    !hasMountTarget(mounts, BOXDOWN_CONTAINER_CLAUDE_CREDENTIALS_PATH)
-  ) {
-    boxdownMounts.push(
-      `type=bind,source=${context.hostClaudeCredentialsPath},target=${BOXDOWN_CONTAINER_CLAUDE_CREDENTIALS_PATH}`
-    )
-  }
-
-  if (
-    fileExists(context.workspaceClaudeMcpConfigPath) &&
-    !hasMountTarget(mounts, BOXDOWN_CONTAINER_CLAUDE_CONFIG_PATH)
-  ) {
-    boxdownMounts.push(`type=bind,source=${context.workspaceClaudeMcpConfigPath},target=${BOXDOWN_CONTAINER_CLAUDE_CONFIG_PATH}`)
+  const availableAgentProfileSources = agentProfileSources(context, agentProfile)
+  for (const source of availableAgentProfileSources) {
+    if (source.exists() && !hasMountConflict(mounts, source.canonicalDestination)) {
+      boxdownMounts.push(`type=bind,source=${source.source},target=${source.stagingTarget},readonly`)
+    }
   }
 
   return {
@@ -132,6 +186,7 @@ export function buildGeneratedDevcontainerConfig (context: WorkspaceContext, sig
       `BOXDOWN_HOST_GITCONFIG_PATH=${shellQuote(context.hostGitconfigPath)}`,
       `BOXDOWN_HOST_GITCONFIG_SNAPSHOT_PATH=${shellQuote(context.hostGitconfigSnapshotPath)}`,
       `BOXDOWN_SECRET_ENV_DIR=${shellQuote(context.workspaceSecretEnvDir)}`,
+      `BOXDOWN_AGENT_PROFILE=${shellQuote(agentProfile)}`,
       `BOXDOWN_PROGRESS=${shellQuote('${localEnv:BOXDOWN_PROGRESS}')}`,
       `BOXDOWN_VERBOSE=${shellQuote('${localEnv:BOXDOWN_VERBOSE}')}`,
       'bash',
@@ -158,6 +213,12 @@ export function buildGeneratedDevcontainerConfig (context: WorkspaceContext, sig
       DEVCONTAINER_SSH_PUBLIC_KEY_FILE: BOXDOWN_CONTAINER_SSH_PUBLIC_KEY_PATH,
       BOXDOWN_GIT_SIGNING_ENABLED: signing?.enabled === true ? '1' : '0',
       BOXDOWN_GIT_SIGNING_KEY_PATH: '/opt/boxdown/state/git-signing/signing-key.pub',
+      BOXDOWN_AGENT_PROFILE: agentProfile,
+      BOXDOWN_AGENT_PROFILE_SOURCES: availableAgentProfileSources
+        .filter(source => source.exists())
+        .map(source => source.availability)
+        .sort()
+        .join(','),
       ...(signing?.enabled === false && signing.reason !== undefined ? { BOXDOWN_GIT_SIGNING_REASON: signing.reason } : {}),
       ...(signing?.enabled === true
         ? {
@@ -169,11 +230,27 @@ export function buildGeneratedDevcontainerConfig (context: WorkspaceContext, sig
   }
 }
 
-export function writeGeneratedDevcontainerConfig (context: WorkspaceContext, signing?: GitSigningPlan): DevcontainerConfig {
-  const config = buildGeneratedDevcontainerConfig(context, signing)
+export function writeGeneratedDevcontainerConfig (context: WorkspaceContext, signing?: GitSigningPlan, agentProfile?: AgentProfile): DevcontainerConfig {
+  const config = buildGeneratedDevcontainerConfig(context, signing, agentProfile)
   mkdirSync(context.workspaceCacheDir, { recursive: true })
   writeFileSync(context.generatedConfigPath, `${JSON.stringify(config, null, 2)}\n`)
   return config
+}
+
+export function agentProfileFromDevcontainerConfig (config: unknown): AgentProfile | undefined {
+  if (typeof config !== 'object' || config === null) return undefined
+  const containerEnv = (config as { containerEnv?: unknown }).containerEnv
+  if (typeof containerEnv !== 'object' || containerEnv === null) return undefined
+  const agentProfile = (containerEnv as { BOXDOWN_AGENT_PROFILE?: unknown }).BOXDOWN_AGENT_PROFILE
+  return typeof agentProfile === 'string' && isAgentProfile(agentProfile) ? agentProfile : undefined
+}
+
+export function readGeneratedAgentProfile (context: WorkspaceContext): AgentProfile | undefined {
+  try {
+    return agentProfileFromDevcontainerConfig(parseJsonc<unknown>(readFileSync(context.generatedConfigPath, 'utf8')))
+  } catch {
+    return undefined
+  }
 }
 
 export function publishContainerPortFromConfig (config: DevcontainerConfig): string | undefined {

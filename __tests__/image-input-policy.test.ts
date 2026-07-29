@@ -143,7 +143,7 @@ test('creates the Claude credential mount parent for the node user', () => {
 
   assert.match(
     dockerfile,
-    /install -d -m 0700 -o node -g node \/home\/node\/\.claude/
+    /install -d -m 0700 -o node -g node \\\s+\/home\/node\/\.claude/
   )
 })
 
@@ -152,23 +152,56 @@ test('creates the Codex configuration mount parent for the node user', () => {
 
   assert.match(
     dockerfile,
-    /install -d -m 0700 -o node -g node .*\/home\/node\/\.codex/
+    /install -d -m 0700 -o node -g node \\\s+\/home\/node\/\.claude \/home\/node\/\.codex/
   )
 })
 
-test('runs a non-root lifecycle smoke test in the built image', () => {
+test('creates UID-remap-safe sticky agent profile state', () => {
+  const dockerfile = readFileSync(dockerfilePath, 'utf8')
+
+  assert.match(
+    dockerfile,
+    /install -d -m 1777 -o root -g root \/opt\/boxdown\/state/
+  )
+})
+
+test('runs a remapped non-root lifecycle smoke test against the actual profile marker path', () => {
   const lifecycleSmoke = readFileSync(imageLifecycleSmokePath, 'utf8')
   const ciWorkflow = readFileSync(ciWorkflowPath, 'utf8')
+  const releaseWorkflow = readFileSync(releaseWorkflowPath, 'utf8')
 
+  assert.match(lifecycleSmoke, /usermod --uid/)
   assert.match(lifecycleSmoke, /test "\$\(id -u\)" -ne 0/)
+  assert.match(lifecycleSmoke, /test "\$\(id -u\)" -ne 1000/)
   assert.match(lifecycleSmoke, /sudo -n true/)
   assert.match(lifecycleSmoke, /ssh-bootstrap\.sh" runtime/)
   assert.match(lifecycleSmoke, /sudo -n -l .*boxdown-ssh-agent-proxy/)
-  assert.match(ciWorkflow, /lifecycle-smoke-test\.sh/)
+  assert.match(lifecycleSmoke, /agent-profile-bootstrap\.mjs/)
+  assert.match(lifecycleSmoke, /BOXDOWN_AGENT_PROFILE_SOURCE_DIR=/)
+  assert.match(lifecycleSmoke, /BOXDOWN_AGENT_PROFILE_HOME=/)
+  assert.match(lifecycleSmoke, /profile_marker="\/opt\/boxdown\/state\/agent-profile"/)
+  assert.doesNotMatch(lifecycleSmoke, /BOXDOWN_AGENT_PROFILE_MARKER_PATH=/)
+  assert.match(lifecycleSmoke, /test -w .*auth\.json/)
+  assert.match(lifecycleSmoke, /test -w "\$\{profile_marker\}"/)
+  assert.match(lifecycleSmoke, /stat -c '%a' "\$\{profile_marker\}".*600/)
+  assert.match(ciWorkflow, /docker run --rm --user root[\s\S]*lifecycle-smoke-test\.sh/)
+  assert.match(releaseWorkflow, /docker run --rm --user root[\s\S]*lifecycle-smoke-test\.sh/)
   assert.match(
     ciWorkflow,
     /assets\/devcontainer",target=\/opt\/boxdown\/devcontainer,readonly/
   )
+})
+
+test('checks the quoted mount policy fixture with Docker Go CSV parsing', () => {
+  const ciWorkflow = readFileSync(ciWorkflowPath, 'utf8')
+  const releaseWorkflow = readFileSync(releaseWorkflowPath, 'utf8')
+  const quotedMount = String.raw`--mount 'type=tmpfs,"dst=/tmp/boxdown ""quoted"",mount"'`
+  const decodedDestination = String.raw`test -d '/tmp/boxdown "quoted",mount'`
+
+  for (const workflow of [ciWorkflow, releaseWorkflow]) {
+    assert.ok(workflow.includes(quotedMount))
+    assert.ok(workflow.includes(decodedDestination))
+  }
 })
 
 const source = 'https://github.com/lirantal/boxdown'

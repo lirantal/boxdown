@@ -1,10 +1,11 @@
 import { existsSync } from 'node:fs'
 
+import { DEFAULT_AGENT_PROFILE, isAgentProfile, resolveAgentProfile, type AgentProfile } from './agent-profile.ts'
 import { codingAgentBinary, codingAgentFromCommand, type CodingAgentCli } from './coding-agents.ts'
 import { buildGeneratedDevcontainerConfig, publishContainerPortFromConfig } from './config.ts'
 import { formatContainerRuntimeFailure, waitForContainerRuntime, type ContainerRuntimeProbe } from './container-runtime.ts'
 import { doctorHasFailures, formatDoctorText, runDoctorChecks, type DoctorCheck } from './doctor.ts'
-import { startDevcontainer, printPortHint, openShell, openCodingAgentCli, ensureContainerSshRuntime, runSshdProxy, refreshContainerGhAuth, refreshContainerCodingAgentClis, ensureContainerCodingAgentCli, findRunningContainerId, findWorkspaceContainer, stopWorkspaceContainer, removeWorkspaceContainer, listWorkspaceContainers, openSshTunnel, type TunnelPortForward } from './devcontainer.ts'
+import { startDevcontainer, printPortHint, openShell, openCodingAgentCli, ensureContainerSshRuntime, runSshdProxy, refreshContainerGhAuth, refreshContainerCodingAgentClis, ensureContainerCodingAgentCli, findRunningContainerId, findWorkspaceContainer, inspectContainerAgentProfile, stopWorkspaceContainer, removeWorkspaceContainer, listWorkspaceContainers, openSshTunnel, type TunnelPortForward } from './devcontainer.ts'
 import { canPromptInteractively, promptConfirm, promptMultiSelect, promptText, type PromptInput, type PromptOutput } from './interactive-prompts.ts'
 import { createWorkspaceListEntries, formatWorkspaceListDetailsText, formatWorkspaceListText } from './list.ts'
 import { createWorkspaceCommandLogger, withLoggedProcessOutput, type WorkspaceCommandLogger } from './logging.ts'
@@ -40,6 +41,7 @@ export type BoxdownCommand =
 
 export interface ParsedCli {
   command: BoxdownCommand
+  agentProfile?: AgentProfile
   agent?: CodingAgentCli
   agentArgs?: string[]
   workspace?: string
@@ -60,7 +62,7 @@ export interface RunCliOptions {
   runDoctorChecks?: typeof runDoctorChecks
   setupWorkspace?: typeof setupWorkspace
   waitForContainerRuntime?: typeof waitForContainerRuntime
-  writeWorkspaceMetadata?: (context: WorkspaceContext, alias: string) => void
+  writeWorkspaceMetadata?: typeof writeWorkspaceMetadata
   prepareContainerLifecycle?: typeof prepareContainerLifecycle
   findRunningContainerId?: typeof findRunningContainerId
   startDevcontainer?: typeof startDevcontainer
@@ -68,15 +70,16 @@ export interface RunCliOptions {
   openShell?: typeof openShell
   ensureContainerCodingAgentCli?: typeof ensureContainerCodingAgentCli
   openCodingAgentCli?: typeof openCodingAgentCli
+  refreshContainerGhAuth?: typeof refreshContainerGhAuth
 }
 
 export const USAGE = `Usage:
-  boxdown setup [--workspace <path>] [--alias <name>] [--recreate] [--target <name>]... [--verbose]
-  boxdown start [--workspace <path>] [--recreate] [--verbose]
-  boxdown codex [--workspace <path>] [--recreate] [--verbose] [-- <codex args...>]
-  boxdown claude [--workspace <path>] [--recreate] [--verbose] [-- <claude args...>]
-  boxdown opencode [--workspace <path>] [--recreate] [--verbose] [-- <opencode args...>]
-  boxdown antigravity [--workspace <path>] [--recreate] [--verbose] [-- <agy args...>]
+  boxdown setup [--workspace <path>] [--alias <name>] [--recreate] [--agent-profile <tier>] [--target <name>]... [--verbose]
+  boxdown start [--workspace <path>] [--recreate] [--agent-profile <tier>] [--verbose]
+  boxdown codex [--workspace <path>] [--recreate] [--agent-profile <tier>] [--verbose] [-- <codex args...>]
+  boxdown claude [--workspace <path>] [--recreate] [--agent-profile <tier>] [--verbose] [-- <claude args...>]
+  boxdown opencode [--workspace <path>] [--recreate] [--agent-profile <tier>] [--verbose] [-- <opencode args...>]
+  boxdown antigravity [--workspace <path>] [--recreate] [--agent-profile <tier>] [--verbose] [-- <agy args...>]
   boxdown list [--details] [--json|--format json]
   boxdown status [--workspace <path>] [--alias <name>] [--json|--format json]
   boxdown stop [--workspace <path>]
@@ -85,9 +88,9 @@ export const USAGE = `Usage:
   boxdown doctor [--workspace <path>]
   boxdown ssh install [--workspace <path>] [--alias <name>] [--target <name>]...
   boxdown ssh uninstall [--workspace <path>] [--alias <name>] [--target <name>]...
-  boxdown ssh-proxy [--workspace <path>] [--alias <name>] [--verbose]
-  boxdown tunnel [--port <port>] [--port <local:remote>] [--workspace <path>] [--alias <name>] [--verbose]
-  boxdown refresh-gh-token [--workspace <path>] [--verbose]
+  boxdown ssh-proxy [--workspace <path>] [--alias <name>] [--agent-profile <tier>] [--verbose]
+  boxdown tunnel [--port <port>] [--port <local:remote>] [--workspace <path>] [--alias <name>] [--agent-profile <tier>] [--verbose]
+  boxdown refresh-gh-token [--workspace <path>] [--agent-profile <tier>] [--verbose]
   boxdown refresh-gh-token-running [--workspace <path>] [--verbose]
 
 Commands:
@@ -142,6 +145,12 @@ Options:
   --port <port>       Tunnel a local port to the same remote port, or use
                       <local:remote>. Repeatable. Supported by tunnel.
   --recreate          Remove the existing devcontainer before starting.
+  --agent-profile <tier>
+                      Select which host agent data is copied when creating a
+                      container: none, auth, full. Defaults to auth. Each
+                      container receives copy-on-create isolation. The full
+                      profile exposes all supported host agent data to the
+                      container; use it only when that exposure is intended.
   --json              Print JSON output. Supported by status and list.
   --format json       Print JSON output. Equivalent to --json.
   --details           Print detailed human list output. Supported by list.
@@ -178,6 +187,7 @@ export function parseCliArgs (argv: string[]): ParsedCli {
   const args = [...argv]
   const workspaces: string[] = []
   let alias: string | undefined
+  let agentProfile: AgentProfile | undefined
   const targets: SshConfigInstallTarget[] = []
   const tunnelPorts: TunnelPortForward[] = []
   let recreate = false
@@ -227,6 +237,10 @@ export function parseCliArgs (argv: string[]): ParsedCli {
       throw new Error('--recreate is not supported with purge')
     }
 
+    if (agentProfile !== undefined && !['setup', 'start', 'ssh-proxy', 'tunnel', 'refresh-gh-token'].includes(command)) {
+      throw new Error('--agent-profile is only supported with setup, start, ssh-proxy, tunnel, refresh-gh-token, and coding-agent')
+    }
+
     const parsedTargets = dedupeSshInstallTargets(targets)
 
     return {
@@ -235,6 +249,7 @@ export function parseCliArgs (argv: string[]): ParsedCli {
       alias,
       ...(parsedTargets.length === 0 ? {} : { targets: parsedTargets }),
       ...(tunnelPorts.length === 0 ? {} : { tunnelPorts }),
+      ...(agentProfile === undefined ? {} : { agentProfile }),
       recreate,
       json,
       ...(details ? { details } : {}),
@@ -269,6 +284,7 @@ export function parseCliArgs (argv: string[]): ParsedCli {
       agentArgs: passthroughArgs ?? [],
       ...workspaceFields('coding-agent'),
       alias,
+      ...(agentProfile === undefined ? {} : { agentProfile }),
       recreate,
       json,
       verbose
@@ -333,6 +349,24 @@ export function parseCliArgs (argv: string[]): ParsedCli {
         throw new Error('--alias requires a value')
       }
       alias = value
+      continue
+    }
+
+    if (arg === '--agent-profile') {
+      if (agentProfile !== undefined) {
+        throw new Error('--agent-profile can only be provided once')
+      }
+
+      const value = args.shift()
+      if (value === undefined) {
+        throw new Error('--agent-profile requires a value')
+      }
+
+      if (!isAgentProfile(value)) {
+        throw new Error(`Unsupported agent profile: ${value}`)
+      }
+
+      agentProfile = value
       continue
     }
 
@@ -986,6 +1020,7 @@ function printSkippedSshInstallTargets (command: 'setup' | 'ssh install'): void 
 }
 
 interface SetupWorkspaceOptions {
+  agentProfile?: AgentProfile
   recreate?: boolean
   targets?: SshConfigInstallTarget[]
   progress?: ProgressReporter
@@ -1001,6 +1036,7 @@ export async function setupWorkspace (
   options: SetupWorkspaceOptions = {}
 ): Promise<void> {
   await (options.start ?? startDevcontainer)(context, {
+    agentProfile: options.agentProfile ?? DEFAULT_AGENT_PROFILE,
     recreate: options.recreate,
     ...(options.logger === undefined ? {} : { logger: options.logger }),
     ...(options.progress === undefined ? {} : { progress: options.progress })
@@ -1185,11 +1221,12 @@ export async function prepareContainerLifecycle (
   alias: string,
   progress: ProgressReporter,
   options: RunCliOptions,
-  logger?: WorkspaceCommandLogger
+  logger?: WorkspaceCommandLogger,
+  agentProfile: AgentProfile = DEFAULT_AGENT_PROFILE
 ): Promise<void> {
   await runContainerRuntimePreflight(context, progress, options, logger)
   const writeMetadata = options.writeWorkspaceMetadata ?? writeWorkspaceMetadata
-  writeMetadata(context, alias)
+  writeMetadata(context, alias, undefined, agentProfile)
 }
 
 async function runSetupPreflight (
@@ -1323,6 +1360,8 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
     const context = createWorkspaceContext({ workspace: parsed.workspace })
     const alias = parsed.alias ?? defaultSshAlias(context.workspaceBasename)
     const aliasSource = parsed.alias === undefined ? 'default' : 'provided'
+    const recordedMetadata = readWorkspaceMetadata(context)
+    const agentProfile = resolveAgentProfile(parsed.agentProfile, recordedMetadata?.agentProfile)
 
     if (parsed.command === 'ssh-install') {
       const resolvedTargets = await resolveSshInstallTargets(parsed, options)
@@ -1332,7 +1371,7 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
         return 1
       }
 
-      writeWorkspaceMetadata(context, alias)
+      writeWorkspaceMetadata(context, alias, undefined, parsed.agentProfile)
       await installSshConfig(context, alias)
 
       if (resolvedTargets.skippedNonInteractive) {
@@ -1363,7 +1402,14 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
 
     if (parsed.command === 'status') {
       const container = await findWorkspaceContainer(context)
-      const status = createStatusInfo(context, alias, container, existsSync, { aliasSource })
+      const containerAgentProfile = container?.state?.toLowerCase() === 'running'
+        ? await inspectContainerAgentProfile(container.id)
+        : undefined
+      const status = createStatusInfo(context, alias, container, existsSync, {
+        aliasSource,
+        agentProfileSelection: resolveAgentProfile(undefined, recordedMetadata?.agentProfile),
+        containerAgentProfile
+      })
 
       if (parsed.json) {
         process.stdout.write(`${JSON.stringify(status, null, 2)}\n`)
@@ -1396,7 +1442,7 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
         return 1
       }
 
-      writeWorkspaceMetadata(context, alias)
+      writeWorkspaceMetadata(context, alias, undefined, agentProfile.value)
       const progress = createCliProgress(parsed, 'stdout', { env: options.env })
       await runLoggedLifecycle(context, 'setup', argv, async (logger) => {
         await withProgressSection(progress, 'Boxdown setup', [
@@ -1406,6 +1452,7 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
         ], async () => {
           progress.setSteps(setupProgressSteps(resolvedTargets.targets))
           await (options.setupWorkspace ?? setupWorkspace)(context, alias, {
+            agentProfile: agentProfile.value,
             recreate: parsed.recreate,
             targets: resolvedTargets.targets,
             progress,
@@ -1427,6 +1474,7 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
     }
 
     if (parsed.command === 'ssh-proxy') {
+      const start = options.startDevcontainer ?? startDevcontainer
       return runLoggedLifecycle(context, 'ssh-proxy', argv, async (logger) => {
         const progress = createCliProgress(parsed, 'stderr', { env: options.env })
         const containerId = await withProgressSection(progress, 'Boxdown SSH proxy', [
@@ -1434,7 +1482,7 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
           `SSH alias: ${alias}`
         ], async () => {
           progress.setSteps(sshProxyProgressSteps())
-          await (options.prepareContainerLifecycle ?? prepareContainerLifecycle)(context, alias, progress, options, logger)
+          await (options.prepareContainerLifecycle ?? prepareContainerLifecycle)(context, alias, progress, options, logger, agentProfile.value)
           progress.startStep('ssh-alias')
           try {
             await installSshConfig(context, alias, { quiet: true })
@@ -1443,7 +1491,8 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
             progress.failStep('ssh-alias')
             throw error
           }
-          const startedContainerId = await startDevcontainer(context, {
+          const startedContainerId = await start(context, {
+            agentProfile: agentProfile.value,
             recreate: parsed.recreate,
             proxyMode: true,
             progress,
@@ -1460,6 +1509,7 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
     }
 
     if (parsed.command === 'tunnel') {
+      const start = options.startDevcontainer ?? startDevcontainer
       const resolvedTunnelPorts = await resolveTunnelPorts(parsed, context, options)
 
       if (resolvedTunnelPorts.cancelled) {
@@ -1479,7 +1529,7 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
           `SSH alias: ${alias}`
         ], async () => {
           progress.setSteps(tunnelProgressSteps())
-          await (options.prepareContainerLifecycle ?? prepareContainerLifecycle)(context, alias, progress, options, logger)
+          await (options.prepareContainerLifecycle ?? prepareContainerLifecycle)(context, alias, progress, options, logger, agentProfile.value)
           progress.startStep('ssh-alias')
           try {
             await installSshConfig(context, alias, { quiet: true })
@@ -1488,7 +1538,8 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
             progress.failStep('ssh-alias')
             throw error
           }
-          await startDevcontainer(context, {
+          await start(context, {
+            agentProfile: agentProfile.value,
             recreate: parsed.recreate,
             progress,
             logger,
@@ -1509,6 +1560,7 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
     }
 
     if (parsed.command === 'refresh-gh-token-running') {
+      const refreshGhAuth = options.refreshContainerGhAuth ?? refreshContainerGhAuth
       return runLoggedLifecycle(context, 'refresh-gh-token-running', argv, async (logger) => {
         const containerId = await (options.findRunningContainerId ?? findRunningContainerId)(context, { logger })
         if (containerId === undefined) {
@@ -1521,7 +1573,7 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
           progress.setSteps(ghAuthProgressSteps(false))
           progress.startStep('devcontainer-running')
           progress.completeStep('devcontainer-running')
-          await refreshContainerGhAuth(context, { progress, logger })
+          await refreshGhAuth(context, { agentProfile: agentProfile.value, progress, logger })
           showDetailedCommandLogPath(progress, context)
         })
         return 0
@@ -1529,15 +1581,17 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
     }
 
     if (parsed.command === 'refresh-gh-token') {
+      const start = options.startDevcontainer ?? startDevcontainer
+      const refreshGhAuth = options.refreshContainerGhAuth ?? refreshContainerGhAuth
       return runLoggedLifecycle(context, 'refresh-gh-token', argv, async (logger) => {
         const progress = createCliProgress(parsed, 'stdout', { env: options.env })
         await withProgressSection(progress, 'Boxdown GitHub auth refresh', [
           `Workspace: ${context.workspaceFolder}`
         ], async () => {
           progress.setSteps(ghAuthProgressSteps(true))
-          await (options.prepareContainerLifecycle ?? prepareContainerLifecycle)(context, alias, progress, options, logger)
-          await startDevcontainer(context, { progress, logger })
-          await refreshContainerGhAuth(context, { progress, logger })
+          await (options.prepareContainerLifecycle ?? prepareContainerLifecycle)(context, alias, progress, options, logger, agentProfile.value)
+          await start(context, { agentProfile: agentProfile.value, progress, logger })
+          await refreshGhAuth(context, { agentProfile: agentProfile.value, progress, logger })
           showDetailedCommandLogPath(progress, context)
         })
         return 0
@@ -1559,8 +1613,9 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
           `Workspace: ${context.workspaceFolder}`
         ], async () => {
           progress.setSteps(codingAgentProgressSteps(agent))
-          await (options.prepareContainerLifecycle ?? prepareContainerLifecycle)(context, alias, progress, options, logger)
+          await (options.prepareContainerLifecycle ?? prepareContainerLifecycle)(context, alias, progress, options, logger, agentProfile.value)
           await start(context, {
+            agentProfile: agentProfile.value,
             recreate: parsed.recreate,
             reuseRunning: true,
             progress,
@@ -1583,8 +1638,9 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
         `Workspace: ${context.workspaceFolder}`
       ], async () => {
         progress.setSteps(startProgressSteps())
-        await (options.prepareContainerLifecycle ?? prepareContainerLifecycle)(context, alias, progress, options, logger)
+        await (options.prepareContainerLifecycle ?? prepareContainerLifecycle)(context, alias, progress, options, logger, agentProfile.value)
         return await start(context, {
+          agentProfile: agentProfile.value,
           recreate: parsed.recreate,
           reuseRunning: true,
           progress,

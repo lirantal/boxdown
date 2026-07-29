@@ -12,22 +12,22 @@ import { describe, test } from 'node:test'
 import { claudeSshConfigEntryForWorkspace, defaultClaudeSshConfigsPath, installClaudeSshConfigHost, mergeClaudeSshConfigHost, parseClaudeSshConfigs, removeClaudeSshConfigHost, uninstallClaudeSshConfigHost } from '../src/claude-app-config.ts'
 import { canonicalCodexRemotePathForWorkspace, codexDiscoveredRemoteHostId, codexProjectEntryForWorkspace, defaultCodexAppConfigPath, defaultCodexGlobalStatePath, installCodexAppConfigProject, installCodexGlobalStateProject, legacyCodexRemotePathForWorkspace, mergeCodexAppProject, normalizeCodexGlobalStateProject, parseCodexAppConfig, removeCodexAppProject, removeCodexGlobalStateProject, uninstallCodexAppConfigProject, uninstallCodexGlobalStateProject } from '../src/codex-app-config.ts'
 import { codingAgentBinary, codingAgentFromCommand, type CodingAgentCli } from '../src/coding-agents.ts'
+import { AGENT_PROFILES, isAgentProfile, resolveAgentProfile } from '../src/agent-profile.ts'
 import { color, formatPromptEnd, formatPromptTitle, promptRail, selectedMark } from '../src/cli-style.ts'
-import { buildGeneratedDevcontainerConfig, publishContainerPortFromConfig } from '../src/config.ts'
-import { BOXDOWN_CONTAINER_AGENTS_DIR, BOXDOWN_CONTAINER_CLAUDE_CONFIG_PATH, BOXDOWN_CONTAINER_CLAUDE_CREDENTIALS_PATH, BOXDOWN_CONTAINER_CLAUDE_DIR, BOXDOWN_CONTAINER_CODEX_AUTH_PATH, BOXDOWN_CONTAINER_CODEX_CONFIG_PATH, BOXDOWN_CONTAINER_CODEX_DIR, BOXDOWN_CONTAINER_GITCONFIG_PATH, BOXDOWN_CONTAINER_HOST_GITCONFIG_DIR, BOXDOWN_CONTAINER_SECRET_ENV_BOOTSTRAP, BOXDOWN_CONTAINER_SECRET_ENV_DIR, DEVCONTAINER_CLI_VERSION } from '../src/constants.ts'
-import { codingAgentDevcontainerExecArgs, isPublishedBoxdownImage, parseDockerInspectImage, sshdProxyDockerArgs, sshTunnelArgs, startDevcontainer } from '../src/devcontainer.ts'
+import { buildGeneratedDevcontainerConfig, publishContainerPortFromConfig, readGeneratedAgentProfile, sourcePathIsInside, writeGeneratedDevcontainerConfig } from '../src/config.ts'
+import { BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_AGENTS_DIR, BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CLAUDE_CONFIG_PATH, BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CLAUDE_CREDENTIALS_PATH, BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CLAUDE_DIR, BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CODEX_AUTH_PATH, BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CODEX_DIR, BOXDOWN_CONTAINER_AGENTS_DIR, BOXDOWN_CONTAINER_CLAUDE_CONFIG_PATH, BOXDOWN_CONTAINER_CLAUDE_CREDENTIALS_PATH, BOXDOWN_CONTAINER_CLAUDE_DIR, BOXDOWN_CONTAINER_CODEX_AUTH_PATH, BOXDOWN_CONTAINER_CODEX_DIR, BOXDOWN_CONTAINER_GITCONFIG_PATH, BOXDOWN_CONTAINER_HOST_GITCONFIG_DIR, BOXDOWN_CONTAINER_SECRET_ENV_BOOTSTRAP, BOXDOWN_CONTAINER_SECRET_ENV_DIR, DEVCONTAINER_CLI_VERSION } from '../src/constants.ts'
+import { codingAgentDevcontainerExecArgs, inspectContainerAgentProfile, isPublishedBoxdownImage, parseDockerInspectImage, sshdProxyDockerArgs, sshTunnelArgs, startDevcontainer } from '../src/devcontainer.ts'
 import { resolveDevcontainerCli } from '../src/devcontainer-cli.ts'
 import { doctorHasFailures, formatDoctorText, runDoctorChecks } from '../src/doctor.ts'
 import { parseSshPublicKey, reportGitSigningPlan, resolveConfiguredSshSigningKey, resolveGitSigningPlan, selectGitSigningKey, type GitSigningPlan, type GitSigningReason } from '../src/git-signing.ts'
 import { canonicalGithubRemoteUrl, configureWorkspaceGithubGitAuth } from '../src/github-git-auth.ts'
 import { parseJsonc } from '../src/jsonc.ts'
-import { prepareClaudeMcpConfig } from '../src/mcp-config.ts'
 import { createWorkspaceListEntries, formatWorkspaceListDetailsText, formatWorkspaceListText } from '../src/list.ts'
 import { createWorkspaceCommandLogger, redactKnownSecretEnvironmentAssignments, withLoggedProcessOutput } from '../src/logging.ts'
 import { commandRequiresContainerRuntime, commandWritesWorkspaceMetadata, parseCliArgs, parseTunnelPort, parseTunnelPortList, prepareContainerLifecycle, runCli, runContainerRuntimePreflight, setupWorkspace, USAGE, type BoxdownCommand } from '../src/main.ts'
 import { listWorkspaceMetadata, readWorkspaceMetadata, recordLegacyImageMigrationNotice, recordWorkspaceDockerImage, workspaceMetadataPath, writeWorkspaceMetadata } from '../src/metadata.ts'
 import { readPackageVersion } from '../src/package-info.ts'
-import { createWorkspaceContext, defaultHostClaudeCredentialsPath } from '../src/paths.ts'
+import { createWorkspaceContext, defaultHostClaudeCredentialsPath, defaultHostClaudeDir, defaultHostCodexDir } from '../src/paths.ts'
 import { createPurgePlan, formatPurgePlanText } from '../src/purge.ts'
 import { promptConfirm, promptMultiSelect, promptText, type PromptInput, type PromptOutput } from '../src/interactive-prompts.ts'
 import { buildHostToolPath, runBuffered, runInteractive } from '../src/process.ts'
@@ -68,6 +68,7 @@ interface FakeDockerWorkspace {
   imageName?: string
   inspectExitCode?: number
   imageRemoveExitCode?: number
+  agentProfileMarker?: string
 }
 
 function runCliProcess (argv: string[], env: NodeJS.ProcessEnv): { code: number, stdout: string, stderr: string } {
@@ -122,7 +123,7 @@ async function withFakeDocker<T> (workspaces: FakeDockerWorkspace[], run: (logPa
     '    previous="$arg"',
     '  done',
     '  if [ "$filter" = "label=devcontainer.local_folder" ]; then',
-    '    while IFS="$(printf \'\\t\')" read -r folder id container_state remove_exit_code image_id image_name inspect_exit_code image_remove_exit_code; do',
+    '    while IFS="$(printf \'\\t\')" read -r folder id container_state remove_exit_code image_id image_name inspect_exit_code image_remove_exit_code agent_profile_marker; do',
     '      printf \'{"ID":"%s","Names":"%s","State":"%s","Status":"%s","Labels":"devcontainer.local_folder=%s"}\\n\' "$id" "$id" "$container_state" "$container_state" "$folder"',
     '    done < "${BOXDOWN_FAKE_DOCKER_STATE}"',
     '    exit 0',
@@ -131,8 +132,17 @@ async function withFakeDocker<T> (workspaces: FakeDockerWorkspace[], run: (logPa
     '  if [ "$workspace" = "$filter" ]; then',
     '    exit 0',
     '  fi',
-    '  while IFS="$(printf \'\\t\')" read -r folder id container_state remove_exit_code image_id image_name inspect_exit_code image_remove_exit_code; do',
+    '  include_stopped=0',
+    '  for arg in "$@"; do',
+    '    if [ "$arg" = "-a" ]; then',
+    '      include_stopped=1',
+    '    fi',
+    '  done',
+    '  while IFS="$(printf \'\\t\')" read -r folder id container_state remove_exit_code image_id image_name inspect_exit_code image_remove_exit_code agent_profile_marker; do',
     '    if [ "$folder" = "$workspace" ]; then',
+    '      if [ "$include_stopped" = "0" ] && [ "$container_state" != "running" ]; then',
+    '        continue',
+    '      fi',
     '      if [[ "$*" == *\'{{.ID}}\'* ]]; then',
     '        printf \'%s\\n\' "$id"',
     '        exit 0',
@@ -145,7 +155,7 @@ async function withFakeDocker<T> (workspaces: FakeDockerWorkspace[], run: (logPa
     'fi',
     'if [ "${1:-}" = "inspect" ]; then',
     '  id="${@: -1}"',
-    '  while IFS="$(printf \'\\t\')" read -r folder container_id container_state remove_exit_code image_id image_name inspect_exit_code image_remove_exit_code; do',
+    '  while IFS="$(printf \'\\t\')" read -r folder container_id container_state remove_exit_code image_id image_name inspect_exit_code image_remove_exit_code agent_profile_marker; do',
     '    if [ "$container_id" = "$id" ]; then',
     '      if [ "${inspect_exit_code:-0}" != "0" ]; then',
     '        exit "$inspect_exit_code"',
@@ -156,9 +166,25 @@ async function withFakeDocker<T> (workspaces: FakeDockerWorkspace[], run: (logPa
     '  done < "${BOXDOWN_FAKE_DOCKER_STATE}"',
     '  exit 1',
     'fi',
+    'if [ "${1:-}" = "exec" ] && [ "${3:-}" = "cat" ] && [ "${4:-}" = "/opt/boxdown/state/agent-profile" ]; then',
+    '  id="${2:-}"',
+    '  while IFS="$(printf \'\\t\')" read -r folder container_id container_state remove_exit_code image_id image_name inspect_exit_code image_remove_exit_code agent_profile_marker; do',
+    '    if [ "$container_id" = "$id" ]; then',
+    '      if [ "$container_state" != "running" ]; then',
+    '        exit 1',
+    '      fi',
+    '      if [ "${agent_profile_marker:--}" = "-" ]; then',
+    '        exit 1',
+    '      fi',
+    '      printf \'%s\\n\' "$agent_profile_marker"',
+    '      exit 0',
+    '    fi',
+    '  done < "${BOXDOWN_FAKE_DOCKER_STATE}"',
+    '  exit 1',
+    'fi',
     'if [ "${1:-}" = "rm" ]; then',
     '  id="${@: -1}"',
-    '  while IFS="$(printf \'\\t\')" read -r folder container_id container_state remove_exit_code image_id image_name inspect_exit_code image_remove_exit_code; do',
+    '  while IFS="$(printf \'\\t\')" read -r folder container_id container_state remove_exit_code image_id image_name inspect_exit_code image_remove_exit_code agent_profile_marker; do',
     '    if [ "$container_id" = "$id" ]; then',
     '      exit "${remove_exit_code:-0}"',
     '    fi',
@@ -167,7 +193,7 @@ async function withFakeDocker<T> (workspaces: FakeDockerWorkspace[], run: (logPa
     'fi',
     'if [ "${1:-}" = "image" ] && [ "${2:-}" = "rm" ]; then',
     '  image_id="${@: -1}"',
-    '  while IFS="$(printf \'\\t\')" read -r folder container_id container_state remove_exit_code recorded_image_id image_name inspect_exit_code image_remove_exit_code; do',
+    '  while IFS="$(printf \'\\t\')" read -r folder container_id container_state remove_exit_code recorded_image_id image_name inspect_exit_code image_remove_exit_code agent_profile_marker; do',
     '    if [ "$recorded_image_id" = "$image_id" ]; then',
     '      exit "${image_remove_exit_code:-0}"',
     '    fi',
@@ -185,7 +211,8 @@ async function withFakeDocker<T> (workspaces: FakeDockerWorkspace[], run: (logPa
     workspace.imageId ?? `sha256:${workspace.id}-image`,
     workspace.imageName ?? `boxdown-test:${workspace.id}`,
     String(workspace.inspectExitCode ?? 0),
-    String(workspace.imageRemoveExitCode ?? 0)
+    String(workspace.imageRemoveExitCode ?? 0),
+    workspace.agentProfileMarker ?? '-'
   ].join('\t')).join('\n')}\n`)
   writeFileSync(dockerPath, script)
   chmodSync(dockerPath, 0o755)
@@ -204,6 +231,71 @@ function fakeDockerCalls (logPath: string): string[] {
   }
 
   return readFileSync(logPath, 'utf8').trim().split(/\r?\n/).filter((line) => line.length > 0)
+}
+
+async function inspectFakeContainerAgentProfile (containerId: string): Promise<'none' | 'auth' | 'full' | undefined> {
+  return inspectContainerAgentProfile(containerId)
+}
+
+function updateFakeDockerContainer (
+  env: NodeJS.ProcessEnv,
+  containerId: string,
+  updates: { workspace?: string, containerState?: string, agentProfileMarker?: string }
+): void {
+  const statePath = env.BOXDOWN_FAKE_DOCKER_STATE
+  assert.notStrictEqual(statePath, undefined)
+  const lines = readFileSync(statePath as string, 'utf8').trimEnd().split('\n')
+  const updated = lines.map((line) => {
+    const fields = line.split('\t')
+    if (fields[1] !== containerId) return line
+    if (updates.workspace !== undefined) fields[0] = realpathSync(updates.workspace)
+    if (updates.containerState !== undefined) fields[2] = updates.containerState
+    if (updates.agentProfileMarker !== undefined) fields[8] = updates.agentProfileMarker
+    return fields.join('\t')
+  })
+  writeFileSync(statePath as string, `${updated.join('\n')}\n`)
+}
+
+function recordProgressStepEvents (
+  progress: ReturnType<typeof createProgress>,
+  stepId: string
+): string[] {
+  const events: string[] = []
+  const startStep = progress.startStep.bind(progress)
+  const completeStep = progress.completeStep.bind(progress)
+  const failStep = progress.failStep.bind(progress)
+
+  progress.startStep = (id) => {
+    if (id === stepId) events.push(`start:${id}`)
+    startStep(id)
+  }
+  progress.completeStep = (id) => {
+    if (id === stepId) events.push(`complete:${id}`)
+    completeStep(id)
+  }
+  progress.failStep = (id) => {
+    if (id === stepId) events.push(`fail:${id}`)
+    failStep(id)
+  }
+
+  return events
+}
+
+function recordProgressSpinnerEvents (progress: ReturnType<typeof createProgress>): string[] {
+  const events: string[] = []
+  const startSpinner = progress.startSpinner.bind(progress)
+  const stopSpinner = progress.stopSpinner.bind(progress)
+
+  progress.startSpinner = (message) => {
+    events.push(`start:${message}`)
+    startSpinner(message)
+  }
+  progress.stopSpinner = (status = 'clear') => {
+    events.push(`stop:${status}`)
+    stopSpinner(status)
+  }
+
+  return events
 }
 
 const codexPromptChoice = {
@@ -286,6 +378,27 @@ async function withCwd<T> (cwd: string, run: () => Promise<T>): Promise<T> {
 }
 
 describe('CLI parsing', () => {
+  test('resolves agent profiles by explicit, recorded, and default precedence', () => {
+    assert.deepStrictEqual(resolveAgentProfile('full', 'none'), {
+      value: 'full',
+      source: 'explicit'
+    })
+    assert.deepStrictEqual(resolveAgentProfile(undefined, 'none'), {
+      value: 'none',
+      source: 'metadata'
+    })
+    assert.deepStrictEqual(resolveAgentProfile(undefined, undefined), {
+      value: 'auth',
+      source: 'default'
+    })
+  })
+
+  test('recognizes exactly the public agent profile values', () => {
+    assert.deepStrictEqual(AGENT_PROFILES, ['none', 'auth', 'full'])
+    for (const profile of AGENT_PROFILES) assert.strictEqual(isAgentProfile(profile), true)
+    for (const value of ['', 'bare', 'portable', 'other', 'AUTH', 'full ']) assert.strictEqual(isAgentProfile(value), false)
+  })
+
   test('parses setup options', () => {
     assert.deepStrictEqual(parseCliArgs(['setup']), {
       command: 'setup',
@@ -324,6 +437,25 @@ describe('CLI parsing', () => {
       json: false,
       verbose: false
     })
+  })
+
+  test('parses each agent profile on every container-creating command', () => {
+    const commands: Array<{ argv: string[], command: BoxdownCommand }> = [
+      { argv: ['setup'], command: 'setup' },
+      { argv: ['start'], command: 'start' },
+      { argv: ['codex'], command: 'coding-agent' }
+    ]
+
+    for (const { argv, command } of commands) {
+      for (const profile of AGENT_PROFILES) {
+        const before = parseCliArgs(['--agent-profile', profile, ...argv])
+        const after = parseCliArgs([...argv, '--agent-profile', profile])
+
+        assert.strictEqual(before.command, command)
+        assert.strictEqual(before.agentProfile, profile)
+        assert.strictEqual(after.agentProfile, profile)
+      }
+    }
   })
 
   test('maps shell to start', () => {
@@ -678,19 +810,31 @@ describe('CLI parsing', () => {
     assert.throws(() => parseCliArgs(['tunnel', '--port', '0']), /Invalid tunnel port: 0/)
     assert.throws(() => parseCliArgs(['tunnel', '--port', '65536']), /Invalid tunnel port: 65536/)
     assert.throws(() => parseCliArgs(['tunnel', '--port', '3030:3031:3032']), /Invalid tunnel port: 3030:3031:3032/)
+    assert.throws(() => parseCliArgs(['setup', '--agent-profile']), /--agent-profile requires a value/)
+    assert.throws(() => parseCliArgs(['setup', '--agent-profile', 'other']), /Unsupported agent profile: other/)
+    assert.throws(() => parseCliArgs(['setup', '--agent-profile', 'none', '--agent-profile', 'full']), /--agent-profile can only be provided once/)
+
+    for (const command of [
+      'refresh-gh-token-running', 'status', 'list', 'stop', 'down', 'purge', 'doctor', 'ssh', 'ssh uninstall'
+    ]) {
+      assert.throws(
+        () => parseCliArgs([...command.split(' '), '--agent-profile', 'auth']),
+        /--agent-profile is only supported with setup, start, ssh-proxy, tunnel, refresh-gh-token, and coding-agent/
+      )
+    }
   })
 
   test('help describes available commands', () => {
     const usageLines = USAGE.split(/\r?\n/)
 
     assert.match(USAGE, /Commands:/)
-    assert.match(USAGE, /boxdown setup \[--workspace <path>\] \[--alias <name>\] \[--recreate\] \[--target <name>\]\.\.\. \[--verbose\]/)
-    assert.match(USAGE, /boxdown start \[--workspace <path>\] \[--recreate\] \[--verbose\]/)
-    assert.match(USAGE, /boxdown codex \[--workspace <path>\] \[--recreate\] \[--verbose\] \[-- <codex args\.\.\.>\]/)
-    assert.match(USAGE, /boxdown claude \[--workspace <path>\] \[--recreate\] \[--verbose\] \[-- <claude args\.\.\.>\]/)
-    assert.match(USAGE, /boxdown opencode \[--workspace <path>\] \[--recreate\] \[--verbose\] \[-- <opencode args\.\.\.>\]/)
-    assert.match(USAGE, /boxdown antigravity \[--workspace <path>\] \[--recreate\] \[--verbose\] \[-- <agy args\.\.\.>\]/)
-    assert.match(USAGE, /boxdown tunnel \[--port <port>\] \[--port <local:remote>\] \[--workspace <path>\] \[--alias <name>\] \[--verbose\]/)
+    assert.match(USAGE, /boxdown setup \[--workspace <path>\] \[--alias <name>\] \[--recreate\] \[--agent-profile <tier>\] \[--target <name>\]\.\.\. \[--verbose\]/)
+    assert.match(USAGE, /boxdown start \[--workspace <path>\] \[--recreate\] \[--agent-profile <tier>\] \[--verbose\]/)
+    assert.match(USAGE, /boxdown codex \[--workspace <path>\] \[--recreate\] \[--agent-profile <tier>\] \[--verbose\] \[-- <codex args\.\.\.>\]/)
+    assert.match(USAGE, /boxdown claude \[--workspace <path>\] \[--recreate\] \[--agent-profile <tier>\] \[--verbose\] \[-- <claude args\.\.\.>\]/)
+    assert.match(USAGE, /boxdown opencode \[--workspace <path>\] \[--recreate\] \[--agent-profile <tier>\] \[--verbose\] \[-- <opencode args\.\.\.>\]/)
+    assert.match(USAGE, /boxdown antigravity \[--workspace <path>\] \[--recreate\] \[--agent-profile <tier>\] \[--verbose\] \[-- <agy args\.\.\.>\]/)
+    assert.match(USAGE, /boxdown tunnel \[--port <port>\] \[--port <local:remote>\] \[--workspace <path>\] \[--alias <name>\] \[--agent-profile <tier>\] \[--verbose\]/)
     assert.match(USAGE, /boxdown ssh uninstall \[--workspace <path>\] \[--alias <name>\] \[--target <name>\]\.\.\./)
     assert.match(USAGE, /boxdown list \[--details\] \[--json\|--format json\]/)
     assert.match(USAGE, /boxdown status \[--workspace <path>\] \[--alias <name>\] \[--json\|--format json\]/)
@@ -733,6 +877,11 @@ describe('CLI parsing', () => {
     assert.match(USAGE, /ssh-proxy\s+Internal command used by the generated SSH/)
     assert.match(USAGE, /tunnel\s+Start or reuse the devcontainer/)
     assert.match(USAGE, /boxdown tunnel \[--port <port>\]/)
+    assert.match(USAGE, /--agent-profile <tier>/)
+    assert.match(USAGE, /none, auth, full/)
+    assert.match(USAGE, /Defaults to auth/)
+    assert.match(USAGE, /copy-on-create isolation/)
+    assert.match(USAGE, /full\s+profile exposes/)
     assert.match(USAGE, /--port <port>\s+Tunnel a local port/)
     assert.match(USAGE, /refresh-gh-token\s+Start or reuse the devcontainer/)
     assert.match(USAGE, /refresh-gh-token-running\s+Refresh GitHub CLI auth only if/)
@@ -749,12 +898,13 @@ describe('CLI parsing', () => {
     assert.match(readme, /host checkout.*\/workspaces\/<repo-name>.*writable/is)
     assert.match(readme, /packaged assets, public SSH key, host Git-config\s+snapshot, and runtime-secret directory read-only/is)
     assert.match(readme, /host Git-config\s+snapshot.*writable `\/home\/node\/\.gitconfig`/is)
-    assert.match(readme, /`~\/\.agents`.*read-only.*`\/home\/node\/\.agents`/is)
-    assert.match(readme, /`~\/\.codex\/auth\.json`.*read-only.*`\/home\/node\/\.codex\/auth\.json`/is)
+    assert.match(readme, /Agent profiles/is)
+    assert.match(readme, /copy on container creation/is)
     assert.match(readme, /SSH-agent socket.*`\/run\/boxdown\/ssh-agent\.sock`.*signing-key state.*read-only/is)
-    assert.match(readme, /Recreate the container.*mount configuration.*SSH-agent\s+socket path/is)
-    assert.match(readme, /contents.*already mounted.*without recreation/is)
-    assert.match(readme, /`boxdown down`\s+removes the container and per-workspace runtime-secret state\.\s+It retains\s+persistent cache\/data state: metadata, SSH keys, generated config, and command\s+log\./)
+    assert.match(readme, /Recreate the container.*--agent-profile.*custom mount.*host sources/is)
+    assert.match(readme, /Changes on the host do not update a stopped\s+or running existing container\./)
+    assert.match(readme, /`boxdown down` removes the container.*runtime-secret state/is)
+    assert.match(readme, /retains persistent cache\/data state/)
     assert.match(readme, /`stop`.*`down`.*`purge`/is)
   })
 
@@ -800,19 +950,76 @@ describe('CLI parsing', () => {
   })
 })
 
-test('documents narrow host Claude credential forwarding', () => {
+test('documents agent profile tiers', () => {
   const readme = readFileSync(join(process.cwd(), 'README.md'), 'utf8')
   const stateDocs = readFileSync(join(process.cwd(), 'docs/features/generated-config-and-state.md'), 'utf8')
   const startDocs = readFileSync(join(process.cwd(), 'docs/features/start-and-shell.md'), 'utf8')
   const lifecycleDocs = readFileSync(join(process.cwd(), 'docs/features/lifecycle.md'), 'utf8')
+  const setupDocs = readFileSync(join(process.cwd(), 'docs/features/setup.md'), 'utf8')
+  const architecture = readFileSync(join(process.cwd(), 'docs/architecture.md'), 'utf8')
+  const assetDocs = readFileSync(join(process.cwd(), 'assets/devcontainer/README.md'), 'utf8')
+  const profileDesign = readFileSync(join(process.cwd(), 'docs/superpowers/specs/2026-07-28-agent-profile-tiers-design.md'), 'utf8')
+  const devcontainerTemplate = readFileSync(join(process.cwd(), 'assets/devcontainer/devcontainer.json'), 'utf8')
 
-  assert.match(readme, /Run Claude Code and complete `\/login`\s+on the host, then run `boxdown start --recreate`/)
-  assert.match(stateDocs, /\.claude\/\.credentials\.json/)
-  assert.match(stateDocs, /does not mount.*~\/\.claude.*~\/\.claude\.json/is)
-  assert.match(stateDocs, /macOS.*Keychain/is)
-  assert.match(stateDocs, /UID\/GID.*Linux\/WSL.*writable credential mount/is)
-  assert.match(startDocs, /Run Claude Code and complete `\/login` on the host, then run `boxdown start\s+--recreate`/)
-  assert.match(lifecycleDocs, /does not remove host Claude credentials/is)
+  assert.match(readme, /\| `none` \| no host user-scoped agent profile or Claude API key \|/)
+  assert.match(readme, /\| `auth` \| file-backed auth, Claude API key, complete `~\/\.agents` \|/)
+  assert.match(readme, /\| `full` \| opaque complete Codex\/Claude homes plus `~\/\.agents` \|/)
+  assert.match(readme, /`auth` is the default/is)
+  assert.match(readme, /--agent-profile none\|auth\|full/)
+  assert.match(readme, /read-only staging.*container-local writable cop(?:y|ies)/is)
+  assert.match(readme, /no reverse synchronization/is)
+  assert.match(readme, /repository-scoped.*remains? visible/is)
+  assert.match(readme, /macOS.*Keychain.*not copied/is)
+  assert.match(readme, /sensitive.*size.*portab(?:ility|le).*broken paths.*native\s+dependenc(?:y|ies)/is)
+  assert.match(readme, /custom mount.*canonical.*externally managed/is)
+  assert.match(readme, /changes the previous forwarding model.*Codex\s+config.*Claude MCP projection.*writable host mount/is)
+  assert.match(readme, /user-scoped MCP.*repository.*`full`/is)
+
+  assert.match(setupDocs, /--agent-profile <tier>/)
+  assert.match(startDocs, /--agent-profile <tier>/)
+  assert.match(stateDocs, /read-only staging.*container-local writable cop(?:y|ies)/is)
+  assert.match(stateDocs, /no reverse\s+synchronization/is)
+  assert.ok(stateDocs.includes(String.raw`%USERPROFILE%\.claude\.credentials.json`))
+  assert.ok(!stateDocs.includes(String.raw`%USERPROFILE%\.claude.credentials.json`))
+  assert.match(lifecycleDocs, /stop.*preserves.*profile/is)
+  assert.match(lifecycleDocs, /down.*recreate.*discard.*profile/is)
+  assert.match(architecture, /metadata selection\s*->\s*generated staging intent\s*->\s*container applied marker/)
+  assert.match(architecture, /mismatch.*recreation/is)
+  assert.match(assetDocs, /staging tree/is)
+  assert.match(assetDocs, /bootstrap.*marker/is)
+  assert.match(assetDocs, /non-root\s+remote user/is)
+  assert.match(assetDocs, /source-file.*failure.*non-fatal/is)
+  for (const document of [stateDocs, assetDocs, profileDesign]) {
+    assert.match(
+      document,
+      /static symlinks.*(?:reproduced|copied)\s+as links.*final-component regular file.*fails\s+closed/is
+    )
+    assert.match(
+      document,
+      /concurrent host\s+replacement.*traversed parent\s+directory.*outside the isolation guarantee.*(?:fail|copy)\s+best-effort/is
+    )
+    assert.match(
+      document,
+      /malformed CSV string mount.*unresolved.*string mount.*all canonical profile destinations/is
+    )
+    assert.match(
+      document,
+      /structured mount.*present serialized `type`, `src`\/`source`, and\s+`dst`\/`target`\/`destination`/is
+    )
+    assert.match(
+      document,
+      /non-string value, unresolved.*comma, double quote, carriage return, line feed, or NUL makes all\s+canonical profile destinations/is
+    )
+    assert.match(document, /includes substitutions\s+confined to the type or source fields/is)
+    assert.match(document, /opaque unknown fields.*not interpreted\s+as mount grammar/is)
+    assert.doesNotMatch(document, /structured mount.*source.*does not claim a destination/is)
+    assert.match(
+      document,
+      /original mount.*preserved unchanged.*status.*canonical.*never.*substitution values/is
+    )
+  }
+  assert.match(devcontainerTemplate, /profile sources are staged read-only.*container-local writable copies/is)
+  assert.doesNotMatch(devcontainerTemplate, /Codex auth\.json is mounted automatically|host-owned writable credential mounts/i)
 })
 
 test('documents interactive container reuse lifecycle', () => {
@@ -1302,6 +1509,150 @@ describe('CLI execution', () => {
     assert.strictEqual(existsSync(context.generatedConfigPath), false)
   })
 
+  test('invalid agent profiles do not create metadata or invoke the container runtime', async () => {
+    const workspace = tempDir('invalid-agent-profile-workspace')
+    const env = {
+      CI: '1',
+      BOXDOWN_CACHE_HOME: tempDir('invalid-agent-profile-cache'),
+      BOXDOWN_DATA_HOME: tempDir('invalid-agent-profile-data')
+    }
+    const calls: string[] = []
+
+    const code = await withProcessEnv(env, async () => runCli([
+      'start', '--workspace', workspace, '--agent-profile', 'other'
+    ], {
+      env,
+      waitForContainerRuntime: async () => {
+        calls.push('runtime')
+        return { state: 'ready', mode: 'buildx', warnings: [] }
+      },
+      writeWorkspaceMetadata: () => { calls.push('metadata') }
+    }))
+
+    const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+    assert.strictEqual(code, 1)
+    assert.deepStrictEqual(calls, [])
+    assert.strictEqual(existsSync(workspaceMetadataPath(context)), false)
+  })
+
+  test('forwards the resolved agent profile through the start lifecycle', async () => {
+    const workspace = tempDir('agent-profile-lifecycle-workspace')
+    const env = {
+      CI: '1',
+      BOXDOWN_CACHE_HOME: tempDir('agent-profile-lifecycle-cache'),
+      BOXDOWN_DATA_HOME: tempDir('agent-profile-lifecycle-data')
+    }
+    const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+    const calls: string[] = []
+
+    writeWorkspaceMetadata(context, 'agent-profile-devcontainer', undefined, 'full')
+
+    const code = await withProcessEnv(env, async () => runCli([
+      'start', '--workspace', workspace, '--agent-profile', 'none'
+    ], {
+      env,
+      prepareContainerLifecycle: async (_context, _alias, _progress, _options, _logger, profile) => {
+        calls.push(`lifecycle:${profile}`)
+      },
+      startDevcontainer: async (_context, options) => {
+        calls.push(`start:${options.agentProfile}`)
+        return 'agent-profile-container'
+      },
+      printPortHint: async () => { calls.push('port') },
+      openShell: async () => { calls.push('shell'); return 0 }
+    }))
+
+    assert.strictEqual(code, 0)
+    assert.deepStrictEqual(calls, ['lifecycle:none', 'start:none', 'port', 'shell'])
+  })
+
+  test('propagates agent profile through every container lifecycle', async () => {
+    const cases: Array<{
+      name: string
+      argv: string[]
+      explicit?: 'none' | 'auth' | 'full'
+      recorded?: 'none' | 'auth' | 'full'
+      expected: 'none' | 'auth' | 'full'
+      refresh?: boolean
+      shortCircuitAfterStart?: boolean
+    }> = [
+      { name: 'setup explicit', argv: ['setup'], explicit: 'full', recorded: 'none', expected: 'full' },
+      { name: 'start metadata', argv: ['start'], recorded: 'none', expected: 'none' },
+      { name: 'Codex default', argv: ['codex'], expected: 'auth' },
+      { name: 'Claude explicit', argv: ['claude'], explicit: 'full', recorded: 'none', expected: 'full' },
+      { name: 'OpenCode metadata', argv: ['opencode'], recorded: 'none', expected: 'none' },
+      { name: 'Antigravity default', argv: ['antigravity'], expected: 'auth' },
+      { name: 'SSH proxy explicit', argv: ['ssh-proxy'], explicit: 'full', recorded: 'auth', expected: 'full', shortCircuitAfterStart: true },
+      { name: 'tunnel metadata', argv: ['tunnel', '--port', '8080'], recorded: 'none', expected: 'none', shortCircuitAfterStart: true },
+      { name: 'refresh GitHub token default', argv: ['refresh-gh-token'], expected: 'auth', refresh: true }
+    ]
+
+    for (const entry of cases) {
+      const slug = entry.name.toLowerCase().replaceAll(' ', '-')
+      const workspace = tempDir(`propagates-agent-profile-${slug}-workspace`)
+      const env = {
+        CI: '1',
+        BOXDOWN_CACHE_HOME: tempDir(`propagates-agent-profile-${slug}-cache`),
+        BOXDOWN_DATA_HOME: tempDir(`propagates-agent-profile-${slug}-data`),
+        BOXDOWN_SSH_CONFIG: join(tempDir(`propagates-agent-profile-${slug}-ssh`), 'config')
+      }
+      const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+      const starts: Array<'none' | 'auth' | 'full' | undefined> = []
+      const refreshes: Array<'none' | 'auth' | 'full' | undefined> = []
+      const sentinel = new Error(`stop after start: ${entry.name}`)
+
+      if (entry.recorded !== undefined) {
+        writeWorkspaceMetadata(context, 'recorded-profile-devcontainer', undefined, entry.recorded)
+      }
+
+      const argv = [
+        ...entry.argv,
+        '--workspace',
+        workspace,
+        ...(entry.explicit === undefined ? [] : ['--agent-profile', entry.explicit])
+      ]
+      const runCase = async (): Promise<number> => withProcessEnv(env, async () => runCli(argv, {
+        env,
+        waitForContainerRuntime: async () => ({ state: 'ready', mode: 'buildx', warnings: [] }),
+        runDoctorChecks: async () => [],
+        prepareContainerLifecycle: async (receivedContext, alias, progress, lifecycleOptions, logger, profile) => {
+          await prepareContainerLifecycle(receivedContext, alias, progress, lifecycleOptions, logger, profile)
+        },
+        setupWorkspace: async (receivedContext, alias, setupOptions) => {
+          await setupWorkspace(receivedContext, alias, {
+            ...setupOptions,
+            start: async (_startContext, startOptions) => {
+              starts.push(startOptions.agentProfile)
+              return 'profile-container'
+            },
+            installSsh: async () => {},
+            installTarget: async () => {}
+          })
+        },
+        startDevcontainer: async (_startContext, startOptions) => {
+          starts.push(startOptions.agentProfile)
+          if (entry.shortCircuitAfterStart === true) throw sentinel
+          return 'profile-container'
+        },
+        printPortHint: async () => {},
+        openShell: async () => 0,
+        ensureContainerCodingAgentCli: async () => {},
+        openCodingAgentCli: async () => 0,
+        refreshContainerGhAuth: async (_refreshContext, refreshOptions) => {
+          refreshes.push(refreshOptions.agentProfile)
+        }
+      }))
+      const code = entry.shortCircuitAfterStart === true
+        ? await assert.rejects(runCase(), (error: unknown) => error === sentinel).then(() => 1)
+        : await runCase()
+
+      assert.strictEqual(code, entry.shortCircuitAfterStart === true ? 1 : 0, entry.name)
+      assert.deepStrictEqual(starts, [entry.expected], entry.name)
+      assert.strictEqual(readWorkspaceMetadata(context)?.agentProfile, entry.expected, entry.name)
+      assert.deepStrictEqual(refreshes, entry.refresh === true ? [entry.expected] : [], entry.name)
+    }
+  })
+
   test('setup continues after a non-blocking readiness warning', async () => {
     const workspace = tempDir('setup-preflight-warning-workspace')
     const dataHome = tempDir('setup-preflight-warning-data')
@@ -1540,6 +1891,22 @@ describe('CLI execution', () => {
     assert.deepStrictEqual(calls, ['runtime', 'metadata'])
   })
 
+  test('container lifecycle persists the default agent profile for direct callers', async () => {
+    const context = createWorkspaceContext({
+      workspace: tempDir('container-lifecycle-default-profile-workspace'),
+      env: { BOXDOWN_CACHE_HOME: tempDir('container-lifecycle-default-profile-cache'), BOXDOWN_DATA_HOME: tempDir('container-lifecycle-default-profile-data') },
+      assetsDevcontainerDir
+    })
+    const progress = createProgress({ mode: 'none' })
+    progress.setSteps([{ id: 'container-runtime', label: 'Checking container runtime' }])
+
+    await prepareContainerLifecycle(context, 'boxdown-default-profile', progress, {
+      waitForContainerRuntime: async () => ({ state: 'ready', mode: 'buildx', warnings: [] })
+    })
+
+    assert.strictEqual(readWorkspaceMetadata(context)?.agentProfile, 'auth')
+  })
+
   test('verbose readiness emits a final outcome for Buildx and fallback success', async () => {
     const context = createWorkspaceContext({
       workspace: tempDir('verbose-runtime-ready-workspace'),
@@ -1625,7 +1992,7 @@ describe('CLI execution', () => {
     await setupWorkspace(context, alias, {
       start: async (receivedContext, options) => {
         assert.strictEqual(receivedContext, context)
-        assert.deepStrictEqual(options, { recreate: undefined })
+        assert.deepStrictEqual(options, { agentProfile: 'auth', recreate: undefined })
         assert.strictEqual('reuseRunning' in options, false)
         calls.push('start')
         return 'setup-container'
@@ -1658,7 +2025,7 @@ describe('CLI execution', () => {
       targets: ['codex'],
       start: async (receivedContext, options) => {
         assert.strictEqual(receivedContext, context)
-        assert.deepStrictEqual(options, { recreate: true })
+        assert.deepStrictEqual(options, { agentProfile: 'auth', recreate: true })
         calls.push('start')
         return 'setup-container'
       },
@@ -2081,6 +2448,34 @@ describe('CLI execution', () => {
     assert.strictEqual(existsSync(sshConfigPath), true)
     assert.strictEqual(codexConfig.remoteConnections.length, 1)
     assert.strictEqual(codexConfig.remoteConnections[0]?.projects[0]?.label, realpathSync(workspace).split('/').at(-1))
+  })
+
+  test('ssh install preserves metadata-only agent profile state', () => {
+    const cases: Array<{ name: string, initialProfile?: 'full', writeMetadata: boolean }> = [
+      { name: 'existing-profile', initialProfile: 'full', writeMetadata: true },
+      { name: 'legacy-profile', writeMetadata: true },
+      { name: 'missing-profile', writeMetadata: false }
+    ]
+
+    for (const entry of cases) {
+      const workspace = tempDir(`ssh-install-agent-profile-${entry.name}-workspace`)
+      const env = {
+        HOME: tempDir(`ssh-install-agent-profile-${entry.name}-home`),
+        BOXDOWN_CACHE_HOME: tempDir(`ssh-install-agent-profile-${entry.name}-cache`),
+        BOXDOWN_DATA_HOME: tempDir(`ssh-install-agent-profile-${entry.name}-data`),
+        BOXDOWN_SSH_CONFIG: join(tempDir(`ssh-install-agent-profile-${entry.name}-ssh`), 'config')
+      }
+      const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+
+      if (entry.writeMetadata) {
+        writeWorkspaceMetadata(context, defaultSshAlias(context.workspaceBasename), undefined, entry.initialProfile)
+      }
+
+      const result = runCliProcess(['ssh', 'install', '--workspace', workspace], { ...process.env, ...env })
+
+      assert.strictEqual(result.code, 0, entry.name)
+      assert.strictEqual(readWorkspaceMetadata(context)?.agentProfile, entry.initialProfile, entry.name)
+    }
   })
 
   test('installs explicit Claude ssh install target', () => {
@@ -3660,6 +4055,52 @@ describe('host tool path', () => {
 })
 
 describe('workspace metadata', () => {
+  test('migrates legacy agent profile metadata and preserves a selected profile', () => {
+    const workspace = tempDir('metadata-profile-workspace')
+    const data = tempDir('metadata-profile-data')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('metadata-profile-cache'),
+        BOXDOWN_DATA_HOME: data
+      },
+      assetsDevcontainerDir
+    })
+
+    assert.deepStrictEqual(resolveAgentProfile(undefined, readWorkspaceMetadata(context)?.agentProfile), {
+      value: 'auth',
+      source: 'default'
+    })
+
+    mkdirSync(context.workspaceDataDir, { recursive: true })
+    writeFileSync(workspaceMetadataPath(context), `${JSON.stringify({
+      version: 1,
+      workspaceId: context.workspaceId,
+      workspaceFolder: context.workspaceFolder,
+      workspaceBasename: context.workspaceBasename,
+      sshAlias: 'legacy-devcontainer',
+      firstSeenAt: '2026-01-01T00:00:00.000Z',
+      lastSeenAt: '2026-01-01T00:00:00.000Z',
+      dockerImageId: 'sha256:legacy-image',
+      dockerImageName: 'boxdown-legacy:latest',
+      dockerImageLastSeenAt: '2026-01-01T00:00:00.000Z'
+    }, null, 2)}\n`)
+
+    assert.deepStrictEqual(resolveAgentProfile(undefined, readWorkspaceMetadata(context)?.agentProfile), {
+      value: 'auth',
+      source: 'default'
+    })
+
+    writeWorkspaceMetadata(context, 'profile-devcontainer', new Date('2026-01-02T00:00:00.000Z'), 'full')
+    const preserved = writeWorkspaceMetadata(context, 'profile-devcontainer', new Date('2026-01-03T00:00:00.000Z'))
+
+    assert.strictEqual(preserved.agentProfile, 'full')
+    assert.strictEqual(preserved.firstSeenAt, '2026-01-01T00:00:00.000Z')
+    assert.strictEqual(preserved.dockerImageId, 'sha256:legacy-image')
+    assert.strictEqual(preserved.dockerImageName, 'boxdown-legacy:latest')
+    assert.strictEqual(preserved.dockerImageLastSeenAt, '2026-01-01T00:00:00.000Z')
+  })
+
   test('writes stable metadata and preserves firstSeenAt', () => {
     const workspace = tempDir('metadata-workspace')
     const data = tempDir('metadata-data')
@@ -3730,7 +4171,7 @@ describe('workspace metadata', () => {
     assert.match(readWorkspaceMetadata(migrationContext)?.legacyImageMigrationNotifiedAt ?? '', /^\d{4}-\d{2}-\d{2}T/)
 
     await withFakeDocker([
-      { workspace, id: 'legacy-container', imageId: image.id, imageName: image.name }
+      { workspace, id: 'legacy-container', imageId: image.id, imageName: image.name, agentProfileMarker: 'auth' }
     ], async (logPath, dockerEnv) => {
       process.stderr.write = function capturedStderrWrite (this: typeof process.stderr, chunk: string | Uint8Array): boolean {
         stderr.push(Buffer.isBuffer(chunk) ? chunk.toString('utf8') : chunk)
@@ -3880,22 +4321,27 @@ describe('status output', () => {
     })
   })
 
-  test('formats status for running and absent containers', () => {
+  test('formats status infrastructure with an active default auth agent profile', () => {
     const workspace = tempDir('status-workspace')
-    const baseContext = createWorkspaceContext({
+    const home = tempDir('status-home')
+    const context = createWorkspaceContext({
       workspace,
       env: {
+        HOME: home,
         BOXDOWN_CACHE_HOME: tempDir('status-cache'),
         BOXDOWN_DATA_HOME: tempDir('status-data')
       },
+      platform: 'linux',
       assetsDevcontainerDir
     })
-    const context = {
-      ...baseContext,
-      claudeCredentialsSupport: 'file' as const,
-      hostClaudeCredentialsPath: '/home/demo/.claude/.credentials.json'
-    }
     const sshConfigPath = join(tempDir('status-config'), 'config')
+    mkdirSync(context.hostAgentsDir)
+    mkdirSync(context.hostCodexDir)
+    mkdirSync(context.hostClaudeDir)
+    writeFileSync(context.hostCodexAuthPath, '{}\n')
+    assert.notStrictEqual(context.hostClaudeCredentialsPath, undefined)
+    writeFileSync(context.hostClaudeCredentialsPath as string, '{}\n')
+    writeGeneratedDevcontainerConfig(context, undefined, 'auth')
     writeFileSync(sshConfigPath, buildSshConfigBlock(context, 'demo-devcontainer'))
     const exists = (path: string): boolean => [
       sshConfigPath,
@@ -3914,17 +4360,23 @@ describe('status output', () => {
     }, exists, {
       aliasSource: 'default',
       sshConfigPath,
-      isFile: (path) => path === context.hostClaudeCredentialsPath
+      agentProfileSelection: resolveAgentProfile(undefined, undefined),
+      containerAgentProfile: 'auth'
     })
     const stopped = createStatusInfo(context, 'demo-devcontainer', {
       id: 'def456',
       name: 'demo',
       state: 'exited',
       status: 'Exited (0) 1 minute ago'
-    }, exists, { aliasSource: 'provided', sshConfigPath })
+    }, exists, {
+      aliasSource: 'provided',
+      sshConfigPath,
+      agentProfileSelection: resolveAgentProfile(undefined, undefined)
+    })
     const absent = createStatusInfo(context, 'demo-devcontainer', undefined, () => false, {
       aliasSource: 'default',
-      sshConfigPath
+      sshConfigPath,
+      agentProfileSelection: resolveAgentProfile(undefined, undefined)
     })
 
     assert.strictEqual(running.container.running, true)
@@ -3937,10 +4389,25 @@ describe('status output', () => {
     assert.strictEqual(running.ssh.managedBlockState, 'installed')
     assert.strictEqual(running.paths.logPath, context.workspaceLogPath)
     assert.strictEqual(running.paths.logExists, true)
-    assert.deepStrictEqual(running.claude.credentials, {
-      state: 'available',
-      path: context.hostClaudeCredentialsPath
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(running.agentProfile)), {
+      selected: 'auth',
+      selectionSource: 'default',
+      generated: 'auth',
+      container: 'auth',
+      containerState: 'active',
+      sources: {
+        codexAuthentication: 'available',
+        claudeAuthentication: 'available',
+        agents: 'available',
+        codexHome: 'not-selected',
+        claudeHome: 'not-selected',
+        claudeConfig: 'not-selected'
+      },
+      customDestinations: []
     })
+    assert.strictEqual('claude' in running, false)
+    assert.strictEqual(stopped.agentProfile.containerState, 'unknown')
+    assert.strictEqual(absent.agentProfile.containerState, 'not-created')
     assert.strictEqual(absent.ssh.managedBlockState, 'missing')
     assert.strictEqual(absent.paths.logExists, false)
     assert.match(formatStatusText(running), /SSH alias: demo-devcontainer \(computed default; installed\)/)
@@ -3949,8 +4416,12 @@ describe('status output', () => {
     assert.match(formatStatusText(stopped), /State: exited/)
     assert.match(formatStatusText(running), /Generated config: .* \(exists\)/)
     assert.match(formatStatusText(running), /Command log: .*boxdown\.log \(exists\)/)
-    assert.match(formatStatusText(running), /Claude credentials: .* \(available on host; host-owned\)/)
-    assert.match(formatStatusText(running), /Run `boxdown start --recreate` to apply the current credential mount configuration\./)
+    assert.match(formatStatusText(running), /Agent profile: auth \(default\)/)
+    assert.match(formatStatusText(running), / {2}Codex authentication: available/)
+    assert.match(formatStatusText(running), / {2}Claude authentication: available/)
+    assert.match(formatStatusText(running), / {2}~\/\.agents: available/)
+    assert.match(formatStatusText(running), / {2}Container profile: active/)
+    assert.doesNotMatch(formatStatusText(running), /start --recreate/)
     assert.match(formatStatusText(absent), /Generated config: .* \(missing\)/)
     assert.match(formatStatusText(absent), /Command log: .*boxdown\.log \(missing\)/)
     assert.match(formatStatusText(running), /SSH config: .* \(exists\)/)
@@ -3962,78 +4433,659 @@ describe('status output', () => {
     assert.match(formatStatusText(running, { color: true }), /\u001B\[32myes\u001B\[0m/)
   })
 
-  test('reports missing Claude credential status', () => {
-    const workspace = tempDir('status-claude-missing-workspace')
-    const baseContext = createWorkspaceContext({
+  test('reports status agent profile none without probing host profile paths', () => {
+    const workspace = tempDir('status-none-workspace')
+    const context = createWorkspaceContext({
       workspace,
       env: {
-        BOXDOWN_CACHE_HOME: tempDir('status-claude-missing-cache'),
-        BOXDOWN_DATA_HOME: tempDir('status-claude-missing-data')
+        HOME: tempDir('status-none-home'),
+        BOXDOWN_CACHE_HOME: tempDir('status-none-cache'),
+        BOXDOWN_DATA_HOME: tempDir('status-none-data')
       },
       assetsDevcontainerDir
     })
-    const context = {
-      ...baseContext,
-      claudeCredentialsSupport: 'file' as const,
-      hostClaudeCredentialsPath: '/home/demo/.claude/.credentials.json'
-    }
-    const sshConfigPath = join(tempDir('status-claude-missing-config'), 'config')
-    const status = createStatusInfo(context, 'demo-devcontainer', undefined,
-      () => false, { sshConfigPath, isFile: () => false })
-
-    assert.deepStrictEqual(status.claude.credentials, {
-      state: 'missing',
-      path: context.hostClaudeCredentialsPath
-    })
-    assert.match(formatStatusText(status), /Run Claude Code and \/login on the host, then recreate the devcontainer\./)
-  })
-
-  test('reports unsupported Claude credential status', () => {
-    const workspace = tempDir('status-claude-unsupported-workspace')
-    const baseContext = createWorkspaceContext({
-      workspace,
-      env: {
-        BOXDOWN_CACHE_HOME: tempDir('status-claude-unsupported-cache'),
-        BOXDOWN_DATA_HOME: tempDir('status-claude-unsupported-data')
-      },
-      assetsDevcontainerDir
-    })
-    const macContext = {
-      ...baseContext,
-      claudeCredentialsSupport: 'macos-keychain' as const,
-      hostClaudeCredentialsPath: undefined
-    }
-    const sshConfigPath = join(tempDir('status-claude-unsupported-config'), 'config')
-    const unsupported = createStatusInfo(macContext, 'demo-devcontainer', undefined, () => false, { sshConfigPath })
-
-    assert.deepStrictEqual(unsupported.claude.credentials, { state: 'unsupported', reason: 'macos-keychain' })
-    assert.match(formatStatusText(unsupported), /macOS Keychain credentials are not automatically forwarded/)
-  })
-
-  test('reports a platform-specific unsupported Claude credential status', () => {
-    const workspace = tempDir('status-claude-platform-unsupported-workspace')
-    const baseContext = createWorkspaceContext({
-      workspace,
-      env: {
-        BOXDOWN_CACHE_HOME: tempDir('status-claude-platform-unsupported-cache'),
-        BOXDOWN_DATA_HOME: tempDir('status-claude-platform-unsupported-data')
-      },
-      assetsDevcontainerDir
-    })
-    const context = {
-      ...baseContext,
-      claudeCredentialsSupport: 'unsupported-platform' as const,
-      hostClaudeCredentialsPath: undefined
-    }
+    const probed: string[] = []
     const status = createStatusInfo(context, 'demo-devcontainer', undefined, () => false, {
-      sshConfigPath: join(tempDir('status-claude-platform-unsupported-config'), 'config')
+      sshConfigPath: join(tempDir('status-none-config'), 'config'),
+      agentProfileSelection: resolveAgentProfile(undefined, 'none'),
+      isFile: (path) => {
+        probed.push(path)
+        return true
+      },
+      isDirectory: (path) => {
+        probed.push(path)
+        return true
+      }
     })
 
-    assert.deepStrictEqual(status.claude.credentials, {
-      state: 'unsupported',
-      reason: 'unsupported-platform'
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(status.agentProfile)), {
+      selected: 'none',
+      selectionSource: 'metadata',
+      containerState: 'not-created',
+      sources: {
+        codexAuthentication: 'not-selected',
+        claudeAuthentication: 'not-selected',
+        agents: 'not-selected',
+        codexHome: 'not-selected',
+        claudeHome: 'not-selected',
+        claudeConfig: 'not-selected'
+      },
+      customDestinations: []
     })
-    assert.match(formatStatusText(status), /This host platform does not have a supported file-backed Claude credential forwarding path\./)
+    assert.deepStrictEqual(probed, [])
+    assert.match(formatStatusText(status), /Agent profile: none \(workspace metadata\)/)
+    assert.match(formatStatusText(status), / {2}Container profile: not created/)
+  })
+
+  test('status agent profile probes only six known top-level full-profile paths', () => {
+    const workspace = tempDir('status-full-probes-workspace')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        HOME: tempDir('status-full-probes-home'),
+        BOXDOWN_CACHE_HOME: tempDir('status-full-probes-cache'),
+        BOXDOWN_DATA_HOME: tempDir('status-full-probes-data')
+      },
+      platform: 'linux',
+      assetsDevcontainerDir
+    })
+    const fileProbes: string[] = []
+    const directoryProbes: string[] = []
+    const status = createStatusInfo(context, 'demo-devcontainer', {
+      id: 'stopped-full',
+      state: 'exited'
+    }, () => false, {
+      sshConfigPath: join(tempDir('status-full-probes-config'), 'config'),
+      agentProfileSelection: resolveAgentProfile(undefined, 'full'),
+      isFile: (path) => {
+        fileProbes.push(path)
+        return path === context.hostCodexAuthPath
+      },
+      isDirectory: (path) => {
+        directoryProbes.push(path)
+        return path !== context.hostClaudeDir
+      }
+    })
+
+    assert.deepStrictEqual(fileProbes, [
+      context.hostCodexAuthPath,
+      context.hostClaudeCredentialsPath,
+      context.hostClaudeConfigPath
+    ])
+    assert.deepStrictEqual(directoryProbes, [
+      context.hostAgentsDir,
+      context.hostCodexDir,
+      context.hostClaudeDir
+    ])
+    assert.deepStrictEqual(status.agentProfile.sources, {
+      codexAuthentication: 'available',
+      claudeAuthentication: 'missing',
+      agents: 'available',
+      codexHome: 'available',
+      claudeHome: 'missing',
+      claudeConfig: 'missing'
+    })
+    assert.strictEqual(status.agentProfile.containerState, 'unknown')
+  })
+
+  test('formats status agent profile macOS Keychain and recreate guidance', () => {
+    const workspace = tempDir('status-macos-workspace')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        HOME: tempDir('status-macos-home'),
+        BOXDOWN_CACHE_HOME: tempDir('status-macos-cache'),
+        BOXDOWN_DATA_HOME: tempDir('status-macos-data')
+      },
+      platform: 'darwin',
+      assetsDevcontainerDir
+    })
+    mkdirSync(context.hostAgentsDir)
+    mkdirSync(context.hostCodexDir)
+    writeFileSync(context.hostCodexAuthPath, '{}\n')
+    writeGeneratedDevcontainerConfig(context, undefined, 'auth')
+    const status = createStatusInfo(context, 'demo-devcontainer', {
+      id: 'mismatched-profile',
+      state: 'running'
+    }, existsSync, {
+      sshConfigPath: join(tempDir('status-macos-config'), 'config'),
+      agentProfileSelection: resolveAgentProfile(undefined, undefined),
+      containerAgentProfile: 'full'
+    })
+
+    assert.strictEqual(status.agentProfile.sources.claudeAuthentication, 'unsupported')
+    assert.strictEqual(status.agentProfile.containerState, 'recreate-required')
+    assert.strictEqual(statusIsHealthy({
+      ...status,
+      paths: { ...status.paths, generatedConfigExists: true, assetsDevcontainerExists: true },
+      ssh: {
+        ...status.ssh,
+        keyExists: true,
+        publicKeyExists: true,
+        publicKeyRuntimeExists: true
+      }
+    }), false)
+    assert.match(formatStatusText(status), /Agent profile: auth \(default\)[\s\S]* {2}Codex authentication: available[\s\S]* {2}Claude authentication: unavailable \(macOS Keychain is not copied\)[\s\S]* {2}~\/\.agents: available[\s\S]* {2}Container profile: recreate required/)
+    assert.match(formatStatusText(status), /Run `boxdown start --recreate --agent-profile auth`\./)
+  })
+
+  test('formats status agent profile unsupported platforms without a macOS explanation or JSON changes', () => {
+    const createUnsupportedStatus = (platform: NodeJS.Platform): ReturnType<typeof createStatusInfo> => {
+      const workspace = tempDir(`status-${platform}-workspace`)
+      const context = createWorkspaceContext({
+        workspace,
+        env: {
+          HOME: tempDir(`status-${platform}-home`),
+          BOXDOWN_CACHE_HOME: tempDir(`status-${platform}-cache`),
+          BOXDOWN_DATA_HOME: tempDir(`status-${platform}-data`)
+        },
+        platform,
+        assetsDevcontainerDir
+      })
+
+      return createStatusInfo(context, 'demo-devcontainer', undefined, () => false, {
+        sshConfigPath: join(tempDir(`status-${platform}-config`), 'config'),
+        agentProfileSelection: resolveAgentProfile(undefined, undefined)
+      })
+    }
+    const macStatus = createUnsupportedStatus('darwin')
+    const freeBsdStatus = createUnsupportedStatus('freebsd')
+    const exactAgentProfile = {
+      selected: 'auth',
+      selectionSource: 'default',
+      containerState: 'not-created',
+      sources: {
+        codexAuthentication: 'missing',
+        claudeAuthentication: 'unsupported',
+        agents: 'missing',
+        codexHome: 'not-selected',
+        claudeHome: 'not-selected',
+        claudeConfig: 'not-selected'
+      },
+      customDestinations: []
+    }
+
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(macStatus.agentProfile)), exactAgentProfile)
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(freeBsdStatus.agentProfile)), exactAgentProfile)
+    assert.match(formatStatusText(macStatus), /Claude authentication: unavailable \(macOS Keychain is not copied\)/)
+    assert.match(formatStatusText(freeBsdStatus), /Claude authentication: unavailable \(this host platform does not have a supported file-backed credential path\)/)
+    assert.doesNotMatch(formatStatusText(freeBsdStatus), /macOS|Keychain/)
+    const clonedMacStatus = { ...macStatus }
+    assert.match(formatStatusText(clonedMacStatus), /Claude authentication: unavailable \(this host platform does not have a supported file-backed credential path\)/)
+    assert.doesNotMatch(formatStatusText(clonedMacStatus), /macOS|Keychain/)
+  })
+
+  test('status agent profile uses matching generated truth after host sources change', () => {
+    const presentWorkspace = tempDir('status-generated-present-workspace')
+    const presentContext = createWorkspaceContext({
+      workspace: presentWorkspace,
+      env: {
+        HOME: tempDir('status-generated-present-home'),
+        BOXDOWN_CACHE_HOME: tempDir('status-generated-present-cache'),
+        BOXDOWN_DATA_HOME: tempDir('status-generated-present-data')
+      },
+      assetsDevcontainerDir
+    })
+    mkdirSync(presentContext.hostAgentsDir)
+    writeFileSync(join(presentContext.hostAgentsDir, 'private-plugin-name.json'), '{}\n')
+    writeGeneratedDevcontainerConfig(presentContext, undefined, 'auth')
+    rmSync(presentContext.hostAgentsDir, { recursive: true })
+
+    const presentStatus = createStatusInfo(presentContext, 'demo-devcontainer', {
+      id: 'present-container',
+      state: 'running'
+    }, existsSync, {
+      sshConfigPath: join(tempDir('status-generated-present-config'), 'config'),
+      agentProfileSelection: resolveAgentProfile(undefined, undefined),
+      containerAgentProfile: 'auth',
+      isDirectory: () => false
+    })
+
+    const absentWorkspace = tempDir('status-generated-absent-workspace')
+    const absentContext = createWorkspaceContext({
+      workspace: absentWorkspace,
+      env: {
+        HOME: tempDir('status-generated-absent-home'),
+        BOXDOWN_CACHE_HOME: tempDir('status-generated-absent-cache'),
+        BOXDOWN_DATA_HOME: tempDir('status-generated-absent-data')
+      },
+      assetsDevcontainerDir
+    })
+    writeGeneratedDevcontainerConfig(absentContext, undefined, 'auth')
+    mkdirSync(absentContext.hostAgentsDir)
+    writeFileSync(join(absentContext.hostAgentsDir, 'new-hook-name.json'), '{}\n')
+
+    const absentStatus = createStatusInfo(absentContext, 'demo-devcontainer', {
+      id: 'absent-container',
+      state: 'running'
+    }, existsSync, {
+      sshConfigPath: join(tempDir('status-generated-absent-config'), 'config'),
+      agentProfileSelection: resolveAgentProfile(undefined, undefined),
+      containerAgentProfile: 'auth',
+      isDirectory: () => true
+    })
+
+    assert.strictEqual(presentStatus.agentProfile.sources.agents, 'available')
+    assert.strictEqual(absentStatus.agentProfile.sources.agents, 'missing')
+    assert.strictEqual(presentStatus.agentProfile.containerState, 'active')
+    assert.strictEqual(absentStatus.agentProfile.containerState, 'active')
+    assert.doesNotMatch(JSON.stringify(presentStatus), /private-plugin-name/)
+    assert.doesNotMatch(JSON.stringify(absentStatus), /new-hook-name/)
+  })
+
+  test('status agent profile reports canonical custom destinations without nested filename leakage', () => {
+    const workspace = tempDir('status-custom-workspace')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        HOME: tempDir('status-custom-home'),
+        BOXDOWN_CACHE_HOME: tempDir('status-custom-cache'),
+        BOXDOWN_DATA_HOME: tempDir('status-custom-data')
+      },
+      assetsDevcontainerDir
+    })
+    mkdirSync(context.workspaceCacheDir, { recursive: true })
+    writeFileSync(context.generatedConfigPath, `${JSON.stringify({
+      containerEnv: {
+        BOXDOWN_AGENT_PROFILE: 'full',
+        BOXDOWN_AGENT_PROFILE_SOURCES: 'agents,claude-config,claude-home,codex-home'
+      },
+      mounts: [
+        'type=bind,source=/tmp/agents,target=/home/node/.agents',
+        'type=bind,source=/tmp/codex,target=/home/node/.codex/private-plugin-name',
+        'type=bind,source=/tmp/claude,target=/home/node/.claude',
+        'type=bind,source=/tmp/config,target=/home/node/.claude.json',
+        'type=bind,source=/tmp/duplicate,target=/home/node/.agents',
+        'type=bind,source=/tmp/private-parent-name,target=/home/node'
+      ]
+    }, null, 2)}\n`)
+
+    const status = createStatusInfo(context, 'demo-devcontainer', {
+      id: 'custom-container',
+      state: 'running'
+    }, existsSync, {
+      sshConfigPath: join(tempDir('status-custom-config'), 'config'),
+      agentProfileSelection: resolveAgentProfile(undefined, 'full'),
+      containerAgentProfile: 'full'
+    })
+
+    assert.deepStrictEqual(status.agentProfile.customDestinations, [
+      '/home/node/.agents',
+      '/home/node/.claude',
+      '/home/node/.claude.json',
+      '/home/node/.codex'
+    ])
+    assert.deepStrictEqual(status.agentProfile.sources, {
+      codexAuthentication: 'custom',
+      claudeAuthentication: 'custom',
+      agents: 'custom',
+      codexHome: 'custom',
+      claudeHome: 'custom',
+      claudeConfig: 'custom'
+    })
+    assert.doesNotMatch(JSON.stringify(status), /private-plugin-name|private-parent-name/)
+    assert.match(formatStatusText(status), /Custom destinations: \/home\/node\/\.agents, \/home\/node\/\.claude, \/home\/node\/\.claude\.json, \/home\/node\/\.codex/)
+  })
+
+  test('status agent profile keeps sibling custom mounts from owning authentication', () => {
+    const workspace = tempDir('status-custom-auth-siblings-workspace')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        HOME: tempDir('status-custom-auth-siblings-home'),
+        BOXDOWN_CACHE_HOME: tempDir('status-custom-auth-siblings-cache'),
+        BOXDOWN_DATA_HOME: tempDir('status-custom-auth-siblings-data')
+      },
+      platform: 'linux',
+      assetsDevcontainerDir
+    })
+    mkdirSync(context.workspaceCacheDir, { recursive: true })
+    writeFileSync(context.generatedConfigPath, `${JSON.stringify({
+      containerEnv: {
+        BOXDOWN_AGENT_PROFILE: 'auth',
+        BOXDOWN_AGENT_PROFILE_SOURCES: 'agents,claude-auth,codex-auth'
+      },
+      mounts: [
+        `type=bind,source=/tmp/agents,target=${BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_AGENTS_DIR},readonly`,
+        `type=bind,source=/tmp/codex-auth,target=${BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CODEX_AUTH_PATH},readonly`,
+        `type=bind,source=/tmp/claude-auth,target=${BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CLAUDE_CREDENTIALS_PATH},readonly`,
+        'type=bind,source=/tmp/codex-config,target=/home/node/.codex/config.toml',
+        'type=bind,source=/tmp/claude-settings,target=/home/node/.claude/settings.json'
+      ]
+    }, null, 2)}\n`)
+
+    const status = createStatusInfo(context, 'demo-devcontainer', {
+      id: 'custom-auth-siblings-container',
+      state: 'running'
+    }, existsSync, {
+      sshConfigPath: join(tempDir('status-custom-auth-siblings-config'), 'config'),
+      agentProfileSelection: resolveAgentProfile(undefined, undefined),
+      containerAgentProfile: 'auth'
+    })
+
+    assert.deepStrictEqual(status.agentProfile.sources, {
+      codexAuthentication: 'available',
+      claudeAuthentication: 'available',
+      agents: 'available',
+      codexHome: 'not-selected',
+      claudeHome: 'not-selected',
+      claudeConfig: 'not-selected'
+    })
+    assert.deepStrictEqual(status.agentProfile.customDestinations, [
+      '/home/node/.claude',
+      '/home/node/.codex'
+    ])
+  })
+
+  test('status agent profile makes nested Claude config inherit generated Claude-home state', () => {
+    const workspace = tempDir('status-generated-nested-claude-config-workspace')
+    const claudeDir = tempDir('status-generated-nested-claude-config-home')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        HOME: tempDir('status-generated-nested-claude-config-user-home'),
+        CLAUDE_CONFIG_DIR: claudeDir,
+        BOXDOWN_CACHE_HOME: tempDir('status-generated-nested-claude-config-cache'),
+        BOXDOWN_DATA_HOME: tempDir('status-generated-nested-claude-config-data')
+      },
+      platform: 'linux',
+      assetsDevcontainerDir
+    })
+    mkdirSync(context.workspaceCacheDir, { recursive: true })
+    writeFileSync(context.generatedConfigPath, `${JSON.stringify({
+      containerEnv: {
+        BOXDOWN_AGENT_PROFILE: 'full',
+        BOXDOWN_AGENT_PROFILE_SOURCES: 'claude-home'
+      },
+      mounts: [
+        `type=bind,source=${claudeDir},target=${BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CLAUDE_DIR},readonly`,
+        'type=bind,source=/tmp/unrelated-config,target=/home/node/.claude.json'
+      ]
+    }, null, 2)}\n`)
+
+    const status = createStatusInfo(context, 'demo-devcontainer', {
+      id: 'generated-nested-claude-config-container',
+      state: 'running'
+    }, existsSync, {
+      sshConfigPath: join(tempDir('status-generated-nested-claude-config-ssh'), 'config'),
+      agentProfileSelection: resolveAgentProfile(undefined, 'full'),
+      containerAgentProfile: 'full'
+    })
+
+    assert.strictEqual(status.agentProfile.sources.claudeHome, 'available')
+    assert.strictEqual(status.agentProfile.sources.claudeConfig, 'available')
+    assert.deepStrictEqual(status.agentProfile.customDestinations, ['/home/node/.claude.json'])
+  })
+
+  test('status agent profile makes nested Claude config inherit live Claude-home state', () => {
+    const workspace = tempDir('status-live-nested-claude-config-workspace')
+    const claudeDir = tempDir('status-live-nested-claude-config-home')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        HOME: tempDir('status-live-nested-claude-config-user-home'),
+        CLAUDE_CONFIG_DIR: claudeDir,
+        BOXDOWN_CACHE_HOME: tempDir('status-live-nested-claude-config-cache'),
+        BOXDOWN_DATA_HOME: tempDir('status-live-nested-claude-config-data')
+      },
+      platform: 'linux',
+      assetsDevcontainerDir
+    })
+    mkdirSync(context.workspaceCacheDir, { recursive: true })
+    writeFileSync(context.generatedConfigPath, JSON.stringify({
+      containerEnv: { BOXDOWN_AGENT_PROFILE: 'auth' },
+      mounts: ['type=bind,source=/tmp/unrelated-config,target=/home/node/.claude.json']
+    }))
+    const fileProbes: string[] = []
+    const status = createStatusInfo(context, 'demo-devcontainer', undefined, existsSync, {
+      sshConfigPath: join(tempDir('status-live-nested-claude-config-ssh'), 'config'),
+      agentProfileSelection: resolveAgentProfile(undefined, 'full'),
+      isFile: (path) => {
+        fileProbes.push(path)
+        return false
+      },
+      isDirectory: (path) => path === context.hostClaudeDir
+    })
+
+    assert.strictEqual(status.agentProfile.sources.claudeHome, 'available')
+    assert.strictEqual(status.agentProfile.sources.claudeConfig, 'available')
+    assert.ok(!fileProbes.includes(context.hostClaudeConfigPath))
+    assert.deepStrictEqual(status.agentProfile.customDestinations, ['/home/node/.claude.json'])
+  })
+
+  test('status agent profile ignores empty and non-absolute mount targets', () => {
+    const workspace = tempDir('status-invalid-custom-target-workspace')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        HOME: tempDir('status-invalid-custom-target-home'),
+        BOXDOWN_CACHE_HOME: tempDir('status-invalid-custom-target-cache'),
+        BOXDOWN_DATA_HOME: tempDir('status-invalid-custom-target-data')
+      },
+      platform: 'linux',
+      assetsDevcontainerDir
+    })
+    mkdirSync(context.workspaceCacheDir, { recursive: true })
+    writeFileSync(context.generatedConfigPath, `${JSON.stringify({
+      containerEnv: {
+        BOXDOWN_AGENT_PROFILE: 'auth',
+        BOXDOWN_AGENT_PROFILE_SOURCES: 'agents,claude-auth,codex-auth'
+      },
+      mounts: [
+        `type=bind,source=/tmp/agents,target=${BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_AGENTS_DIR},readonly`,
+        `type=bind,source=/tmp/codex-auth,target=${BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CODEX_AUTH_PATH},readonly`,
+        `type=bind,source=/tmp/claude-auth,target=${BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CLAUDE_CREDENTIALS_PATH},readonly`,
+        'type=bind,source=/tmp/empty,target=',
+        'type=bind,source=/tmp/relative,target=home/node/.codex'
+      ]
+    }, null, 2)}\n`)
+
+    const status = createStatusInfo(context, 'demo-devcontainer', {
+      id: 'invalid-custom-target-container',
+      state: 'running'
+    }, existsSync, {
+      sshConfigPath: join(tempDir('status-invalid-custom-target-ssh'), 'config'),
+      agentProfileSelection: resolveAgentProfile(undefined, undefined),
+      containerAgentProfile: 'auth'
+    })
+
+    assert.deepStrictEqual(status.agentProfile.sources, {
+      codexAuthentication: 'available',
+      claudeAuthentication: 'available',
+      agents: 'available',
+      codexHome: 'not-selected',
+      claudeHome: 'not-selected',
+      claudeConfig: 'not-selected'
+    })
+    assert.deepStrictEqual(status.agentProfile.customDestinations, [])
+  })
+
+  test('status agent profile applies exact containerState rules and defensive generated parsing', () => {
+    const workspace = tempDir('status-state-rules-workspace')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        HOME: tempDir('status-state-rules-home'),
+        BOXDOWN_CACHE_HOME: tempDir('status-state-rules-cache'),
+        BOXDOWN_DATA_HOME: tempDir('status-state-rules-data')
+      },
+      assetsDevcontainerDir
+    })
+    const options = {
+      sshConfigPath: join(tempDir('status-state-rules-config'), 'config'),
+      agentProfileSelection: resolveAgentProfile(undefined, 'full')
+    }
+    const running = { id: 'state-rules-running', state: 'running' }
+    const stopped = { id: 'state-rules-stopped', state: 'exited' }
+
+    mkdirSync(context.workspaceCacheDir, { recursive: true })
+    writeFileSync(context.generatedConfigPath, '{ malformed')
+    assert.strictEqual(createStatusInfo(context, 'demo-devcontainer', running, existsSync, {
+      ...options,
+      containerAgentProfile: 'full'
+    }).agentProfile.containerState, 'unknown')
+    assert.strictEqual(createStatusInfo(context, 'demo-devcontainer', running, existsSync, {
+      ...options,
+      readFile: () => {
+        throw new Error('unreadable')
+      }
+    }).agentProfile.generated, undefined)
+
+    writeFileSync(context.generatedConfigPath, JSON.stringify({
+      containerEnv: { BOXDOWN_AGENT_PROFILE: 'invalid', BOXDOWN_AGENT_PROFILE_SOURCES: 7 },
+      mounts: [null, 42, { target: '/home/node/.codex' }]
+    }))
+    const invalid = createStatusInfo(context, 'demo-devcontainer', stopped, existsSync, options)
+    assert.strictEqual(invalid.agentProfile.generated, undefined)
+    assert.strictEqual(invalid.agentProfile.containerState, 'unknown')
+
+    writeFileSync(context.generatedConfigPath, JSON.stringify({
+      containerEnv: { BOXDOWN_AGENT_PROFILE: 'auth', BOXDOWN_AGENT_PROFILE_SOURCES: '' },
+      mounts: []
+    }))
+    assert.strictEqual(createStatusInfo(context, 'demo-devcontainer', stopped, existsSync, options).agentProfile.containerState, 'recreate-required')
+    assert.strictEqual(createStatusInfo(context, 'demo-devcontainer', running, existsSync, {
+      ...options,
+      containerAgentProfile: 'auth'
+    }).agentProfile.containerState, 'recreate-required')
+    assert.strictEqual(createStatusInfo(context, 'demo-devcontainer', undefined, existsSync, options).agentProfile.containerState, 'not-created')
+
+    writeFileSync(context.generatedConfigPath, JSON.stringify({
+      containerEnv: { BOXDOWN_AGENT_PROFILE: 'full', BOXDOWN_AGENT_PROFILE_SOURCES: '' },
+      mounts: []
+    }))
+    const stoppedUnknown = createStatusInfo(context, 'demo-devcontainer', stopped, existsSync, options)
+    const runningUnknown = createStatusInfo(context, 'demo-devcontainer', running, existsSync, options)
+    assert.strictEqual(stoppedUnknown.agentProfile.containerState, 'unknown')
+    assert.strictEqual(runningUnknown.agentProfile.containerState, 'unknown')
+    assert.strictEqual(statusIsHealthy({
+      ...runningUnknown,
+      paths: { ...runningUnknown.paths, generatedConfigExists: true, assetsDevcontainerExists: true },
+      ssh: {
+        ...runningUnknown.ssh,
+        keyExists: true,
+        publicKeyExists: true,
+        publicKeyRuntimeExists: true
+      }
+    }), true)
+    assert.strictEqual(createStatusInfo(context, 'demo-devcontainer', running, existsSync, {
+      ...options,
+      containerAgentProfile: 'full'
+    }).agentProfile.containerState, 'active')
+  })
+
+  test('status agent profile JSON never enumerates full profile contents', () => {
+    const workspace = tempDir('status-private-profile-workspace')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        HOME: tempDir('status-private-profile-home'),
+        BOXDOWN_CACHE_HOME: tempDir('status-private-profile-cache'),
+        BOXDOWN_DATA_HOME: tempDir('status-private-profile-data')
+      },
+      platform: 'linux',
+      assetsDevcontainerDir
+    })
+    mkdirSync(join(context.hostAgentsDir, 'skills'), { recursive: true })
+    mkdirSync(join(context.hostCodexDir, 'plugins'), { recursive: true })
+    mkdirSync(join(context.hostClaudeDir, 'hooks'), { recursive: true })
+    writeFileSync(join(context.hostAgentsDir, 'skills', 'private-mcp-name.json'), '{}\n')
+    writeFileSync(join(context.hostCodexDir, 'plugins', 'private-plugin-name.json'), '{}\n')
+    writeFileSync(join(context.hostClaudeDir, 'hooks', 'private-history-name.json'), '{}\n')
+    writeFileSync(context.hostClaudeConfigPath, '{}\n')
+    writeGeneratedDevcontainerConfig(context, undefined, 'full')
+
+    const status = createStatusInfo(context, 'demo-devcontainer', {
+      id: 'private-profile-container',
+      state: 'running'
+    }, existsSync, {
+      sshConfigPath: join(tempDir('status-private-profile-config'), 'config'),
+      agentProfileSelection: resolveAgentProfile(undefined, 'full'),
+      containerAgentProfile: 'full'
+    })
+    const json = JSON.stringify(status)
+
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(status.agentProfile)), {
+      selected: 'full',
+      selectionSource: 'metadata',
+      generated: 'full',
+      container: 'full',
+      containerState: 'active',
+      sources: {
+        codexAuthentication: 'available',
+        claudeAuthentication: 'available',
+        agents: 'available',
+        codexHome: 'available',
+        claudeHome: 'available',
+        claudeConfig: 'available'
+      },
+      customDestinations: []
+    })
+    assert.doesNotMatch(json, /private-mcp-name|private-plugin-name|private-history-name/)
+  })
+
+  test('status does not record agent profile metadata or generated config while inspecting a running marker', async () => {
+    const workspace = tempDir('status-read-only-workspace')
+    const env = {
+      HOME: tempDir('status-read-only-home'),
+      BOXDOWN_CACHE_HOME: tempDir('status-read-only-cache'),
+      BOXDOWN_DATA_HOME: tempDir('status-read-only-data'),
+      BOXDOWN_RUNTIME_HOME: tempDir('status-read-only-runtime'),
+      BOXDOWN_SSH_CONFIG: join(tempDir('status-read-only-ssh'), 'config'),
+      BOXDOWN_DEVCONTAINER_ASSETS_DIR: assetsDevcontainerDir
+    }
+    const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+    writeWorkspaceMetadata(context, 'status-read-only-devcontainer', undefined, 'full')
+    writeGeneratedDevcontainerConfig(context, undefined, 'full')
+    const metadataPath = workspaceMetadataPath(context)
+    const metadataBefore = readFileSync(metadataPath, 'utf8')
+    const generatedBefore = readFileSync(context.generatedConfigPath, 'utf8')
+
+    await withFakeDocker([
+      {
+        workspace,
+        id: 'status-read-only-container',
+        containerState: 'running',
+        agentProfileMarker: 'full'
+      }
+    ], async (logPath, dockerEnv) => {
+      const result = runCliProcess(['status', '--workspace', workspace, '--json'], {
+        ...dockerEnv,
+        ...env
+      })
+      const status = JSON.parse(result.stdout) as ReturnType<typeof createStatusInfo>
+      const calls = fakeDockerCalls(logPath)
+
+      assert.strictEqual(result.code, 1)
+      assert.strictEqual(status.agentProfile.selected, 'full')
+      assert.strictEqual(status.agentProfile.selectionSource, 'metadata')
+      assert.strictEqual(status.agentProfile.generated, 'full')
+      assert.strictEqual(status.agentProfile.container, 'full')
+      assert.strictEqual(status.agentProfile.containerState, 'active')
+      assert.ok(calls.includes('exec status-read-only-container cat /opt/boxdown/state/agent-profile'))
+      assert.ok(!calls.some((call) => call.includes('devcontainer up')))
+    })
+
+    assert.strictEqual(readFileSync(metadataPath, 'utf8'), metadataBefore)
+    assert.strictEqual(readFileSync(context.generatedConfigPath, 'utf8'), generatedBefore)
+
+    await withFakeDocker([
+      {
+        workspace,
+        id: 'status-stopped-container',
+        containerState: 'exited',
+        agentProfileMarker: 'auth'
+      }
+    ], async (logPath, dockerEnv) => {
+      runCliProcess(['status', '--workspace', workspace, '--json'], {
+        ...dockerEnv,
+        ...env
+      })
+      assert.ok(!fakeDockerCalls(logPath).some((call) => call.startsWith('exec ')))
+    })
+
+    assert.strictEqual(readFileSync(metadataPath, 'utf8'), metadataBefore)
+    assert.strictEqual(readFileSync(context.generatedConfigPath, 'utf8'), generatedBefore)
   })
 })
 
@@ -5491,26 +6543,30 @@ describe('progress output', () => {
     writeFileSync(context.sshKeyPath, 'test private key\n')
     writeFileSync(context.sshPublicKeyPath, 'test public key\n')
 
-    await assert.rejects(
-      startDevcontainer(context, {
-        progress: createProgress({ mode: 'none' }),
-        runDevcontainerUp: async (label, command, args) => {
-          calls.push({ label, command, args })
-          return {
-            code: 1,
-            stdout: `${wrapper}\n`,
-            stderr: 'failed to solve: registry authentication failed\n'
+    await withFakeDocker([], async (_logPath, dockerEnv) => {
+      await withProcessEnv(dockerEnv as Record<string, string>, async () => {
+        await assert.rejects(
+          startDevcontainer(context, {
+            progress: createProgress({ mode: 'none' }),
+            runDevcontainerUp: async (label, command, args) => {
+              calls.push({ label, command, args })
+              return {
+                code: 1,
+                stdout: `${wrapper}\n`,
+                stderr: 'failed to solve: registry authentication failed\n'
+              }
+            }
+          }),
+          (error: unknown) => {
+            assert.ok(error instanceof Error)
+            assert.match(error.message, /registry authentication failed/)
+            assert.doesNotMatch(error.message, /docker buildx build --load/)
+            assert.doesNotMatch(error.message, /Command log:/)
+            return true
           }
-        }
-      }),
-      (error: unknown) => {
-        assert.ok(error instanceof Error)
-        assert.match(error.message, /registry authentication failed/)
-        assert.doesNotMatch(error.message, /docker buildx build --load/)
-        assert.doesNotMatch(error.message, /Command log:/)
-        return true
-      }
-    )
+        )
+      })
+    })
 
     assert.strictEqual(calls.length, 1)
     assert.strictEqual(calls[0]?.label, 'devcontainer up')
@@ -5520,7 +6576,7 @@ describe('progress output', () => {
   test('recreate bypasses running-container reuse and removes the existing container', async () => {
     const workspace = tempDir('devcontainer-recreate-workspace')
 
-    await withFakeDocker([{ workspace, id: 'running-container' }], async (logPath, dockerEnv) => {
+    await withFakeDocker([{ workspace, id: 'running-container', agentProfileMarker: 'auth' }], async (logPath, dockerEnv) => {
       const env = {
         ...dockerEnv,
         BOXDOWN_CACHE_HOME: tempDir('devcontainer-recreate-cache'),
@@ -5575,22 +6631,484 @@ describe('progress output', () => {
     writeFileSync(context.sshKeyPath, 'test private key\n')
     writeFileSync(context.sshPublicKeyPath, 'test public key\n')
 
-    await assert.rejects(
-      startDevcontainer(context, {
-        logger,
-        progress: createProgress({ mode: 'none' }),
-        runDevcontainerUp: async () => ({
-          code: 1,
-          stdout: '',
-          stderr: 'failed to solve: registry authentication failed\n'
-        })
-      }),
-      (error: unknown) => {
-        assert.ok(error instanceof Error)
-        assert.ok(error.message.includes(`Command log: ${context.workspaceLogPath}`))
-        return true
+    await withFakeDocker([], async (_logPath, dockerEnv) => {
+      await withProcessEnv(dockerEnv as Record<string, string>, async () => {
+        await assert.rejects(
+          startDevcontainer(context, {
+            logger,
+            progress: createProgress({ mode: 'none' }),
+            runDevcontainerUp: async () => ({
+              code: 1,
+              stdout: '',
+              stderr: 'failed to solve: registry authentication failed\n'
+            })
+          }),
+          (error: unknown) => {
+            assert.ok(error instanceof Error)
+            assert.ok(error.message.includes(`Command log: ${context.workspaceLogPath}`))
+            return true
+          }
+        )
+      })
+    })
+  })
+})
+
+describe('agent profile container lifecycle', () => {
+  test('profile marker inspection accepts validated values and ignores invalid or unreadable content', async () => {
+    const workspace = tempDir('profile-marker-workspace')
+    const markers = [
+      { id: 'profile-none', marker: 'none', expected: 'none' },
+      { id: 'profile-auth', marker: 'auth', expected: 'auth' },
+      { id: 'profile-full', marker: ' full ', expected: 'full' },
+      { id: 'profile-whitespace', marker: '   ', expected: undefined },
+      { id: 'profile-invalid', marker: 'host-root', expected: undefined },
+      { id: 'profile-absent', marker: undefined, expected: undefined }
+    ] as const
+
+    await withFakeDocker(markers.map(({ id, marker }) => ({
+      workspace,
+      id,
+      ...(marker === undefined ? {} : { agentProfileMarker: marker })
+    })), async (logPath, dockerEnv) => {
+      await withProcessEnv(dockerEnv as Record<string, string>, async () => {
+        for (const marker of markers) {
+          assert.strictEqual(await inspectFakeContainerAgentProfile(marker.id), marker.expected, marker.id)
+        }
+        assert.strictEqual(await inspectFakeContainerAgentProfile('docker-error'), undefined)
+      })
+
+      const calls = fakeDockerCalls(logPath)
+      for (const marker of markers) {
+        assert.ok(calls.includes(`exec ${marker.id} cat /opt/boxdown/state/agent-profile`), marker.id)
       }
-    )
+      assert.ok(calls.includes('exec docker-error cat /opt/boxdown/state/agent-profile'))
+      assert.strictEqual(calls.some((call) => call.includes('host-root') || call.includes(' full ')), false)
+    })
+  })
+
+  test('profile marker inspection keeps invalid credential-like content out of the workspace command log', async () => {
+    const workspace = tempDir('profile-marker-private-log-workspace')
+    const marker = 'ANTHROPIC_API_KEY=marker-credential-secret'
+
+    await withFakeDocker([{
+      workspace,
+      id: 'profile-private-log',
+      agentProfileMarker: marker
+    }], async (_logPath, dockerEnv) => {
+      const env = {
+        ...dockerEnv,
+        BOXDOWN_CACHE_HOME: tempDir('profile-marker-private-log-cache'),
+        BOXDOWN_DATA_HOME: tempDir('profile-marker-private-log-data')
+      }
+      const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+      const logger = createWorkspaceCommandLogger(context)
+      logger.section('profile marker privacy')
+
+      await withProcessEnv(env as Record<string, string>, async () => {
+        assert.strictEqual(await inspectContainerAgentProfile('profile-private-log', { logger }), undefined)
+      })
+
+      const log = readFileSync(context.workspaceLogPath, 'utf8')
+      assert.match(log, /command start: \["docker","exec","profile-private-log","cat","\/opt\/boxdown\/state\/agent-profile"\]/)
+      assert.match(log, /command exit: 0/)
+      assert.doesNotMatch(log, /ANTHROPIC_API_KEY/)
+      assert.doesNotMatch(log, /marker-credential-secret/)
+    })
+  })
+
+  test('agent profile lifecycle fails reuse progress before a missing marker can be recorded successful', async () => {
+    const workspace = tempDir('agent-profile-reuse-progress-workspace')
+
+    await withFakeDocker([{
+      workspace,
+      id: 'reuse-progress',
+      agentProfileMarker: 'invalid-marker'
+    }], async (_logPath, dockerEnv) => {
+      const env = {
+        ...dockerEnv,
+        BOXDOWN_CACHE_HOME: tempDir('agent-profile-reuse-progress-cache'),
+        BOXDOWN_DATA_HOME: tempDir('agent-profile-reuse-progress-data')
+      }
+      const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+      const progress = createProgress({ mode: 'none' })
+      progress.setSteps([
+        { id: 'ssh-identity', label: 'Preparing SSH identity' },
+        { id: 'devcontainer-config', label: 'Writing generated devcontainer config' },
+        { id: 'devcontainer-start', label: 'Starting devcontainer' }
+      ])
+      const events = recordProgressStepEvents(progress, 'devcontainer-start')
+
+      mkdirSync(context.sshKeyDir, { recursive: true })
+      writeFileSync(context.sshKeyPath, 'test private key\n')
+      writeFileSync(context.sshPublicKeyPath, 'test public key\n')
+      writeGeneratedDevcontainerConfig(context, undefined, 'auth')
+
+      await withProcessEnv(env as Record<string, string>, async () => {
+        await assert.rejects(startDevcontainer(context, {
+          agentProfile: 'auth',
+          reuseRunning: true,
+          progress
+        }), /Agent profile auth is not active/)
+      })
+
+      assert.deepStrictEqual(events, [
+        'start:devcontainer-start',
+        'fail:devcontainer-start'
+      ])
+    })
+  })
+
+  test('agent profile lifecycle fails normal startup progress before a missing marker can be recorded successful', async () => {
+    const workspace = tempDir('agent-profile-up-progress-workspace')
+    const hiddenWorkspace = tempDir('agent-profile-up-progress-hidden-workspace')
+
+    await withFakeDocker([{
+      workspace: hiddenWorkspace,
+      id: 'up-progress',
+      agentProfileMarker: 'invalid-marker'
+    }], async (_logPath, dockerEnv) => {
+      const env = {
+        ...dockerEnv,
+        BOXDOWN_CACHE_HOME: tempDir('agent-profile-up-progress-cache'),
+        BOXDOWN_DATA_HOME: tempDir('agent-profile-up-progress-data')
+      }
+      const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+      const progress = createProgress({ mode: 'none' })
+      progress.setSteps([
+        { id: 'ssh-identity', label: 'Preparing SSH identity' },
+        { id: 'devcontainer-config', label: 'Writing generated devcontainer config' },
+        { id: 'devcontainer-start', label: 'Starting devcontainer' }
+      ])
+      const events = recordProgressStepEvents(progress, 'devcontainer-start')
+
+      mkdirSync(context.sshKeyDir, { recursive: true })
+      writeFileSync(context.sshKeyPath, 'test private key\n')
+      writeFileSync(context.sshPublicKeyPath, 'test public key\n')
+
+      await withProcessEnv(env as Record<string, string>, async () => {
+        await assert.rejects(startDevcontainer(context, {
+          agentProfile: 'auth',
+          progress,
+          runDevcontainerUp: async () => {
+            updateFakeDockerContainer(env, 'up-progress', { workspace })
+            return { code: 0, stdout: '{"containerId":"up-progress"}\n', stderr: '' }
+          }
+        }), /Agent profile auth is not active/)
+      })
+
+      assert.deepStrictEqual(events, [
+        'start:devcontainer-start',
+        'fail:devcontainer-start'
+      ])
+    })
+  })
+
+  test('agent profile lifecycle keeps the no-checklist spinner pending through marker validation failure', async () => {
+    const workspace = tempDir('agent-profile-spinner-marker-workspace')
+    const hiddenWorkspace = tempDir('agent-profile-spinner-marker-hidden-workspace')
+
+    await withFakeDocker([{
+      workspace: hiddenWorkspace,
+      id: 'spinner-marker',
+      agentProfileMarker: 'invalid-marker'
+    }], async (_logPath, dockerEnv) => {
+      const env = {
+        ...dockerEnv,
+        BOXDOWN_CACHE_HOME: tempDir('agent-profile-spinner-marker-cache'),
+        BOXDOWN_DATA_HOME: tempDir('agent-profile-spinner-marker-data')
+      }
+      const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+      const rendered: string[] = []
+      const progress = createProgress({
+        mode: 'interactive',
+        isTTY: false,
+        write: (_target, message) => { rendered.push(message) }
+      })
+      const events = recordProgressSpinnerEvents(progress)
+
+      mkdirSync(context.sshKeyDir, { recursive: true })
+      writeFileSync(context.sshKeyPath, 'test private key\n')
+      writeFileSync(context.sshPublicKeyPath, 'test public key\n')
+
+      await withProcessEnv(env as Record<string, string>, async () => {
+        await assert.rejects(startDevcontainer(context, {
+          agentProfile: 'auth',
+          progress,
+          runDevcontainerUp: async (label, _command, _args, runOptions) => {
+            const result = await runProgressCommand(
+              label,
+              'bash',
+              ['-c', 'printf \'%s\\n\' \'{"containerId":"spinner-marker"}\''],
+              runOptions
+            )
+            updateFakeDockerContainer(env, 'spinner-marker', { workspace })
+            return result
+          }
+        }), /Agent profile auth is not active/)
+      })
+
+      assert.ok(events.includes('start:Starting devcontainer'))
+      assert.strictEqual(events.includes('stop:complete'), false)
+      assert.strictEqual(events.at(-1), 'stop:clear')
+      assert.strictEqual(
+        rendered.some((line) => line.includes(`${selectedMark()} Starting devcontainer`)),
+        false
+      )
+    })
+  })
+
+  test('agent profile lifecycle clears the no-checklist spinner when container ID resolution fails', async () => {
+    const workspace = tempDir('agent-profile-spinner-id-workspace')
+
+    await withFakeDocker([], async (_logPath, dockerEnv) => {
+      const env = {
+        ...dockerEnv,
+        BOXDOWN_CACHE_HOME: tempDir('agent-profile-spinner-id-cache'),
+        BOXDOWN_DATA_HOME: tempDir('agent-profile-spinner-id-data')
+      }
+      const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+      const rendered: string[] = []
+      const progress = createProgress({
+        mode: 'interactive',
+        isTTY: false,
+        write: (_target, message) => { rendered.push(message) }
+      })
+      const events = recordProgressSpinnerEvents(progress)
+
+      mkdirSync(context.sshKeyDir, { recursive: true })
+      writeFileSync(context.sshKeyPath, 'test private key\n')
+      writeFileSync(context.sshPublicKeyPath, 'test public key\n')
+
+      await withProcessEnv(env as Record<string, string>, async () => {
+        await assert.rejects(startDevcontainer(context, {
+          agentProfile: 'auth',
+          progress,
+          runDevcontainerUp: async (label, _command, _args, runOptions) => runProgressCommand(
+            label,
+            'bash',
+            ['-c', 'true'],
+            runOptions
+          )
+        }), /Could not resolve devcontainer ID/)
+      })
+
+      assert.ok(events.includes('start:Starting devcontainer'))
+      assert.strictEqual(events.includes('stop:complete'), false)
+      assert.strictEqual(events.at(-1), 'stop:clear')
+      assert.strictEqual(
+        rendered.some((line) => line.includes(`${selectedMark()} Starting devcontainer`)),
+        false
+      )
+    })
+  })
+
+  test('agent profile lifecycle rejects a stale running marker before devcontainer up', async () => {
+    const workspace = tempDir('agent-profile-stale-running-workspace')
+
+    await withFakeDocker([{ workspace, id: 'stale-running', agentProfileMarker: 'auth' }], async (logPath, dockerEnv) => {
+      const env = {
+        ...dockerEnv,
+        BOXDOWN_CACHE_HOME: tempDir('agent-profile-stale-running-cache'),
+        BOXDOWN_DATA_HOME: tempDir('agent-profile-stale-running-data')
+      }
+      const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+      let upCalls = 0
+
+      mkdirSync(context.sshKeyDir, { recursive: true })
+      writeFileSync(context.sshKeyPath, 'test private key\n')
+      writeFileSync(context.sshPublicKeyPath, 'test public key\n')
+      writeGeneratedDevcontainerConfig(context, undefined, 'auth')
+
+      await withProcessEnv(env as Record<string, string>, async () => {
+        await assert.rejects(startDevcontainer(context, {
+          agentProfile: 'full',
+          reuseRunning: true,
+          progress: createProgress({ mode: 'none' }),
+          runDevcontainerUp: async () => {
+            upCalls += 1
+            return { code: 0, stdout: '{"containerId":"stale-running"}\n', stderr: '' }
+          }
+        }), /Agent profile full is not active in this devcontainer\.\nRun `boxdown start --recreate --agent-profile full`\./)
+      })
+
+      assert.strictEqual(upCalls, 0)
+      assert.strictEqual(readGeneratedAgentProfile(context), 'auth')
+      assert.ok(fakeDockerCalls(logPath).includes('exec stale-running cat /opt/boxdown/state/agent-profile'))
+    })
+  })
+
+  test('agent profile lifecycle rejects a missing legacy profile marker', async () => {
+    const workspace = tempDir('agent-profile-legacy-marker-workspace')
+
+    await withFakeDocker([{ workspace, id: 'legacy-running' }], async (_logPath, dockerEnv) => {
+      const env = {
+        ...dockerEnv,
+        BOXDOWN_CACHE_HOME: tempDir('agent-profile-legacy-marker-cache'),
+        BOXDOWN_DATA_HOME: tempDir('agent-profile-legacy-marker-data')
+      }
+      const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+      let upCalls = 0
+
+      mkdirSync(context.sshKeyDir, { recursive: true })
+      writeFileSync(context.sshKeyPath, 'test private key\n')
+      writeFileSync(context.sshPublicKeyPath, 'test public key\n')
+
+      await withProcessEnv(env as Record<string, string>, async () => {
+        await assert.rejects(startDevcontainer(context, {
+          agentProfile: 'auth',
+          reuseRunning: true,
+          progress: createProgress({ mode: 'none' }),
+          runDevcontainerUp: async () => {
+            upCalls += 1
+            return { code: 0, stdout: '{"containerId":"legacy-running"}\n', stderr: '' }
+          }
+        }), /Agent profile auth is not active in this devcontainer\.\nRun `boxdown start --recreate --agent-profile auth`\./)
+      })
+
+      assert.strictEqual(upCalls, 0)
+    })
+  })
+
+  test('agent profile lifecycle reuses a container with a matching marker', async () => {
+    const workspace = tempDir('agent-profile-matching-reuse-workspace')
+
+    await withFakeDocker([{ workspace, id: 'matching-running', agentProfileMarker: 'full' }], async (logPath, dockerEnv) => {
+      const env = {
+        ...dockerEnv,
+        BOXDOWN_CACHE_HOME: tempDir('agent-profile-matching-reuse-cache'),
+        BOXDOWN_DATA_HOME: tempDir('agent-profile-matching-reuse-data')
+      }
+      const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+
+      mkdirSync(context.sshKeyDir, { recursive: true })
+      writeFileSync(context.sshKeyPath, 'test private key\n')
+      writeFileSync(context.sshPublicKeyPath, 'test public key\n')
+
+      const containerId = await withProcessEnv(env as Record<string, string>, async () => startDevcontainer(context, {
+        agentProfile: 'full',
+        reuseRunning: true,
+        progress: createProgress({ mode: 'none' })
+      }))
+
+      assert.strictEqual(containerId, 'matching-running')
+      assert.strictEqual(readGeneratedAgentProfile(context), 'full')
+      assert.strictEqual(
+        fakeDockerCalls(logPath).filter((call) => call === 'exec matching-running cat /opt/boxdown/state/agent-profile').length,
+        2
+      )
+    })
+  })
+
+  test('recreate seeds a fresh profile marker through devcontainer up without host bootstrap mutation', async () => {
+    const workspace = tempDir('recreate-fresh-profile-workspace')
+
+    await withFakeDocker([{ workspace, id: 'recreated-profile', agentProfileMarker: 'auth' }], async (logPath, dockerEnv) => {
+      const env = {
+        ...dockerEnv,
+        BOXDOWN_CACHE_HOME: tempDir('recreate-fresh-profile-cache'),
+        BOXDOWN_DATA_HOME: tempDir('recreate-fresh-profile-data')
+      }
+      const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+      let capturedArgs: string[] = []
+
+      mkdirSync(context.sshKeyDir, { recursive: true })
+      writeFileSync(context.sshKeyPath, 'test private key\n')
+      writeFileSync(context.sshPublicKeyPath, 'test public key\n')
+      writeGeneratedDevcontainerConfig(context, undefined, 'auth')
+
+      const containerId = await withProcessEnv(env as Record<string, string>, async () => startDevcontainer(context, {
+        agentProfile: 'full',
+        recreate: true,
+        reuseRunning: true,
+        progress: createProgress({ mode: 'none' }),
+        runDevcontainerUp: async (_label, _command, args) => {
+          capturedArgs = args
+          updateFakeDockerContainer(env, 'recreated-profile', {
+            containerState: 'running',
+            agentProfileMarker: 'full'
+          })
+          return { code: 0, stdout: '{"containerId":"recreated-profile"}\n', stderr: '' }
+        }
+      }))
+
+      const calls = fakeDockerCalls(logPath)
+      assert.strictEqual(containerId, 'recreated-profile')
+      assert.ok(capturedArgs.includes('--remove-existing-container'))
+      assert.ok(calls.includes('exec recreated-profile cat /opt/boxdown/state/agent-profile'))
+      assert.strictEqual(calls.some((call) => call.includes('agent-profile-bootstrap')), false)
+      assert.strictEqual(calls.some((call) => call.startsWith('rm ')), false)
+    })
+  })
+
+  test('container lifecycle restarts a stopped matching profile without invoking the bootstrap on the host', async () => {
+    const workspace = tempDir('container-lifecycle-stopped-profile-workspace')
+
+    await withFakeDocker([{
+      workspace,
+      id: 'stopped-profile',
+      containerState: 'exited',
+      agentProfileMarker: 'full'
+    }], async (logPath, dockerEnv) => {
+      const env = {
+        ...dockerEnv,
+        BOXDOWN_CACHE_HOME: tempDir('container-lifecycle-stopped-profile-cache'),
+        BOXDOWN_DATA_HOME: tempDir('container-lifecycle-stopped-profile-data')
+      }
+      const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+
+      mkdirSync(context.sshKeyDir, { recursive: true })
+      writeFileSync(context.sshKeyPath, 'test private key\n')
+      writeFileSync(context.sshPublicKeyPath, 'test public key\n')
+      writeGeneratedDevcontainerConfig(context, undefined, 'full')
+
+      const containerId = await withProcessEnv(env as Record<string, string>, async () => startDevcontainer(context, {
+        agentProfile: 'full',
+        reuseRunning: true,
+        progress: createProgress({ mode: 'none' }),
+        runDevcontainerUp: async () => {
+          updateFakeDockerContainer(env, 'stopped-profile', { containerState: 'running' })
+          return { code: 0, stdout: '{"containerId":"stopped-profile"}\n', stderr: '' }
+        }
+      }))
+
+      const calls = fakeDockerCalls(logPath)
+      assert.strictEqual(containerId, 'stopped-profile')
+      assert.deepStrictEqual(
+        calls.filter((call) => call === 'exec stopped-profile cat /opt/boxdown/state/agent-profile'),
+        ['exec stopped-profile cat /opt/boxdown/state/agent-profile']
+      )
+      assert.strictEqual(calls.some((call) => call.includes('agent-profile-bootstrap')), false)
+    })
+  })
+
+  test('agent profile lifecycle rejects a newly created container without a marker', async () => {
+    const workspace = tempDir('agent-profile-new-missing-marker-workspace')
+
+    await withFakeDocker([], async (_logPath, dockerEnv) => {
+      const env = {
+        ...dockerEnv,
+        BOXDOWN_CACHE_HOME: tempDir('agent-profile-new-missing-marker-cache'),
+        BOXDOWN_DATA_HOME: tempDir('agent-profile-new-missing-marker-data')
+      }
+      const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+
+      mkdirSync(context.sshKeyDir, { recursive: true })
+      writeFileSync(context.sshKeyPath, 'test private key\n')
+      writeFileSync(context.sshPublicKeyPath, 'test public key\n')
+
+      await withProcessEnv(env as Record<string, string>, async () => {
+        await assert.rejects(startDevcontainer(context, {
+          agentProfile: 'none',
+          progress: createProgress({ mode: 'none' }),
+          runDevcontainerUp: async () => ({
+            code: 0,
+            stdout: '{"containerId":"new-without-marker"}\n',
+            stderr: ''
+          })
+        }), /Agent profile none is not active in this devcontainer\.\nRun `boxdown start --recreate --agent-profile none`\./)
+      })
+    })
   })
 })
 
@@ -5602,7 +7120,7 @@ describe('Claude Code host credentials', () => {
     )
     assert.strictEqual(
       defaultHostClaudeCredentialsPath({ USERPROFILE: 'C:\\Users\\Alice' }, 'win32'),
-      'C:\\Users\\Alice\\.claude.credentials.json'
+      'C:\\Users\\Alice\\.claude\\.credentials.json'
     )
     assert.strictEqual(
       defaultHostClaudeCredentialsPath({ CLAUDE_CONFIG_DIR: '/secure/claude' }, 'linux'),
@@ -5610,30 +7128,6 @@ describe('Claude Code host credentials', () => {
     )
     assert.strictEqual(defaultHostClaudeCredentialsPath({ HOME: '/Users/alice' }, 'darwin'), undefined)
     assert.strictEqual(defaultHostClaudeCredentialsPath({ HOME: '/home/alice' }, 'freebsd'), undefined)
-  })
-
-  test('mounts a present host Claude credential file read-write', () => {
-    const home = tempDir('claude-auth-home')
-    const credentialsDir = join(home, '.claude')
-    const credentialsPath = join(credentialsDir, '.credentials.json')
-    mkdirSync(credentialsDir)
-    writeFileSync(credentialsPath, '{}\n')
-    const context = {
-      ...createWorkspaceContext({
-        workspace: tempDir('claude-auth-workspace'),
-        env: { HOME: home, BOXDOWN_CACHE_HOME: tempDir('claude-auth-cache'), BOXDOWN_DATA_HOME: tempDir('claude-auth-data') },
-        assetsDevcontainerDir
-      }),
-      hostClaudeCredentialsPath: credentialsPath
-    }
-
-    const config = buildGeneratedDevcontainerConfig(context)
-
-    assert.strictEqual(context.hostClaudeCredentialsPath, credentialsPath)
-    assert.ok(config.mounts?.includes(
-      `type=bind,source=${credentialsPath},target=${BOXDOWN_CONTAINER_CLAUDE_CREDENTIALS_PATH}`
-    ))
-    assert.ok(!config.mounts?.some((mount) => mount.includes(`target=${BOXDOWN_CONTAINER_CLAUDE_CREDENTIALS_PATH},readonly`)))
   })
 
   test('does not mount an absent host Claude credential file', () => {
@@ -5719,92 +7213,6 @@ describe('Claude Code host credentials', () => {
       assert.ok(config.mounts?.includes(existingMount))
       assert.ok(!config.mounts?.includes(`type=bind,source=${context.hostClaudeCredentialsPath},target=${BOXDOWN_CONTAINER_CLAUDE_CREDENTIALS_PATH}`))
     }
-  })
-})
-
-describe('coding-agent MCP configuration', () => {
-  test('projects global and workspace-local Claude MCP servers into runtime state', () => {
-    const home = tempDir('claude-mcp-home')
-    const workspace = tempDir('claude-mcp-workspace')
-    const context = createWorkspaceContext({
-      workspace,
-      env: {
-        HOME: home,
-        BOXDOWN_CACHE_HOME: tempDir('claude-mcp-cache'),
-        BOXDOWN_DATA_HOME: tempDir('claude-mcp-data'),
-        BOXDOWN_RUNTIME_HOME: tempDir('claude-mcp-runtime')
-      },
-      assetsDevcontainerDir
-    })
-    writeFileSync(join(home, '.claude.json'), `${JSON.stringify({
-      mcpServers: {
-        global: { type: 'stdio', command: 'global-server', args: [], env: {} }
-      },
-      projects: {
-        [context.workspaceFolder]: {
-          mcpServers: {
-            local: { type: 'stdio', command: 'local-server', args: [], env: {} }
-          },
-          enabledMcpjsonServers: ['workspace-server'],
-          disabledMcpjsonServers: ['disabled-server']
-        }
-      }
-    }, null, 2)}\n`)
-    mkdirSync(join(home, '.codex'))
-    writeFileSync(join(home, '.codex', 'config.toml'), '[mcp_servers.global]\ncommand = "global-server"\n')
-    mkdirSync(context.workspaceMcpConfigDir, { recursive: true })
-    writeFileSync(context.workspaceClaudeMcpConfigPath, '{}\n', { mode: 0o644 })
-    chmodSync(context.workspaceClaudeMcpConfigPath, 0o644)
-
-    const result = prepareClaudeMcpConfig(context)
-    const projected = JSON.parse(readFileSync(context.workspaceClaudeMcpConfigPath, 'utf8')) as Record<string, unknown>
-    const config = buildGeneratedDevcontainerConfig(context)
-
-    assert.deepStrictEqual(result, { state: 'prepared', path: context.workspaceClaudeMcpConfigPath })
-    assert.strictEqual(statSync(context.workspaceClaudeMcpConfigPath).mode & 0o777, 0o600)
-    assert.deepStrictEqual(projected, {
-      mcpServers: {
-        global: { type: 'stdio', command: 'global-server', args: [], env: {} }
-      },
-      projects: {
-        [`/workspaces/${context.workspaceBasename}`]: {
-          mcpServers: {
-            local: { type: 'stdio', command: 'local-server', args: [], env: {} }
-          },
-          enabledMcpjsonServers: ['workspace-server'],
-          disabledMcpjsonServers: ['disabled-server']
-        }
-      }
-    })
-    assert.ok(config.mounts?.includes(
-      `type=bind,source=${context.hostCodexConfigPath},target=${BOXDOWN_CONTAINER_CODEX_CONFIG_PATH},readonly`
-    ))
-    assert.ok(config.mounts?.includes(
-      `type=bind,source=${context.workspaceClaudeMcpConfigPath},target=${BOXDOWN_CONTAINER_CLAUDE_CONFIG_PATH}`
-    ))
-  })
-
-  test('does not mount absent or malformed MCP configuration', () => {
-    const home = tempDir('missing-mcp-home')
-    const workspace = tempDir('missing-mcp-workspace')
-    const context = createWorkspaceContext({
-      workspace,
-      env: {
-        HOME: home,
-        BOXDOWN_CACHE_HOME: tempDir('missing-mcp-cache'),
-        BOXDOWN_DATA_HOME: tempDir('missing-mcp-data'),
-        BOXDOWN_RUNTIME_HOME: tempDir('missing-mcp-runtime')
-      },
-      assetsDevcontainerDir
-    })
-    writeFileSync(join(home, '.claude.json'), '{invalid json\n')
-
-    const result = prepareClaudeMcpConfig(context)
-    const config = buildGeneratedDevcontainerConfig(context)
-
-    assert.deepStrictEqual(result, { state: 'invalid', path: context.hostClaudeConfigPath })
-    assert.ok(!config.mounts?.some((mount) => mount.includes(`target=${BOXDOWN_CONTAINER_CODEX_CONFIG_PATH}`)))
-    assert.ok(!config.mounts?.some((mount) => mount.includes(`target=${BOXDOWN_CONTAINER_CLAUDE_CONFIG_PATH}`)))
   })
 })
 
@@ -5900,78 +7308,579 @@ describe('devcontainer config generation', () => {
     assert.strictEqual(publishContainerPortFromConfig(config), '3000')
   })
 
-  test('mounts host global agent config when present', () => {
-    const workspace = tempDir('agents-config-workspace')
-    const home = tempDir('agents-config-home')
-    const hostAgentsDir = join(home, '.agents')
-    mkdirSync(hostAgentsDir)
+  test('agent profile mounts use read-only Boxdown staging sources', () => {
+    const home = tempDir('agent-profile-home')
+    const agentsDir = join(home, '.agents')
+    const codexDir = join(home, '.codex')
+    const claudeDir = join(home, '.claude')
+    mkdirSync(agentsDir)
+    mkdirSync(join(claudeDir, 'commands'), { recursive: true })
+    mkdirSync(join(claudeDir, 'hooks'))
+    mkdirSync(join(claudeDir, 'plugins'))
+    mkdirSync(codexDir)
+    writeFileSync(join(codexDir, 'auth.json'), '{"token":"secret"}\n')
+    writeFileSync(join(codexDir, 'config.toml'), '[mcp_servers]\n')
+    writeFileSync(join(codexDir, 'AGENTS.md'), 'private instructions\n')
+    writeFileSync(join(claudeDir, '.credentials.json'), '{"token":"secret"}\n')
+    writeFileSync(join(claudeDir, 'settings.json'), '{}\n')
+    writeFileSync(join(claudeDir, 'CLAUDE.md'), 'private instructions\n')
+    writeFileSync(join(home, '.claude.json'), '{"mcpServers":{}}\n')
     const context = createWorkspaceContext({
-      workspace,
-      env: {
-        HOME: home,
-        BOXDOWN_CACHE_HOME: tempDir('agents-config-cache'),
-        BOXDOWN_DATA_HOME: tempDir('agents-config-data')
-      },
+      workspace: tempDir('agent-profile-workspace'),
+      env: { HOME: home, BOXDOWN_CACHE_HOME: tempDir('agent-profile-cache'), BOXDOWN_DATA_HOME: tempDir('agent-profile-data') },
+      platform: 'linux',
       assetsDevcontainerDir
     })
+    const expected = {
+      none: { mounts: [], sources: '' },
+      auth: {
+        mounts: [
+          `source=${agentsDir},target=${BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_AGENTS_DIR}`,
+          `source=${join(codexDir, 'auth.json')},target=${BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CODEX_AUTH_PATH}`,
+          `source=${join(claudeDir, '.credentials.json')},target=${BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CLAUDE_CREDENTIALS_PATH}`
+        ],
+        sources: 'agents,claude-auth,codex-auth'
+      },
+      full: {
+        mounts: [
+          `source=${agentsDir},target=${BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_AGENTS_DIR}`,
+          `source=${codexDir},target=${BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CODEX_DIR}`,
+          `source=${claudeDir},target=${BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CLAUDE_DIR}`,
+          `source=${join(home, '.claude.json')},target=${BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CLAUDE_CONFIG_PATH}`
+        ],
+        sources: 'agents,claude-config,claude-home,codex-home'
+      }
+    } as const
 
-    const config = buildGeneratedDevcontainerConfig(context)
-
-    assert.strictEqual(context.hostAgentsDir, hostAgentsDir)
-    assert.ok(config.mounts?.includes(`type=bind,source=${hostAgentsDir},target=${BOXDOWN_CONTAINER_AGENTS_DIR},readonly`))
-    assert.ok(!config.mounts?.some((mount) => mount.startsWith(`type=bind,source=${context.sshKeyDir},`)))
+    for (const [profile, expectation] of Object.entries(expected)) {
+      const config = buildGeneratedDevcontainerConfig(context, undefined, profile as 'none' | 'auth' | 'full')
+      const profileMounts = config.mounts?.filter(mount => mount.includes('/opt/boxdown/agent-profile-source')) ?? []
+      assert.deepStrictEqual(profileMounts.map(mount => mount.replace(',readonly', '')).sort(), expectation.mounts.map(mount => `type=bind,${mount}`).sort())
+      assert.ok(profileMounts.every(mount => mount.endsWith(',readonly')))
+      assert.strictEqual(config.containerEnv?.BOXDOWN_AGENT_PROFILE, profile)
+      assert.strictEqual(config.containerEnv?.BOXDOWN_AGENT_PROFILE_SOURCES, expectation.sources)
+      assert.ok(config.initializeCommand?.includes(`BOXDOWN_AGENT_PROFILE='${profile}'`))
+      assert.ok(!profileMounts.some(mount => /target=\/home\/node\/\.(agents|codex|claude)(,|$)/.test(mount)))
+    }
   })
 
-  test('mounts host Codex auth cache read-only when present', () => {
-    const workspace = tempDir('codex-auth-config-workspace')
-    const home = tempDir('codex-auth-config-home')
-    const hostCodexDir = join(home, '.codex')
-    const hostCodexAuthPath = join(hostCodexDir, 'auth.json')
-    mkdirSync(hostCodexDir)
-    writeFileSync(hostCodexAuthPath, '{}\n')
+  test('host agent paths honor configured roots and classify only top-level sources', () => {
+    const home = tempDir('agent-profile-path-home')
+    const customCodexDir = join(home, 'custom', 'codex')
+    const customClaudeDir = join(home, 'custom', 'claude')
+    mkdirSync(customCodexDir, { recursive: true })
+    mkdirSync(customClaudeDir, { recursive: true })
+    writeFileSync(join(customCodexDir, 'auth.json'), '{}\n')
+    writeFileSync(join(customClaudeDir, '.credentials.json'), '{}\n')
+    writeFileSync(join(customClaudeDir, '.claude.json'), '{}\n')
+    const env = { HOME: home, CODEX_HOME: customCodexDir, CLAUDE_CONFIG_DIR: customClaudeDir, BOXDOWN_CACHE_HOME: tempDir('agent-profile-path-cache'), BOXDOWN_DATA_HOME: tempDir('agent-profile-path-data') }
+    const context = createWorkspaceContext({ workspace: tempDir('agent-profile-path-workspace'), env, platform: 'linux', assetsDevcontainerDir })
+
+    assert.strictEqual(defaultHostCodexDir(env), customCodexDir)
+    assert.strictEqual(defaultHostClaudeDir(env, 'linux'), customClaudeDir)
+    assert.strictEqual(context.hostCodexDir, customCodexDir)
+    assert.strictEqual(context.hostCodexAuthPath, join(customCodexDir, 'auth.json'))
+    assert.strictEqual(context.hostClaudeDir, customClaudeDir)
+    assert.strictEqual(context.hostClaudeCredentialsPath, join(customClaudeDir, '.credentials.json'))
+    assert.strictEqual(context.hostClaudeConfigPath, join(customClaudeDir, '.claude.json'))
+    const config = buildGeneratedDevcontainerConfig(context, undefined, 'full')
+    assert.ok(config.mounts?.some(mount => mount.includes(`source=${customClaudeDir},target=${BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CLAUDE_DIR}`)))
+    assert.ok(!config.mounts?.some(mount => mount.includes(`target=${BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CLAUDE_CONFIG_PATH}`)))
+
+    const defaults = createWorkspaceContext({ workspace: tempDir('agent-profile-default-paths'), env: { HOME: home, BOXDOWN_CACHE_HOME: tempDir('agent-profile-default-cache'), BOXDOWN_DATA_HOME: tempDir('agent-profile-default-data') }, platform: 'linux', assetsDevcontainerDir })
+    assert.strictEqual(defaults.hostCodexDir, join(home, '.codex'))
+    assert.strictEqual(defaults.hostClaudeDir, join(home, '.claude'))
+    assert.strictEqual(defaults.hostClaudeConfigPath, join(home, '.claude.json'))
+    assert.strictEqual(buildGeneratedDevcontainerConfig(defaults, undefined, 'auth').containerEnv?.BOXDOWN_AGENT_PROFILE_SOURCES, '')
+  })
+
+  test('does not separately stage Claude config nested in configured roots', () => {
+    const home = tempDir('agent-profile-nested-claude-home')
+    const claudeDir = join(home, 'configured-claude')
+    mkdirSync(claudeDir)
+    writeFileSync(join(claudeDir, '.claude.json'), '{}\n')
     const context = createWorkspaceContext({
-      workspace,
-      env: {
-        HOME: home,
-        BOXDOWN_CACHE_HOME: tempDir('codex-auth-config-cache'),
-        BOXDOWN_DATA_HOME: tempDir('codex-auth-config-data')
-      },
+      workspace: tempDir('agent-profile-nested-claude-workspace'),
+      env: { HOME: home, CLAUDE_CONFIG_DIR: `${claudeDir}/`, BOXDOWN_CACHE_HOME: tempDir('agent-profile-nested-claude-cache'), BOXDOWN_DATA_HOME: tempDir('agent-profile-nested-claude-data') },
+      platform: 'linux',
       assetsDevcontainerDir
     })
+    const config = buildGeneratedDevcontainerConfig(context, undefined, 'full')
 
-    const config = buildGeneratedDevcontainerConfig(context)
-
-    assert.strictEqual(context.hostCodexAuthPath, hostCodexAuthPath)
-    assert.ok(config.mounts?.includes(`type=bind,source=${hostCodexAuthPath},target=${BOXDOWN_CONTAINER_CODEX_AUTH_PATH},readonly`))
+    assert.ok(config.mounts?.some(mount => mount.includes(`source=${context.hostClaudeDir},target=${BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CLAUDE_DIR},readonly`)))
+    assert.ok(!config.mounts?.some(mount => mount.includes(`target=${BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CLAUDE_CONFIG_PATH},readonly`)))
+    assert.strictEqual(sourcePathIsInside('C:\\custom\\claude\\.claude.json', 'C:\\custom\\claude'), true)
+    assert.strictEqual(sourcePathIsInside('C:\\custom\\claude-other\\.claude.json', 'C:\\custom\\claude'), false)
+    assert.strictEqual(sourcePathIsInside('C:\\custom\\claude\\..\\outside.json', 'C:\\custom\\claude'), false)
   })
 
-  test('does not duplicate existing Codex config mounts', () => {
-    const workspace = tempDir('codex-auth-duplicate-workspace')
-    const home = tempDir('codex-auth-duplicate-home')
-    const hostCodexDir = join(home, '.codex')
-    mkdirSync(hostCodexDir)
-    writeFileSync(join(hostCodexDir, 'auth.json'), '{}\n')
+  test('custom profile mounts retain ownership while discovered sources remain available', () => {
+    const home = tempDir('custom-profile-home')
+    const agentsDir = join(home, '.agents')
+    const codexDir = join(home, '.codex')
+    const claudeDir = join(home, '.claude')
+    mkdirSync(agentsDir)
+    mkdirSync(codexDir)
+    mkdirSync(claudeDir)
+    writeFileSync(join(codexDir, 'auth.json'), '{}\n')
+    writeFileSync(join(claudeDir, '.credentials.json'), '{}\n')
+    writeFileSync(join(home, '.claude.json'), '{}\n')
+    const cases = [
+      [BOXDOWN_CONTAINER_AGENTS_DIR, BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_AGENTS_DIR],
+      [BOXDOWN_CONTAINER_CODEX_DIR, BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CODEX_DIR],
+      [BOXDOWN_CONTAINER_CODEX_AUTH_PATH, BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CODEX_DIR],
+      [BOXDOWN_CONTAINER_CLAUDE_DIR, BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CLAUDE_DIR],
+      [BOXDOWN_CONTAINER_CLAUDE_CREDENTIALS_PATH, BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CLAUDE_DIR],
+      [BOXDOWN_CONTAINER_CLAUDE_CONFIG_PATH, BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CLAUDE_CONFIG_PATH],
+      ['/home/node', BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_AGENTS_DIR],
+      ['/home/node/.codex/custom-child', BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CODEX_DIR]
+    ] as const
 
-    for (const existingMount of [
-      `type=bind,source=/tmp/codex,target=${BOXDOWN_CONTAINER_CODEX_DIR},readonly`,
-      `type=bind,source=/tmp/auth.json,target=${BOXDOWN_CONTAINER_CODEX_AUTH_PATH},readonly`
-    ]) {
-      const customAssetsDir = tempDir('codex-auth-duplicate-assets')
-      writeFileSync(join(customAssetsDir, 'devcontainer.json'), `${JSON.stringify({ mounts: [existingMount] })}\n`)
+    for (const [destination, skippedTarget] of cases) {
+      const mount = `type=bind,source=/custom/${destination.replaceAll('/', '-')},target=${destination},readonly`
+      const customAssetsDir = tempDir('custom-profile-assets')
+      writeFileSync(join(customAssetsDir, 'devcontainer.json'), `${JSON.stringify({ mounts: [mount] })}\n`)
       const context = createWorkspaceContext({
-        workspace,
-        env: {
-          HOME: home,
-          BOXDOWN_CACHE_HOME: tempDir('codex-auth-duplicate-cache'),
-          BOXDOWN_DATA_HOME: tempDir('codex-auth-duplicate-data')
-        },
+        workspace: tempDir('custom-profile-workspace'),
+        env: { HOME: home, BOXDOWN_CACHE_HOME: tempDir('custom-profile-cache'), BOXDOWN_DATA_HOME: tempDir('custom-profile-data') },
+        platform: 'linux',
         assetsDevcontainerDir: customAssetsDir
       })
+      const config = buildGeneratedDevcontainerConfig(context, undefined, 'full')
+      assert.ok(config.mounts?.includes(mount))
+      assert.ok(
+        !config.mounts?.some(candidate => candidate.includes('/opt/boxdown/agent-profile-source') && candidate.includes(`target=${skippedTarget},`)),
+        `${destination} should suppress ${skippedTarget}: ${JSON.stringify(config.mounts)}`
+      )
+      if (destination === '/home/node') {
+        assert.deepStrictEqual(
+          config.mounts?.filter(candidate => candidate.includes('/opt/boxdown/agent-profile-source')),
+          [],
+          '/home/node ownership should suppress every staged profile source'
+        )
+      }
+      assert.strictEqual(config.containerEnv?.BOXDOWN_AGENT_PROFILE_SOURCES, 'agents,claude-config,claude-home,codex-home')
+    }
 
-      const config = buildGeneratedDevcontainerConfig(context)
+    const boundaryMount = 'type=bind,source=/custom/codex-other,target=/home/node/.codex-other,readonly'
+    const boundaryAssetsDir = tempDir('custom-profile-boundary-assets')
+    writeFileSync(join(boundaryAssetsDir, 'devcontainer.json'), `${JSON.stringify({ mounts: [boundaryMount] })}\n`)
+    const boundaryContext = createWorkspaceContext({
+      workspace: tempDir('custom-profile-boundary-workspace'),
+      env: { HOME: home, BOXDOWN_CACHE_HOME: tempDir('custom-profile-boundary-cache'), BOXDOWN_DATA_HOME: tempDir('custom-profile-boundary-data') },
+      platform: 'linux',
+      assetsDevcontainerDir: boundaryAssetsDir
+    })
+    assert.ok(buildGeneratedDevcontainerConfig(boundaryContext, undefined, 'full').mounts?.some(mount => mount.includes(`target=${BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CODEX_DIR},readonly`)))
+  })
 
-      assert.ok(config.mounts?.includes(existingMount))
-      assert.ok(!config.mounts?.includes(`type=bind,source=${context.hostCodexAuthPath},target=${BOXDOWN_CONTAINER_CODEX_AUTH_PATH},readonly`))
+  test('string mount aliases and normalized POSIX destinations consistently control profile staging and status', () => {
+    const home = tempDir('normalized-string-profile-home')
+    mkdirSync(join(home, '.agents'))
+    mkdirSync(join(home, '.codex'))
+    mkdirSync(join(home, '.claude'))
+    writeFileSync(join(home, '.claude.json'), '{}\n')
+
+    const cases = [
+      {
+        name: 'target exact',
+        mount: 'type=bind,source=/custom/codex,target=/home/node/.codex,readonly',
+        ownsCodex: true
+      },
+      {
+        name: 'dst normalized parent',
+        mount: 'type=bind,source=/custom/home,dst=/home/node/.codex/..,readonly',
+        ownsCodex: true
+      },
+      {
+        name: 'destination child',
+        mount: 'type=bind,source=/custom/cache,destination=/home/node/.codex/cache,readonly',
+        ownsCodex: true
+      },
+      {
+        name: 'target trailing slash',
+        mount: 'type=bind,source=/custom/codex,target=/home/node/.codex/,readonly',
+        ownsCodex: true
+      },
+      {
+        name: 'dst double slash',
+        mount: 'type=bind,source=/custom/codex,dst=/home//node/.codex,readonly',
+        ownsCodex: true
+      },
+      {
+        name: 'destination dot and dotdot',
+        mount: 'type=bind,source=/custom/codex,destination=/home/node/./.codex/cache/..,readonly',
+        ownsCodex: true
+      },
+      {
+        name: 'sibling',
+        mount: 'type=bind,source=/custom/codex-other,target=/home/node/.codex-other,readonly',
+        ownsCodex: false
+      },
+      {
+        name: 'unrelated',
+        mount: 'type=bind,source=/custom/codex,dst=/var/lib/codex,readonly',
+        ownsCodex: false
+      },
+      {
+        name: 'relative destination',
+        mount: 'type=bind,source=/custom/codex,destination=home/node/.codex,readonly',
+        ownsCodex: false
+      },
+      {
+        name: 'any valid alias fails closed',
+        mount: 'type=bind,source=/custom/codex,target=/var/lib/codex,dst=/home/node/.codex,readonly',
+        ownsCodex: true
+      },
+      {
+        name: 'quoted destination field',
+        mount: 'type=tmpfs,"dst=/home/node/.codex"',
+        ownsCodex: true
+      },
+      {
+        name: 'quoted fields with escaped quotes and commas',
+        mount: 'type=tmpfs,"source=/tmp/source ""quoted"",with-comma","destination=/home/node/.codex/cache ""quoted"",with-comma"',
+        ownsCodex: true
+      },
+      {
+        name: 'uppercase destination alias',
+        mount: 'type=bind,source=/custom/codex,DST=/home/node/.codex,readonly',
+        ownsCodex: true
+      },
+      {
+        name: 'repeated mixed-case aliases',
+        mount: 'type=bind,source=/custom/codex,target=/var/lib/codex,DST=/home/node/.codex,readonly',
+        ownsCodex: true
+      }
+    ] as const
+
+    for (const entry of cases) {
+      const assets = tempDir(`normalized-string-profile-assets-${entry.name.replaceAll(' ', '-')}`)
+      writeFileSync(join(assets, 'devcontainer.json'), `${JSON.stringify({ mounts: [entry.mount] })}\n`)
+      const context = createWorkspaceContext({
+        workspace: tempDir(`normalized-string-profile-workspace-${entry.name.replaceAll(' ', '-')}`),
+        env: {
+          HOME: home,
+          BOXDOWN_CACHE_HOME: tempDir(`normalized-string-profile-cache-${entry.name.replaceAll(' ', '-')}`),
+          BOXDOWN_DATA_HOME: tempDir(`normalized-string-profile-data-${entry.name.replaceAll(' ', '-')}`)
+        },
+        platform: 'linux',
+        assetsDevcontainerDir: assets
+      })
+
+      const config = buildGeneratedDevcontainerConfig(context, undefined, 'full')
+      const hasCodexBootstrapInput = config.mounts?.some(mount =>
+        typeof mount === 'string' &&
+        mount.includes(`target=${BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CODEX_DIR},`)
+      ) ?? false
+
+      assert.ok(config.mounts?.includes(entry.mount), `${entry.name}: preserve original mount`)
+      assert.strictEqual(
+        hasCodexBootstrapInput,
+        !entry.ownsCodex,
+        `${entry.name}: custom ownership must suppress the corresponding bootstrap input`
+      )
+      assert.match(config.containerEnv?.BOXDOWN_AGENT_PROFILE_SOURCES ?? '', /(?:^|,)codex-home(?:,|$)/)
+
+      mkdirSync(context.workspaceCacheDir, { recursive: true })
+      writeFileSync(context.generatedConfigPath, `${JSON.stringify(config, null, 2)}\n`)
+      const status = createStatusInfo(context, 'normalized-string-profile', {
+        id: 'normalized-string-profile-container',
+        state: 'running'
+      }, existsSync, {
+        sshConfigPath: join(tempDir('normalized-string-profile-ssh'), 'config'),
+        agentProfileSelection: resolveAgentProfile(undefined, 'full'),
+        containerAgentProfile: 'full'
+      })
+
+      assert.strictEqual(
+        status.agentProfile.sources.codexHome,
+        entry.ownsCodex ? 'custom' : 'available',
+        `${entry.name}: status must match generation`
+      )
+      assert.strictEqual(
+        status.agentProfile.customDestinations.includes(BOXDOWN_CONTAINER_CODEX_DIR),
+        entry.ownsCodex,
+        `${entry.name}: normalized custom destination`
+      )
+    }
+  })
+
+  test('indeterminate mounts suppress all profile staging and report only canonical custom ownership', () => {
+    const home = tempDir('indeterminate-profile-home')
+    mkdirSync(join(home, '.agents'))
+    mkdirSync(join(home, '.codex'))
+    mkdirSync(join(home, '.claude'))
+    writeFileSync(join(home, '.codex', 'auth.json'), '{}\n')
+    writeFileSync(join(home, '.claude', '.credentials.json'), '{}\n')
+    writeFileSync(join(home, '.claude.json'), '{}\n')
+
+    const cases = [
+      {
+        name: 'malformed csv',
+        mount: 'type=bind,"source=/tmp'
+      },
+      {
+        name: 'substituted destination',
+        mount: 'type=bind,source=/tmp,target=${localEnv:PROFILE_DESTINATION}'
+      },
+      {
+        name: 'substitution generated whole field',
+        mount: '${localEnv:CUSTOM_MOUNT_FIELD}'
+      },
+      {
+        name: 'workspace substitution in a string source',
+        mount: 'type=bind,source=${localWorkspaceFolder}'
+      },
+      {
+        name: 'known gitconfig target on uncertain string',
+        mount: 'type=bind,source=${localEnv:PROFILE_SOURCE},target=/home/node/.gitconfig'
+      },
+      {
+        name: 'structured substituted destination',
+        mount: {
+          type: 'bind',
+          source: '/custom/profile',
+          destination: '${containerWorkspaceFolder}/.codex',
+          arbitrary: {
+            preserve: true
+          }
+        }
+      },
+      {
+        name: 'structured substituted source',
+        mount: {
+          type: 'bind',
+          source: '${localEnv:PROFILE_SOURCE}',
+          target: '/var/lib/unrelated',
+          arbitrary: {
+            preserve: true
+          }
+        }
+      },
+      {
+        name: 'structured substituted type',
+        mount: {
+          type: '${localEnv:MOUNT_TYPE}',
+          source: '/custom/profile',
+          target: '/var/lib/unrelated'
+        }
+      },
+      {
+        name: 'structured source comma injection',
+        mount: {
+          type: 'bind',
+          source: '/custom/profile,target=/home/node/.codex',
+          target: '/var/lib/unrelated',
+          arbitrary: {
+            preserve: true,
+            serializedLooking: 'target=/home/node/.agents,${localEnv:OPAQUE}'
+          }
+        }
+      },
+      {
+        name: 'structured type comma injection',
+        mount: {
+          type: 'bind,dst=/home/node/.codex',
+          source: '/custom/profile',
+          target: '/var/lib/unrelated'
+        }
+      },
+      {
+        name: 'structured destination comma injection',
+        mount: {
+          type: 'tmpfs',
+          target: '/var/lib/unrelated,dst=/home/node/.codex'
+        }
+      },
+      {
+        name: 'structured quote control',
+        mount: {
+          type: 'bind"',
+          source: '/custom/profile',
+          target: '/var/lib/unrelated'
+        }
+      },
+      {
+        name: 'structured carriage return control',
+        mount: {
+          type: 'bind',
+          source: '/custom/profile\r',
+          target: '/var/lib/unrelated'
+        }
+      },
+      {
+        name: 'structured line feed control',
+        mount: {
+          type: 'bind\n',
+          source: '/custom/profile',
+          target: '/var/lib/unrelated'
+        }
+      },
+      {
+        name: 'structured nul control',
+        mount: {
+          type: 'bind',
+          source: '/custom/profile',
+          target: '/var/lib/unrelated\0dst=/home/node/.codex'
+        }
+      },
+      {
+        name: 'structured non-string serialized field',
+        mount: {
+          type: 'bind',
+          source: 42,
+          target: '/var/lib/unrelated',
+          arbitrary: {
+            preserve: true
+          }
+        }
+      }
+    ] as const
+
+    for (const entry of cases) {
+      const slug = entry.name.replaceAll(' ', '-')
+      const assets = tempDir(`indeterminate-profile-assets-${slug}`)
+      writeFileSync(join(assets, 'devcontainer.json'), `${JSON.stringify({ mounts: [entry.mount] })}\n`)
+      const context = createWorkspaceContext({
+        workspace: tempDir(`indeterminate-profile-workspace-${slug}`),
+        env: {
+          HOME: home,
+          BOXDOWN_CACHE_HOME: tempDir(`indeterminate-profile-cache-${slug}`),
+          BOXDOWN_DATA_HOME: tempDir(`indeterminate-profile-data-${slug}`)
+        },
+        platform: 'linux',
+        assetsDevcontainerDir: assets
+      })
+
+      const config = buildGeneratedDevcontainerConfig(context, undefined, 'full')
+      assert.deepStrictEqual(config.mounts?.[0], entry.mount, `${entry.name}: preserve original mount`)
+      assert.deepStrictEqual(
+        config.mounts?.filter(mount =>
+          typeof mount === 'string' &&
+          mount.includes('/opt/boxdown/agent-profile-source')
+        ),
+        [],
+        `${entry.name}: uncertainty must suppress every staged profile source`
+      )
+
+      mkdirSync(context.workspaceCacheDir, { recursive: true })
+      writeFileSync(context.generatedConfigPath, `${JSON.stringify(config, null, 2)}\n`)
+      const status = createStatusInfo(context, 'indeterminate-profile', {
+        id: 'indeterminate-profile-container',
+        state: 'running'
+      }, existsSync, {
+        sshConfigPath: join(tempDir(`indeterminate-profile-ssh-${slug}`), 'config'),
+        agentProfileSelection: resolveAgentProfile(undefined, 'full'),
+        containerAgentProfile: 'full'
+      })
+
+      assert.deepStrictEqual(status.agentProfile.sources, {
+        codexAuthentication: 'custom',
+        claudeAuthentication: 'custom',
+        agents: 'custom',
+        codexHome: 'custom',
+        claudeHome: 'custom',
+        claudeConfig: 'custom'
+      }, `${entry.name}: every canonical source is externally managed`)
+      assert.deepStrictEqual(status.agentProfile.customDestinations, [
+        BOXDOWN_CONTAINER_AGENTS_DIR,
+        BOXDOWN_CONTAINER_CLAUDE_DIR,
+        BOXDOWN_CONTAINER_CLAUDE_CONFIG_PATH,
+        BOXDOWN_CONTAINER_CODEX_DIR
+      ].sort(), `${entry.name}: expose canonical top-level destinations only`)
+      assert.doesNotMatch(
+        JSON.stringify(status),
+        /\$\{|localEnv|localWorkspaceFolder|containerWorkspaceFolder/,
+        `${entry.name}: status must not disclose substitution expressions`
+      )
+    }
+  })
+
+  test('structured mounts are preserved unchanged and use normalized dst ownership in generation and status', () => {
+    const home = tempDir('structured-profile-home')
+    mkdirSync(join(home, '.agents'))
+    mkdirSync(join(home, '.codex'))
+    mkdirSync(join(home, '.claude'))
+    writeFileSync(join(home, '.claude.json'), '{}\n')
+
+    const cases: Array<{
+      name: string
+      dst: string
+      ownsCodex: boolean
+      aliases?: Record<string, string>
+    }> = [
+      { name: 'exact', dst: '/home//node/.codex/', ownsCodex: true },
+      { name: 'parent', dst: '/home/node/.codex/..', ownsCodex: true },
+      { name: 'child', dst: '/home/node/.codex/./cache', ownsCodex: true },
+      { name: 'sibling', dst: '/home/node/.codex-other', ownsCodex: false },
+      { name: 'unrelated', dst: '/var/lib/codex', ownsCodex: false },
+      {
+        name: 'repeated-case-alias',
+        dst: '/var/lib/codex',
+        ownsCodex: true,
+        aliases: {
+          DST: BOXDOWN_CONTAINER_CODEX_DIR
+        }
+      }
+    ]
+
+    for (const entry of cases) {
+      const mount = {
+        type: 'bind',
+        src: `/custom/${entry.name}`,
+        dst: entry.dst,
+        ...entry.aliases,
+        consistency: 'cached',
+        arbitrary: {
+          keep: true,
+          labels: ['opaque', entry.name],
+          serializedLooking: 'target=/home/node/.codex,${localEnv:OPAQUE}'
+        }
+      }
+      const assets = tempDir(`structured-profile-assets-${entry.name}`)
+      writeFileSync(join(assets, 'devcontainer.json'), `${JSON.stringify({ mounts: [mount] })}\n`)
+      const context = createWorkspaceContext({
+        workspace: tempDir(`structured-profile-workspace-${entry.name}`),
+        env: {
+          HOME: home,
+          BOXDOWN_CACHE_HOME: tempDir(`structured-profile-cache-${entry.name}`),
+          BOXDOWN_DATA_HOME: tempDir(`structured-profile-data-${entry.name}`)
+        },
+        platform: 'linux',
+        assetsDevcontainerDir: assets
+      })
+
+      const config = buildGeneratedDevcontainerConfig(context, undefined, 'full')
+      const hasCodexBootstrapInput = config.mounts?.some(candidate =>
+        typeof candidate === 'string' &&
+        candidate.includes(`target=${BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CODEX_DIR},`)
+      ) ?? false
+
+      assert.deepStrictEqual(config.mounts?.[0], mount, `${entry.name}: preserve every structured field`)
+      assert.strictEqual(hasCodexBootstrapInput, !entry.ownsCodex, `${entry.name}: staging decision`)
+
+      mkdirSync(context.workspaceCacheDir, { recursive: true })
+      writeFileSync(context.generatedConfigPath, `${JSON.stringify(config, null, 2)}\n`)
+      const status = createStatusInfo(context, 'structured-profile', {
+        id: 'structured-profile-container',
+        state: 'running'
+      }, existsSync, {
+        sshConfigPath: join(tempDir('structured-profile-ssh'), 'config'),
+        agentProfileSelection: resolveAgentProfile(undefined, 'full'),
+        containerAgentProfile: 'full'
+      })
+
+      assert.strictEqual(
+        status.agentProfile.sources.codexHome,
+        entry.ownsCodex ? 'custom' : 'available',
+        `${entry.name}: status must classify the same normalized dst`
+      )
+      assert.strictEqual(
+        status.agentProfile.customDestinations.includes(BOXDOWN_CONTAINER_CODEX_DIR),
+        entry.ownsCodex,
+        `${entry.name}: canonical destination reporting`
+      )
     }
   })
 
@@ -6395,6 +8304,83 @@ describe('SSH-agent proxy asset', () => {
 })
 
 describe('devcontainer git config hooks', () => {
+  test('initialization scopes ANTHROPIC_API_KEY by agent profile without changing unrelated runtime secrets', () => {
+    const initializePath = join(assetsDevcontainerDir, 'hooks', 'initialize.sh')
+    const binDir = join(tempDir('agent-profile-initialize-bin'), 'bin')
+    const baseEnv = { ...process.env }
+    delete baseEnv.ANTHROPIC_API_KEY
+    delete baseEnv.SNYK_TOKEN
+    mkdirSync(binDir)
+    writeFileSync(join(binDir, 'op'), '#!/usr/bin/env bash\nexit 1\n')
+    chmodSync(join(binDir, 'op'), 0o755)
+
+    for (const { profile, hasAnthropicKey } of [
+      { profile: 'none', hasAnthropicKey: false },
+      { profile: 'auth', hasAnthropicKey: true },
+      { profile: 'full', hasAnthropicKey: true }
+    ]) {
+      const secretDir = join(tempDir(`agent-profile-${profile}-state`), 'secrets')
+      mkdirSync(secretDir)
+      writeFileSync(join(secretDir, 'ANTHROPIC_API_KEY'), 'stale-anthropic-runtime-sentinel')
+      writeFileSync(join(secretDir, 'SNYK_TOKEN'), 'stale-snyk-runtime-sentinel')
+      writeFileSync(join(secretDir, 'OP_SERVICE_ACCOUNT_TOKEN'), 'stale-op-runtime-sentinel')
+
+      execFileSync('bash', [initializePath], {
+        env: {
+          ...baseEnv,
+          PATH: `${binDir}${delimiter}${baseEnv.PATH ?? ''}`,
+          BOXDOWN_SECRET_ENV_DIR: secretDir,
+          BOXDOWN_AGENT_PROFILE: profile,
+          ANTHROPIC_API_KEY: 'anthropic-runtime-sentinel',
+          SNYK_TOKEN: 'snyk-runtime-sentinel'
+        }
+      })
+
+      assert.strictEqual(existsSync(join(secretDir, 'ANTHROPIC_API_KEY')), hasAnthropicKey)
+      if (hasAnthropicKey) {
+        assert.strictEqual(readFileSync(join(secretDir, 'ANTHROPIC_API_KEY'), 'utf8'), 'anthropic-runtime-sentinel')
+      }
+      assert.strictEqual(readFileSync(join(secretDir, 'SNYK_TOKEN'), 'utf8'), 'snyk-runtime-sentinel')
+      assert.strictEqual(existsSync(join(secretDir, 'OP_SERVICE_ACCOUNT_TOKEN')), false)
+    }
+
+    const defaultProfileSecretDir = join(tempDir('agent-profile-default-state'), 'secrets')
+    execFileSync('bash', [initializePath], {
+      env: {
+        ...baseEnv,
+        PATH: `${binDir}${delimiter}${baseEnv.PATH ?? ''}`,
+        BOXDOWN_SECRET_ENV_DIR: defaultProfileSecretDir,
+        ANTHROPIC_API_KEY: 'anthropic-runtime-sentinel'
+      }
+    })
+    assert.strictEqual(
+      readFileSync(join(defaultProfileSecretDir, 'ANTHROPIC_API_KEY'), 'utf8'),
+      'anthropic-runtime-sentinel'
+    )
+
+    const staleSecretDir = join(tempDir('agent-profile-stale-state'), 'secrets')
+    execFileSync('bash', [initializePath], {
+      env: {
+        ...baseEnv,
+        PATH: `${binDir}${delimiter}${baseEnv.PATH ?? ''}`,
+        BOXDOWN_SECRET_ENV_DIR: staleSecretDir,
+        BOXDOWN_AGENT_PROFILE: 'auth',
+        ANTHROPIC_API_KEY: 'anthropic-runtime-sentinel'
+      }
+    })
+    assert.strictEqual(readFileSync(join(staleSecretDir, 'ANTHROPIC_API_KEY'), 'utf8'), 'anthropic-runtime-sentinel')
+
+    execFileSync('bash', [initializePath], {
+      env: {
+        ...baseEnv,
+        PATH: `${binDir}${delimiter}${baseEnv.PATH ?? ''}`,
+        BOXDOWN_SECRET_ENV_DIR: staleSecretDir,
+        BOXDOWN_AGENT_PROFILE: 'none'
+      }
+    })
+    assert.strictEqual(existsSync(join(staleSecretDir, 'ANTHROPIC_API_KEY')), false)
+  })
+
   test('initialization writes private runtime secrets without changing project environment files', () => {
     const initializePath = join(assetsDevcontainerDir, 'hooks', 'initialize.sh')
     const workspace = tempDir('runtime-secret-initialize-workspace')
@@ -8395,6 +10381,9 @@ describe('packaged assets', () => {
     const postCreate = readFileSync(join(assetsDevcontainerDir, 'hooks', 'post-create.sh'), 'utf8')
     const gitConfigBootstrap = readFileSync(join(assetsDevcontainerDir, 'utils', 'git-config-bootstrap.sh'), 'utf8')
 
+    assert.match(postCreate, /run_step "Copying isolated agent profile" configure_agent_profile/)
+    assert.match(postCreate, /agent-profile-bootstrap\.mjs/)
+    assert.ok(postCreate.indexOf('Copying isolated agent profile') < postCreate.indexOf('Installing workspace dependencies'))
     assert.match(postCreate, /configure_global_git/)
     assert.match(postCreate, /git-config-bootstrap\.sh/)
     assert.match(postCreate, /configure_git_signing/)

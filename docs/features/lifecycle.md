@@ -61,6 +61,23 @@ workspace container is running. Missing setup or a stopped/absent container is
 reported in the output and exits nonzero. Installing an SSH alias is optional
 and is not required for a healthy status exit.
 
+### Agent profile state
+
+`status` also reports the selected `none`, `auth`, or `full` profile, its source
+availability without enumerating profile contents, generated staging intent,
+and the container-local applied marker when the container is running. The three
+truth points are:
+
+```text
+metadata selection -> generated staging intent -> container applied marker
+```
+
+They must agree for a container profile to be active. A changed selection or a
+mismatch requires recreation because Docker mount configuration cannot be
+changed on an existing container. Host profile changes likewise do not update a
+stopped or running container; they are copied only when a new container is
+created.
+
 ## Stop, Down, and Purge
 
 `stop` stops the workspace devcontainer when it is running. If the container is
@@ -69,6 +86,13 @@ already stopped or absent, it prints a short message and exits 0.
 `down` removes the workspace devcontainer with Docker and removes its
 per-workspace runtime-secret state. It does not remove persistent Boxdown
 cache, generated config, data directories, or SSH keys.
+
+Agent profile data follows the container lifecycle. `stop` preserves the
+container profile, and a later start of the same container preserves its
+container-local writable profile changes. `down`, `purge`, and
+`start --recreate` discard the profile copy; recreation seeds a new copy from
+the current staged host sources. None of these commands writes container profile
+changes back to the host.
 
 Lifecycle commands append managed output to the workspace command log under the
 workspace data directory. In an interactive terminal, `--verbose` displays the

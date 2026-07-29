@@ -77,13 +77,35 @@ integrations.
 The generated config mounts `assets/devcontainer/` read-only into the container
 at `/opt/boxdown/devcontainer`.
 
-When the host has `~/.agents`, the generated config also mounts it read-only at
-`/home/node/.agents` so host-global agent configuration is available inside the
-container without being copied into target repositories.
+Agent-profile sources are mounted read-only only below
+`/opt/boxdown/agent-profile-source`. The post-create bootstrap copies selected
+sources to writable container-local canonical homes. It never mounts a
+Boxdown-selected host source directly at `/home/node/.agents`,
+`/home/node/.codex`, `/home/node/.claude`, or `/home/node/.claude.json`, and it
+never synchronizes a container copy back to the host.
 
-When the host has file-backed Codex auth at `~/.codex/auth.json`, the generated
-config mounts that single file read-only at `/home/node/.codex/auth.json`. It
-does not mount the full host `~/.codex` directory.
+The `auth` default copies supported file-backed authentication and the complete
+host `~/.agents` tree. The `full` tier also copies opaque Codex and Claude homes;
+the `none` tier omits host user-scoped profile data. Repository-scoped agent
+configuration is outside this boundary because the workspace mount exposes it
+in every tier.
+
+A custom mount at, above, or below a canonical profile destination is externally
+managed. Boxdown skips the matching profile staging source and bootstrap copy,
+so custom-mount ownership and write policy remain with the custom mount.
+
+Profile lifecycle has three truth points:
+
+```text
+metadata selection -> generated staging intent -> container applied marker
+```
+
+Workspace metadata records the selected tier, generated configuration records
+the create-time staging intent, and the bootstrap writes the container-local
+marker only after a successful copy. Status compares all three. A mismatch
+requires recreation: Docker cannot add or replace create-time mounts in an
+existing container, and host changes never update its stopped or running copied
+profile.
 
 The container receives only a public SSH key mount. The private host key stays
 on the host and is referenced from the user's SSH config.

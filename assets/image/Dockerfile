@@ -43,6 +43,8 @@ RUN chmod 0755 \
         "$TARGETARCH" \
         /opt/boxdown/image-tools/tools.lock.json
 
-RUN install -d -m 0700 -o node -g node /home/node/.claude /home/node/.codex
+RUN install -d -m 1777 -o root -g root /opt/boxdown/state \
+    && install -d -m 0700 -o node -g node \
+        /home/node/.claude /home/node/.codex
 
 USER node

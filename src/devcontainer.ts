@@ -1,12 +1,11 @@
 import {
   BOXDOWN_CONTAINER_DEVCONTAINER_DIR
 } from './constants.ts'
-import { buildGeneratedDevcontainerConfig, publishContainerPortFromConfig, writeGeneratedDevcontainerConfig } from './config.ts'
+import { buildGeneratedDevcontainerConfig, publishContainerPortFromConfig, readGeneratedAgentProfile, writeGeneratedDevcontainerConfig } from './config.ts'
 import { codingAgentBinary, type CodingAgentCli } from './coding-agents.ts'
 import { resolveDevcontainerCli } from './devcontainer-cli.ts'
 import { configureWorkspaceGithubGitAuth } from './github-git-auth.ts'
 import { reportGitSigningPlan, resolveGitSigningPlan } from './git-signing.ts'
-import { prepareClaudeMcpConfig } from './mcp-config.ts'
 import type { WorkspaceCommandLogger } from './logging.ts'
 import { recordLegacyImageMigrationNotice, recordWorkspaceDockerImage } from './metadata.ts'
 import type { WorkspaceContext } from './paths.ts'
@@ -15,8 +14,10 @@ import { assertProgressCommandSucceeded, type ProgressReporter, runProgressComma
 import { interactiveCommandScript, interactiveShellEnvArgs, interactiveShellScript } from './shell.ts'
 import { ensureHostSshKey } from './ssh-key.ts'
 import { type ContainerSummary, parseDockerPsJsonLines } from './status.ts'
+import { DEFAULT_AGENT_PROFILE, isAgentProfile, type AgentProfile } from './agent-profile.ts'
 
 export interface StartOptions {
+  agentProfile?: AgentProfile
   recreate?: boolean
   proxyMode?: boolean
   progress?: ProgressReporter
@@ -26,6 +27,7 @@ export interface StartOptions {
 }
 
 export interface ContainerCommandOptions {
+  agentProfile?: AgentProfile
   progress?: ProgressReporter
   logger?: WorkspaceCommandLogger
 }
@@ -63,13 +65,6 @@ function log (message: string, proxyMode = false): void {
     process.stderr.write(`${message}\n`)
   } else {
     process.stdout.write(`${message}\n`)
-  }
-}
-
-function prepareMcpConfig (context: WorkspaceContext): void {
-  const result = prepareClaudeMcpConfig(context)
-  if (result.state === 'invalid') {
-    process.stderr.write(`Warning: ignored invalid Claude MCP configuration: ${result.path}\n`)
   }
 }
 
@@ -148,6 +143,28 @@ export async function findRunningContainerId (context: WorkspaceContext, options
   }
 
   return result.stdout.split(/\r?\n/).find((line) => line.length > 0)
+}
+
+export async function inspectContainerAgentProfile (
+  containerId: string,
+  options: { logger?: WorkspaceCommandLogger } = {}
+): Promise<AgentProfile | undefined> {
+  const result = await runBuffered('docker', [
+    'exec',
+    containerId,
+    'cat',
+    '/opt/boxdown/state/agent-profile'
+  ], {
+    logger: options.logger,
+    logOutput: false,
+    mirrorStdout: false,
+    mirrorStderr: false
+  })
+
+  if (result.code !== 0) return undefined
+
+  const agentProfile = result.stdout.trim()
+  return isAgentProfile(agentProfile) ? agentProfile : undefined
 }
 
 export function parseDockerInspectImage (output: string, containerId: string): DockerImageInfo | undefined {
@@ -290,7 +307,22 @@ export async function removeDockerImage (imageId: string, options: { logger?: Wo
   return true
 }
 
+function agentProfileMismatchMessage (agentProfile: AgentProfile): string {
+  return `Agent profile ${agentProfile} is not active in this devcontainer.\nRun \`boxdown start --recreate --agent-profile ${agentProfile}\`.`
+}
+
+async function assertContainerAgentProfile (
+  containerId: string,
+  agentProfile: AgentProfile,
+  logger?: WorkspaceCommandLogger
+): Promise<void> {
+  if (await inspectContainerAgentProfile(containerId, { logger }) !== agentProfile) {
+    throw new Error(agentProfileMismatchMessage(agentProfile))
+  }
+}
+
 export async function startDevcontainer (context: WorkspaceContext, options: StartOptions = {}): Promise<string> {
+  const agentProfile = options.agentProfile ?? DEFAULT_AGENT_PROFILE
   const progress = options.progress
   const proxyMode = options.proxyMode ?? false
   const hasSshIdentityStep = progress?.hasStep('ssh-identity') === true
@@ -318,6 +350,21 @@ export async function startDevcontainer (context: WorkspaceContext, options: Sta
     throw error
   }
 
+  const existingContainer = options.recreate === true
+    ? undefined
+    : await findWorkspaceContainer(context, { logger: options.logger })
+  const priorGeneratedAgentProfile = readGeneratedAgentProfile(context)
+  if (existingContainer !== undefined) {
+    const runningAgentProfile = existingContainer.state?.toLowerCase() === 'running'
+      ? await inspectContainerAgentProfile(existingContainer.id, { logger: options.logger })
+      : undefined
+    const activeAgentProfile = runningAgentProfile ?? priorGeneratedAgentProfile
+
+    if (activeAgentProfile !== agentProfile) {
+      throw new Error(agentProfileMismatchMessage(agentProfile))
+    }
+  }
+
   if (hasConfigStep) {
     progress?.startStep('devcontainer-config')
   } else if (progress !== undefined) {
@@ -326,7 +373,6 @@ export async function startDevcontainer (context: WorkspaceContext, options: Sta
   }
   try {
     const signingPlan = await resolveGitSigningPlan(context)
-    prepareMcpConfig(context)
     reportGitSigningPlan(signingPlan, {
       logger: options.logger,
       quiet: proxyMode,
@@ -338,7 +384,7 @@ export async function startDevcontainer (context: WorkspaceContext, options: Sta
             }
           })
     })
-    writeGeneratedDevcontainerConfig(context, signingPlan)
+    writeGeneratedDevcontainerConfig(context, signingPlan, agentProfile)
     if (hasConfigStep) {
       progress?.completeStep('devcontainer-config')
     }
@@ -357,11 +403,23 @@ export async function startDevcontainer (context: WorkspaceContext, options: Sta
         log(`Using running devcontainer for: ${context.workspaceFolder}`, proxyMode)
       } else if (hasStartStep) {
         progress.startStep('devcontainer-start')
-        progress.completeStep('devcontainer-start')
       } else {
         progress.item('Using running devcontainer')
         progress.detail(runningContainerId)
       }
+
+      try {
+        await assertContainerAgentProfile(runningContainerId, agentProfile, options.logger)
+        if (hasStartStep) {
+          progress?.completeStep('devcontainer-start')
+        }
+      } catch (error) {
+        if (hasStartStep) {
+          progress?.failStep('devcontainer-start')
+        }
+        throw error
+      }
+
       await recordContainerImageIfPresent(context, runningContainerId, options.logger)
       return runningContainerId
     }
@@ -386,45 +444,64 @@ export async function startDevcontainer (context: WorkspaceContext, options: Sta
     }
   }
 
-  const result = progress === undefined
-    ? await runBuffered(cli.command, [...cli.argsPrefix, ...args], {
-        mirrorStdout: proxyMode ? 'stderr' : 'stdout',
-        mirrorStderr: 'stderr',
-        logger: options.logger
-      })
-    : await (options.runDevcontainerUp ?? runProgressCommand)('devcontainer up', cli.command, [...cli.argsPrefix, ...args], {
-        progress,
-        spinnerLabel: 'Starting devcontainer',
-        stepId: 'devcontainer-start',
-        verboseStdout: proxyMode ? 'stderr' : 'stdout',
-        verboseStderr: 'stderr',
-        logger: options.logger
-      })
-
-  if (progress === undefined && result.code !== 0) {
-    throw new Error(`devcontainer up failed for ${context.workspaceFolder}`)
+  if (hasStartStep) {
+    progress?.startStep('devcontainer-start')
+  } else {
+    progress?.startSpinner('Starting devcontainer')
   }
 
-  if (progress !== undefined) {
-    assertProgressCommandSucceeded(
-      'devcontainer up',
-      result,
-      `devcontainer up failed for ${context.workspaceFolder}`,
-      { logPath: options.logger?.logPath }
-    )
-  }
+  try {
+    const result = progress === undefined
+      ? await runBuffered(cli.command, [...cli.argsPrefix, ...args], {
+          mirrorStdout: proxyMode ? 'stderr' : 'stdout',
+          mirrorStderr: 'stderr',
+          logger: options.logger
+        })
+      : await (options.runDevcontainerUp ?? runProgressCommand)('devcontainer up', cli.command, [...cli.argsPrefix, ...args], {
+          manageProgress: false,
+          progress,
+          spinnerLabel: 'Starting devcontainer',
+          stepId: 'devcontainer-start',
+          verboseStdout: proxyMode ? 'stderr' : 'stdout',
+          verboseStderr: 'stderr',
+          logger: options.logger
+        })
 
-  const containerId = parseContainerIdFromUpOutput(`${result.stdout}\n${result.stderr}`) ?? await findRunningContainerId(context, { logger: options.logger })
+    if (progress === undefined && result.code !== 0) {
+      throw new Error(`devcontainer up failed for ${context.workspaceFolder}`)
+    }
 
-  if (containerId === undefined) {
+    if (progress !== undefined) {
+      assertProgressCommandSucceeded(
+        'devcontainer up',
+        result,
+        `devcontainer up failed for ${context.workspaceFolder}`,
+        { logPath: options.logger?.logPath }
+      )
+    }
+
+    const containerId = parseContainerIdFromUpOutput(`${result.stdout}\n${result.stderr}`) ?? await findRunningContainerId(context, { logger: options.logger })
+
+    if (containerId === undefined) {
+      throw new Error(`Could not resolve devcontainer ID for ${context.workspaceFolder}`)
+    }
+
+    await assertContainerAgentProfile(containerId, agentProfile, options.logger)
+    if (hasStartStep) {
+      progress?.completeStep('devcontainer-start')
+    } else {
+      progress?.stopSpinner('complete')
+    }
+    await recordContainerImageIfPresent(context, containerId, options.logger)
+    return containerId
+  } catch (error) {
     if (hasStartStep) {
       progress?.failStep('devcontainer-start')
+    } else {
+      progress?.stopSpinner()
     }
-    throw new Error(`Could not resolve devcontainer ID for ${context.workspaceFolder}`)
+    throw error
   }
-
-  await recordContainerImageIfPresent(context, containerId, options.logger)
-  return containerId
 }
 
 export async function printPortHint (context: WorkspaceContext, containerId: string, options: { logger?: WorkspaceCommandLogger } = {}): Promise<void> {
@@ -694,6 +771,7 @@ async function hostGhTokenOrEmpty (): Promise<string> {
 }
 
 export async function refreshContainerGhAuth (context: WorkspaceContext, options: ContainerCommandOptions = {}): Promise<void> {
+  const agentProfile = options.agentProfile ?? DEFAULT_AGENT_PROFILE
   const progress = options.progress
   const hasConfigStep = progress?.hasStep('gh-auth-config') === true
   const hasTokenStep = progress?.hasStep('gh-token-read') === true
@@ -711,7 +789,6 @@ export async function refreshContainerGhAuth (context: WorkspaceContext, options
       progress
     })
     const signingPlan = await resolveGitSigningPlan(context)
-    prepareMcpConfig(context)
     reportGitSigningPlan(signingPlan, {
       logger: options.logger,
       ...(progress === undefined
@@ -722,7 +799,7 @@ export async function refreshContainerGhAuth (context: WorkspaceContext, options
             }
           })
     })
-    writeGeneratedDevcontainerConfig(context, signingPlan)
+    writeGeneratedDevcontainerConfig(context, signingPlan, agentProfile)
     if (hasConfigStep) {
       progress?.completeStep('gh-auth-config')
     }

@@ -44,7 +44,7 @@ test('uses the release-matched Boxdown image without Dev Container Features', ()
   assert.equal(
     devcontainer.updateRemoteUserUID,
     true,
-    'Linux credential bind mounts must be readable and writable by the container user'
+    'Linux workspace bind mounts must remain aligned with the container user'
   )
 })
 

@@ -19,6 +19,7 @@ export interface ProgressReporterOptions {
 
 export interface ProgressCommandOptions extends Pick<BufferedCommandOptions, 'cwd' | 'env' | 'input'> {
   logger?: BufferedCommandOptions['logger']
+  manageProgress?: boolean
   progress?: ProgressReporter
   verboseStdout?: ProgressOutputTarget | false
   verboseStderr?: ProgressOutputTarget | false
@@ -647,6 +648,7 @@ export async function runProgressCommand (
   options: ProgressCommandOptions = {}
 ): Promise<CommandResult> {
   const progress = options.progress
+  const manageProgress = options.manageProgress ?? true
   const rawOutput = progress?.rawOutput ?? true
   const stdoutMarkerSink = progress !== undefined && !rawOutput ? createMarkerSink(progress) : undefined
   const stderrMarkerSink = progress !== undefined && !rawOutput ? createMarkerSink(progress) : undefined
@@ -654,9 +656,9 @@ export async function runProgressCommand (
     ? options.stepId
     : undefined
 
-  if (progress !== undefined && !rawOutput && checklistStepId !== undefined) {
+  if (manageProgress && progress !== undefined && !rawOutput && checklistStepId !== undefined) {
     progress.startStep(checklistStepId)
-  } else if (progress !== undefined && !rawOutput && options.spinnerLabel !== undefined) {
+  } else if (manageProgress && progress !== undefined && !rawOutput && options.spinnerLabel !== undefined) {
     progress.startSpinner(options.spinnerLabel)
   }
 
@@ -674,23 +676,27 @@ export async function runProgressCommand (
 
     stdoutMarkerSink?.flush()
     stderrMarkerSink?.flush()
-    if (checklistStepId !== undefined) {
-      if (result.code === 0) {
-        progress?.completeStep(checklistStepId)
+    if (manageProgress) {
+      if (checklistStepId !== undefined) {
+        if (result.code === 0) {
+          progress?.completeStep(checklistStepId)
+        } else {
+          progress?.failStep(checklistStepId)
+        }
       } else {
-        progress?.failStep(checklistStepId)
+        progress?.stopSpinner(result.code === 0 ? 'complete' : 'clear')
       }
-    } else {
-      progress?.stopSpinner(result.code === 0 ? 'complete' : 'clear')
     }
     return result
   } catch (error) {
     stdoutMarkerSink?.flush()
     stderrMarkerSink?.flush()
-    if (checklistStepId !== undefined) {
-      progress?.failStep(checklistStepId)
-    } else {
-      progress?.stopSpinner()
+    if (manageProgress) {
+      if (checklistStepId !== undefined) {
+        progress?.failStep(checklistStepId)
+      } else {
+        progress?.stopSpinner()
+      }
     }
     throw error
   }

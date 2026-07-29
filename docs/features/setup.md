@@ -7,6 +7,7 @@ boxdown setup
 boxdown setup --target codex
 boxdown setup --target claude
 boxdown setup --recreate
+boxdown setup --agent-profile full
 ```
 
 `setup` prepares the current workspace for remote tools without opening an
@@ -16,9 +17,15 @@ interactive shell. It accepts:
 --workspace <path>
 --alias <name>
 --recreate
+--agent-profile <tier>
 --target <name>
 --verbose
 ```
+
+`--agent-profile` accepts `none`, `auth`, or `full`; `auth` is the default.
+The selected profile is recorded for later container-starting commands. Changing
+it requires `--recreate` when a container already exists, because Docker mount
+configuration and the container-local profile copy are created together.
 
 Setup readiness runs before prompts or workspace state is written. A missing
 Docker CLI fails immediately; a starting Docker daemon or discoverable Buildx
@@ -40,7 +47,8 @@ the workspace container is already running.
 
 1. Resolve the workspace to a real absolute path.
 2. Ensure per-workspace SSH key material exists.
-3. Generate a Boxdown-owned devcontainer config.
+3. Resolve and record the agent-profile selection, then generate a
+   Boxdown-owned devcontainer config with its read-only staging mounts.
 4. Run `devcontainer up --workspace-folder <repo> --override-config <config>`.
 5. Install or update the Boxdown-managed SSH alias.
 6. Optionally install selected SSH targets such as Codex or Claude.
@@ -87,3 +95,7 @@ Codex and Claude retain throttled best-effort refreshes after startup. Snyk,
 APM is deferred on ARM64 until you explicitly opt in to a Python-based
 installation. Existing workspaces switch to the published image only with
 `boxdown setup --recreate` or `boxdown start --recreate`.
+
+Agent-profile sources are copied into container-local writable homes during
+container creation. They are not synchronized from the host after creation, so
+recreate when you need current host authentication or profile contents.

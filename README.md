@@ -117,26 +117,62 @@ snapshot, and runtime-secret directory read-only. The Git-config snapshot is
 copied to a writable `/home/node/.gitconfig` during container creation; the host
 file is never edited.
 
-Optional create-time mounts are also explicit:
+When SSH commit signing is enabled, Boxdown mounts the host SSH-agent socket at
+`/run/boxdown/ssh-agent.sock` and mounts public signing-key state read-only at
+`/opt/boxdown/state/git-signing`. Private signing keys remain on the host.
 
-- If host `~/.agents` exists, Boxdown mounts it read-only at
-  `/home/node/.agents`.
-- If host `~/.codex/auth.json` exists and no custom Codex mount supersedes it,
-  Boxdown mounts that file read-only at `/home/node/.codex/auth.json`.
-- If host `$CODEX_HOME/config.toml` (or `~/.codex/config.toml`) exists and no
-  custom Codex mount supersedes it, Boxdown mounts it read-only at
-  `/home/node/.codex/config.toml`, including configured MCP servers.
-- If host Claude configuration contains MCP servers, Boxdown writes a
-  workspace-scoped runtime projection at `/home/node/.claude.json`. It carries
-  user-scoped servers and remaps local server configuration to the container
-  workspace path. Project `.mcp.json` files remain in the mounted repository.
-- When SSH commit signing is enabled, Boxdown mounts the host SSH-agent socket
-  at `/run/boxdown/ssh-agent.sock` and mounts public signing-key state read-only
-  at `/opt/boxdown/state/git-signing`. Private signing keys remain on the host.
+### Agent profiles
 
-Recreate the container when its optional mount configuration or host SSH-agent
-socket path changes. Changes to contents inside an already mounted source are
-visible without recreation.
+Agent profiles control host user-scoped coding-agent data. Choose one when a
+command creates or recreates a container:
+
+```sh
+npx boxdown start --agent-profile none|auth|full
+```
+
+`auth` is the default. Repository-scoped configuration remains visible through
+the normal workspace mount in every tier, including committed `AGENTS.md`,
+`CLAUDE.md`, `.agents`, `.codex`, `.claude`, and `.mcp.json` files.
+
+| CLI | Contents |
+| --- | --- |
+| `none` | no host user-scoped agent profile or Claude API key |
+| `auth` | file-backed auth, Claude API key, complete `~/.agents` |
+| `full` | opaque complete Codex/Claude homes plus `~/.agents` |
+
+Boxdown mounts selected host sources only at read-only staging paths, then makes
+a container-local writable copy on container creation. Agent homes such as
+`/home/node/.agents`, `/home/node/.codex`, and `/home/node/.claude` are never
+Boxdown-selected host mounts. There is no reverse synchronization: container
+logins, settings, history, plugins, and caches stay with that container and
+cannot write back to the host or another workspace.
+
+On macOS, Claude credentials stored in Keychain are not copied. `auth` and
+`full` can still expose an `ANTHROPIC_API_KEY` already available through
+Boxdown's runtime-secret mechanism; otherwise Claude starts unauthenticated in
+that container.
+
+Choose `full` only when you need host user-scoped Codex or Claude configuration
+such as MCP definitions. It copies opaque complete homes, so it can include
+sensitive history, settings, plugins, and credentials; increase profile size;
+reduce portability; retain broken paths from the host; or contain native
+dependencies that do not run in the container. Put portable user-scoped MCP
+configuration in the repository instead, or choose `full` when copying the
+complete host profile is acceptable.
+
+A custom mount at, above, or below a canonical agent-home destination is
+externally managed. Boxdown skips its staging and copy for that destination so
+it does not replace the custom mount. The mount owner is responsible for its
+contents and write policy.
+
+This changes the previous forwarding model: `auth` no longer exposes host Codex
+config, Boxdown no longer creates a Claude MCP projection, and the supported
+Claude credential is no longer a writable host mount. Existing containers keep
+their previous configuration until recreated.
+
+Recreate the container when changing `--agent-profile`, adding a custom mount,
+or refreshing copied host sources. Changes on the host do not update a stopped
+or running existing container.
 `boxdown status` reports the exact generated paths for a workspace.
 
 ### Host integrations
@@ -148,10 +184,13 @@ integration records only when you select or explicitly request those targets.
 
 The `stop`, `down`, and `purge` commands define the cleanup boundary.
 
-`boxdown stop` keeps the container and all Boxdown state. `boxdown down`
-removes the container and per-workspace runtime-secret state. It retains
-persistent cache/data state: metadata, SSH keys, generated config, and command
-log. `boxdown purge` removes the workspace's Boxdown-managed container,
+`boxdown stop` keeps the container and all Boxdown state, including its copied
+agent profile. Restarting the same container preserves its profile changes.
+`boxdown down` removes the container and its copied profile along with
+per-workspace runtime-secret state. `boxdown start --recreate` also discards the
+previous container copy and seeds a new one from current host sources. `down`
+retains persistent cache/data state: metadata, SSH keys, generated config, and
+command log. `boxdown purge` removes the workspace's Boxdown-managed container,
 recorded image, generated state, command log, and managed SSH/app integrations;
 it never removes repository files.
 

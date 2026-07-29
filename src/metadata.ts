@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
+import { isAgentProfile, type AgentProfile } from './agent-profile.ts'
 import type { WorkspaceContext } from './paths.ts'
 
 export const WORKSPACE_METADATA_VERSION = 1
@@ -17,6 +18,7 @@ export interface WorkspaceMetadata {
   dockerImageName?: string
   dockerImageLastSeenAt?: string
   legacyImageMigrationNotifiedAt?: string
+  agentProfile?: AgentProfile
 }
 
 export interface WorkspaceDockerImageMetadata {
@@ -41,7 +43,8 @@ function isWorkspaceMetadata (value: unknown): value is WorkspaceMetadata {
     (candidate.dockerImageId === undefined || typeof candidate.dockerImageId === 'string') &&
     (candidate.dockerImageName === undefined || typeof candidate.dockerImageName === 'string') &&
     (candidate.dockerImageLastSeenAt === undefined || typeof candidate.dockerImageLastSeenAt === 'string') &&
-    (candidate.legacyImageMigrationNotifiedAt === undefined || typeof candidate.legacyImageMigrationNotifiedAt === 'string')
+    (candidate.legacyImageMigrationNotifiedAt === undefined || typeof candidate.legacyImageMigrationNotifiedAt === 'string') &&
+    (candidate.agentProfile === undefined || (typeof candidate.agentProfile === 'string' && isAgentProfile(candidate.agentProfile)))
 }
 
 export function workspaceMetadataPath (context: WorkspaceContext): string {
@@ -68,7 +71,12 @@ export function readWorkspaceMetadata (context: WorkspaceContext): WorkspaceMeta
   return readWorkspaceMetadataFile(metadataPath)
 }
 
-export function writeWorkspaceMetadata (context: WorkspaceContext, sshAlias: string, now = new Date()): WorkspaceMetadata {
+export function writeWorkspaceMetadata (
+  context: WorkspaceContext,
+  sshAlias: string,
+  now = new Date(),
+  agentProfile?: AgentProfile
+): WorkspaceMetadata {
   const metadataPath = workspaceMetadataPath(context)
   const timestamp = now.toISOString()
   let firstSeenAt = timestamp
@@ -90,7 +98,10 @@ export function writeWorkspaceMetadata (context: WorkspaceContext, sshAlias: str
     ...(existingMetadata?.dockerImageId === undefined ? {} : { dockerImageId: existingMetadata.dockerImageId }),
     ...(existingMetadata?.dockerImageName === undefined ? {} : { dockerImageName: existingMetadata.dockerImageName }),
     ...(existingMetadata?.dockerImageLastSeenAt === undefined ? {} : { dockerImageLastSeenAt: existingMetadata.dockerImageLastSeenAt }),
-    ...(existingMetadata?.legacyImageMigrationNotifiedAt === undefined ? {} : { legacyImageMigrationNotifiedAt: existingMetadata.legacyImageMigrationNotifiedAt })
+    ...(existingMetadata?.legacyImageMigrationNotifiedAt === undefined ? {} : { legacyImageMigrationNotifiedAt: existingMetadata.legacyImageMigrationNotifiedAt }),
+    ...((agentProfile ?? existingMetadata?.agentProfile) === undefined
+      ? {}
+      : { agentProfile: agentProfile ?? existingMetadata?.agentProfile })
   }
 
   mkdirSync(context.workspaceDataDir, { recursive: true })
