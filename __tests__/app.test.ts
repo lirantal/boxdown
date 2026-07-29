@@ -956,6 +956,7 @@ test('documents agent profile tiers', () => {
   const startDocs = readFileSync(join(process.cwd(), 'docs/features/start-and-shell.md'), 'utf8')
   const lifecycleDocs = readFileSync(join(process.cwd(), 'docs/features/lifecycle.md'), 'utf8')
   const setupDocs = readFileSync(join(process.cwd(), 'docs/features/setup.md'), 'utf8')
+  const testingDocs = readFileSync(join(process.cwd(), 'docs/testing.md'), 'utf8')
   const architecture = readFileSync(join(process.cwd(), 'docs/architecture.md'), 'utf8')
   const assetDocs = readFileSync(join(process.cwd(), 'assets/devcontainer/README.md'), 'utf8')
   const profileDesign = readFileSync(join(process.cwd(), 'docs/superpowers/specs/2026-07-28-agent-profile-tiers-design.md'), 'utf8')
@@ -974,8 +975,21 @@ test('documents agent profile tiers', () => {
   assert.match(readme, /custom mount.*canonical.*externally managed/is)
   assert.match(readme, /changes the previous forwarding model.*Codex\s+config.*Claude MCP projection.*writable host mount/is)
   assert.match(readme, /user-scoped MCP.*repository.*`full`/is)
+  assert.match(
+    readme,
+    /setup.*app target.*agent profile.*--agent-profile.*suppress/is
+  )
 
   assert.match(setupDocs, /--agent-profile <tier>/)
+  assert.match(
+    setupDocs,
+    /at least one.*Codex.*Claude.*--agent-profile.*not supplied/is
+  )
+  assert.match(setupDocs, /boxdown setup --target codex --agent-profile auth/)
+  assert.match(
+    testingDocs,
+    /profile selector.*fully explicit.*non-interactive/is
+  )
   assert.match(startDocs, /--agent-profile <tier>/)
   assert.match(stateDocs, /read-only staging.*container-local writable cop(?:y|ies)/is)
   assert.match(stateDocs, /no reverse\s+synchronization/is)
