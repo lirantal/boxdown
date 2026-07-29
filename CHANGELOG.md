@@ -1,5 +1,11 @@
 # boxdown
 
+## 3.0.1
+
+### Patch Changes
+
+- [`c69ebd2`](https://github.com/lirantal/boxdown/commit/c69ebd22a3a80f3328855dad8284f97a6a923840) Thanks [@lirantal](https://github.com/lirantal)! - fix: better detection and error messages for git commit signing setup
+
 ## 3.0.0
 
 ### Major Changes
