@@ -2443,7 +2443,7 @@ describe('CLI execution', () => {
     const calls: string[] = []
     const mismatch = new Error('Agent profile full is not active in this devcontainer.')
 
-    const code = await withProcessEnv(env, async () => runCli(['refresh-gh-token', '--workspace', workspace, '--agent-profile', 'full'], {
+    await assert.rejects(withProcessEnv(env, async () => runCli(['refresh-gh-token', '--workspace', workspace, '--agent-profile', 'full'], {
       env,
       findRunningContainerId: async () => { calls.push('find'); return 'running-container' },
       assertContainerAgentProfile: async (_id, profile) => {
@@ -2454,9 +2454,8 @@ describe('CLI execution', () => {
       prepareContainerLifecycle: async () => { calls.push('unexpected:lifecycle') },
       startDevcontainer: async () => { calls.push('unexpected:start'); return 'unexpected' },
       refreshContainerGhAuth: async () => { calls.push('unexpected:refresh') }
-    }))
+    })), (error: unknown) => error === mismatch)
 
-    assert.strictEqual(code, 1)
     assert.deepStrictEqual(calls, ['find', 'profile'])
   })
 

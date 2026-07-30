@@ -16,7 +16,7 @@ from:
 gh auth token
 ```
 
-They do not start a browser login or device-code flow.
+It does not start a browser login or device-code flow.
 
 The startup and refresh work uses concise progress output by default. In an
 interactive terminal, `--verbose` shows a detailed lifecycle trace. In CI or
