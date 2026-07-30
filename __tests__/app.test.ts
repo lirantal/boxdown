@@ -771,6 +771,7 @@ describe('CLI parsing', () => {
 
   test('rejects unknown commands', () => {
     assert.throws(() => parseCliArgs(['ssh-config']), /Unknown command: ssh-config/)
+    assert.throws(() => parseCliArgs(['refresh-gh-token-running']), /Unknown command: refresh-gh-token-running/)
     assert.throws(() => parseCliArgs(['ssh-config', 'install']), /Unknown command: ssh-config install/)
     assert.throws(() => parseCliArgs(['codex', 'repair']), /Unknown command: codex repair/)
     assert.throws(() => parseCliArgs(['ssh', 'remove']), /Unknown ssh command: remove/)
@@ -815,7 +816,7 @@ describe('CLI parsing', () => {
     assert.throws(() => parseCliArgs(['setup', '--agent-profile', 'none', '--agent-profile', 'full']), /--agent-profile can only be provided once/)
 
     for (const command of [
-      'refresh-gh-token-running', 'status', 'list', 'stop', 'down', 'purge', 'doctor', 'ssh', 'ssh uninstall'
+      'status', 'list', 'stop', 'down', 'purge', 'doctor', 'ssh', 'ssh uninstall'
     ]) {
       assert.throws(
         () => parseCliArgs([...command.split(' '), '--agent-profile', 'auth']),
@@ -884,7 +885,7 @@ describe('CLI parsing', () => {
     assert.match(USAGE, /full\s+profile exposes/)
     assert.match(USAGE, /--port <port>\s+Tunnel a local port/)
     assert.match(USAGE, /refresh-gh-token\s+Start or reuse the devcontainer/)
-    assert.match(USAGE, /refresh-gh-token-running\s+Refresh GitHub CLI auth only if/)
+    assert.doesNotMatch(USAGE, /refresh-gh-token-running/)
   })
 
   test('README documents Boxdown resource ownership and verbosity modes', () => {
@@ -938,13 +939,13 @@ describe('CLI parsing', () => {
     const commandLines = usageLines.slice(commandsStart + 1, optionsStart)
     const setupLine = commandLines.find((line) => line.startsWith('  setup'))
     const setupContinuationLine = commandLines[commandLines.findIndex((line) => line.startsWith('  setup')) + 1]
-    const longestCommandLine = commandLines.find((line) => line.startsWith('  refresh-gh-token-running'))
+    const longestCommandLine = commandLines.find((line) => line.startsWith('  refresh-gh-token'))
 
     assert.ok(setupLine !== undefined)
     assert.ok(setupContinuationLine !== undefined)
     assert.ok(longestCommandLine !== undefined)
 
-    const descriptionColumn = longestCommandLine.indexOf('Refresh')
+    const descriptionColumn = longestCommandLine.indexOf('Start')
     assert.strictEqual(setupLine.indexOf('Prepare'), descriptionColumn)
     assert.strictEqual(setupContinuationLine.indexOf('integration'), descriptionColumn)
   })
@@ -2432,7 +2433,7 @@ describe('CLI execution', () => {
     const calls: string[] = []
     const mismatch = new Error('Agent profile full is not active in this devcontainer.')
 
-    await assert.rejects(withProcessEnv(env, async () => runCli(['refresh-gh-token', '--workspace', workspace, '--agent-profile', 'full'], {
+    const code = await withProcessEnv(env, async () => runCli(['refresh-gh-token', '--workspace', workspace, '--agent-profile', 'full'], {
       env,
       findRunningContainerId: async () => { calls.push('find'); return 'running-container' },
       assertContainerAgentProfile: async (_id, profile) => {
@@ -2443,8 +2444,9 @@ describe('CLI execution', () => {
       prepareContainerLifecycle: async () => { calls.push('unexpected:lifecycle') },
       startDevcontainer: async () => { calls.push('unexpected:start'); return 'unexpected' },
       refreshContainerGhAuth: async () => { calls.push('unexpected:refresh') }
-    })), (error: unknown) => error === mismatch)
+    }))
 
+    assert.strictEqual(code, 1)
     assert.deepStrictEqual(calls, ['find', 'profile'])
   })
 
@@ -4811,7 +4813,6 @@ describe('workspace metadata', () => {
     assert.strictEqual(commandWritesWorkspaceMetadata('ssh-proxy'), true)
     assert.strictEqual(commandWritesWorkspaceMetadata('tunnel'), true)
     assert.strictEqual(commandWritesWorkspaceMetadata('refresh-gh-token'), true)
-    assert.strictEqual(commandWritesWorkspaceMetadata('refresh-gh-token-running'), false)
     assert.strictEqual(commandWritesWorkspaceMetadata('coding-agent'), true)
   })
 
@@ -4832,7 +4833,6 @@ describe('workspace metadata', () => {
       ['ssh-proxy', true],
       ['tunnel', true],
       ['refresh-gh-token', true],
-      ['refresh-gh-token-running', false],
       ['coding-agent', true]
     ])
 
@@ -9645,7 +9645,7 @@ describe('GitHub Git auth setup', () => {
 
   test('does not refresh GitHub auth during ssh-proxy startup', () => {
     const mainSource = readFileSync(fileURLToPath(new URL('../src/main.ts', import.meta.url)), 'utf8')
-    const sshProxyBlock = /if \(parsed\.command === 'ssh-proxy'\) {([\s\S]*?)\n\s{4}if \(parsed\.command === 'refresh-gh-token-running'\)/.exec(mainSource)?.[1]
+    const sshProxyBlock = /if \(parsed\.command === 'ssh-proxy'\) {([\s\S]*?)\n\s{4}if \(parsed\.command === 'refresh-gh-token'\)/.exec(mainSource)?.[1]
 
     assert.ok(sshProxyBlock !== undefined)
     assert.doesNotMatch(sshProxyBlock, /refreshContainerGhAuth/)

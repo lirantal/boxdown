@@ -314,7 +314,6 @@ boxdown ssh uninstall
 boxdown ssh-proxy
 boxdown tunnel --port 3030
 boxdown refresh-gh-token
-boxdown refresh-gh-token-running
 ```
 
 `boxdown shell` remains supported as an alias for `boxdown start`, but
