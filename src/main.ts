@@ -37,7 +37,6 @@ export type BoxdownCommand =
   | 'ssh-proxy'
   | 'tunnel'
   | 'refresh-gh-token'
-  | 'refresh-gh-token-running'
   | 'coding-agent'
 
 export interface ParsedCli {
@@ -93,7 +92,6 @@ export const USAGE = `Usage:
   boxdown ssh-proxy [--workspace <path>] [--alias <name>] [--agent-profile <tier>] [--verbose]
   boxdown tunnel [--port <port>] [--port <local:remote>] [--workspace <path>] [--alias <name>] [--agent-profile <tier>] [--verbose]
   boxdown refresh-gh-token [--workspace <path>] [--agent-profile <tier>] [--verbose]
-  boxdown refresh-gh-token-running [--workspace <path>] [--verbose]
 
 Commands:
   setup                     Prepare the workspace devcontainer and SSH/app
@@ -131,8 +129,6 @@ Commands:
                             local port tunnel open for host/browser access.
   refresh-gh-token          Start or reuse the devcontainer, then copy host
                             GitHub CLI auth into the container when available.
-  refresh-gh-token-running  Refresh GitHub CLI auth only if the workspace
-                            devcontainer is already running.
 
 Options:
   --workspace <path>  Target project directory. Defaults to the current directory.
@@ -484,10 +480,6 @@ export function parseCliArgs (argv: string[]): ParsedCli {
 
   if (positional[0] === 'refresh-gh-token' && positional.length === 1) {
     return parsed('refresh-gh-token')
-  }
-
-  if (positional[0] === 'refresh-gh-token-running' && positional.length === 1) {
-    return parsed('refresh-gh-token-running')
   }
 
   throw new Error(`Unknown command: ${positional.join(' ')}`)
@@ -1580,7 +1572,7 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
       const refreshGhAuth = options.refreshContainerGhAuth ?? refreshContainerGhAuth
       const assertProfile = options.assertContainerAgentProfile ?? assertContainerAgentProfile
       const findRunning = options.findRunningContainerId ?? findRunningContainerId
-      return runLoggedLifecycle(context, 'refresh-gh-token', argv, async (logger) => {
+      return await runLoggedLifecycle(context, 'refresh-gh-token', argv, async (logger) => {
         const runningContainerId = await findRunning(context, { logger })
         const progress = createCliProgress(parsed, 'stdout', { env: options.env })
         await withProgressSection(progress, 'Boxdown GitHub auth refresh', [

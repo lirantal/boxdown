@@ -4,11 +4,10 @@
 
 ```sh
 boxdown refresh-gh-token
-boxdown refresh-gh-token-running
 boxdown refresh-gh-token --verbose
 ```
 
-Both commands copy host GitHub CLI auth into the container using the host token
+The command copies host GitHub CLI auth into the container using the host token
 from:
 
 ```sh
@@ -21,24 +20,14 @@ The startup and refresh work uses concise progress output by default. In an
 interactive terminal, `--verbose` shows a detailed lifecycle trace. In CI or
 non-interactive output, Boxdown streams raw devcontainer and auth command output.
 
-These commands are explicit on purpose. Normal `boxdown start`, coding-agent
+This command is explicit on purpose. Normal `boxdown start`, coding-agent
 launches, and SSH proxy connections do not copy GitHub credentials into the
 container.
 
 ## refresh-gh-token
 
-`refresh-gh-token` starts or reuses the devcontainer, then refreshes GitHub CLI
-auth inside it.
-
-Use this when the container might not already be running.
-
-## refresh-gh-token-running
-
-`refresh-gh-token-running` requires a running devcontainer for the workspace.
-It fails early when no matching running container exists.
-
-Use this when you want to refresh auth without accidentally starting a
-container.
+`refresh-gh-token` refreshes GitHub CLI auth in a matching running
+devcontainer. If no workspace devcontainer is running, it starts one first.
 
 ## Container Work
 
