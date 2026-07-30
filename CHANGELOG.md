@@ -1,5 +1,12 @@
 # boxdown
 
+## 3.1.0
+
+### Minor Changes
+
+- [`30fe36c`](https://github.com/lirantal/boxdown/commit/30fe36c4dbd53ae85c478121848c6257b61fbc53) Thanks [@lirantal](https://github.com/lirantal)! - feat: prompt for an agent profile during interactive setup after selecting a
+  Codex or Claude app target
+
 ## 3.0.1
 
 ### Patch Changes
