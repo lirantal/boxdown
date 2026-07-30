@@ -311,7 +311,7 @@ function agentProfileMismatchMessage (agentProfile: AgentProfile): string {
   return `Agent profile ${agentProfile} is not active in this devcontainer.\nRun \`boxdown start --recreate --agent-profile ${agentProfile}\`.`
 }
 
-async function assertContainerAgentProfile (
+export async function assertContainerAgentProfile (
   containerId: string,
   agentProfile: AgentProfile,
   logger?: WorkspaceCommandLogger

@@ -5,7 +5,7 @@ import { codingAgentBinary, codingAgentFromCommand, type CodingAgentCli } from '
 import { buildGeneratedDevcontainerConfig, publishContainerPortFromConfig } from './config.ts'
 import { formatContainerRuntimeFailure, waitForContainerRuntime, type ContainerRuntimeProbe } from './container-runtime.ts'
 import { doctorHasFailures, formatDoctorText, runDoctorChecks, type DoctorCheck } from './doctor.ts'
-import { startDevcontainer, printPortHint, openShell, openCodingAgentCli, ensureContainerSshRuntime, runSshdProxy, refreshContainerGhAuth, refreshContainerCodingAgentClis, ensureContainerCodingAgentCli, findRunningContainerId, findWorkspaceContainer, inspectContainerAgentProfile, stopWorkspaceContainer, removeWorkspaceContainer, listWorkspaceContainers, openSshTunnel, type TunnelPortForward } from './devcontainer.ts'
+import { startDevcontainer, printPortHint, openShell, openCodingAgentCli, ensureContainerSshRuntime, runSshdProxy, refreshContainerGhAuth, refreshContainerCodingAgentClis, ensureContainerCodingAgentCli, findRunningContainerId, findWorkspaceContainer, inspectContainerAgentProfile, assertContainerAgentProfile, stopWorkspaceContainer, removeWorkspaceContainer, listWorkspaceContainers, openSshTunnel, type TunnelPortForward } from './devcontainer.ts'
 import { canPromptInteractively, promptConfirm, promptMultiSelect, promptText, type PromptInput, type PromptOutput } from './interactive-prompts.ts'
 import { createWorkspaceListEntries, formatWorkspaceListDetailsText, formatWorkspaceListText } from './list.ts'
 import { createWorkspaceCommandLogger, withLoggedProcessOutput, type WorkspaceCommandLogger } from './logging.ts'
@@ -72,6 +72,7 @@ export interface RunCliOptions {
   ensureContainerCodingAgentCli?: typeof ensureContainerCodingAgentCli
   openCodingAgentCli?: typeof openCodingAgentCli
   refreshContainerGhAuth?: typeof refreshContainerGhAuth
+  assertContainerAgentProfile?: typeof assertContainerAgentProfile
 }
 
 export const USAGE = `Usage:
@@ -1574,38 +1575,33 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
       })
     }
 
-    if (parsed.command === 'refresh-gh-token-running') {
-      const refreshGhAuth = options.refreshContainerGhAuth ?? refreshContainerGhAuth
-      return runLoggedLifecycle(context, 'refresh-gh-token-running', argv, async (logger) => {
-        const containerId = await (options.findRunningContainerId ?? findRunningContainerId)(context, { logger })
-        if (containerId === undefined) {
-          throw new Error(`No running devcontainer found for: ${context.workspaceFolder}`)
-        }
-        const progress = createCliProgress(parsed, 'stdout', { env: options.env })
-        await withProgressSection(progress, 'Boxdown GitHub auth refresh', [
-          `Workspace: ${context.workspaceFolder}`
-        ], async () => {
-          progress.setSteps(ghAuthProgressSteps(false))
-          progress.startStep('devcontainer-running')
-          progress.completeStep('devcontainer-running')
-          await refreshGhAuth(context, { agentProfile: agentProfile.value, progress, logger })
-          showDetailedCommandLogPath(progress, context)
-        })
-        return 0
-      })
-    }
-
     if (parsed.command === 'refresh-gh-token') {
       const start = options.startDevcontainer ?? startDevcontainer
       const refreshGhAuth = options.refreshContainerGhAuth ?? refreshContainerGhAuth
+      const assertProfile = options.assertContainerAgentProfile ?? assertContainerAgentProfile
+      const findRunning = options.findRunningContainerId ?? findRunningContainerId
       return runLoggedLifecycle(context, 'refresh-gh-token', argv, async (logger) => {
+        const runningContainerId = await findRunning(context, { logger })
         const progress = createCliProgress(parsed, 'stdout', { env: options.env })
         await withProgressSection(progress, 'Boxdown GitHub auth refresh', [
           `Workspace: ${context.workspaceFolder}`
         ], async () => {
-          progress.setSteps(ghAuthProgressSteps(true))
-          await (options.prepareContainerLifecycle ?? prepareContainerLifecycle)(context, alias, progress, options, logger, agentProfile.value)
-          await start(context, { agentProfile: agentProfile.value, progress, logger })
+          progress.setSteps(ghAuthProgressSteps(runningContainerId === undefined))
+
+          if (runningContainerId !== undefined) {
+            progress.startStep('devcontainer-running')
+            try {
+              await assertProfile(runningContainerId, agentProfile.value, logger)
+              progress.completeStep('devcontainer-running')
+            } catch (error) {
+              progress.failStep('devcontainer-running')
+              throw error
+            }
+          } else {
+            await (options.prepareContainerLifecycle ?? prepareContainerLifecycle)(context, alias, progress, options, logger, agentProfile.value)
+            await start(context, { agentProfile: agentProfile.value, progress, logger })
+          }
+
           await refreshGhAuth(context, { agentProfile: agentProfile.value, progress, logger })
           showDetailedCommandLogPath(progress, context)
         })

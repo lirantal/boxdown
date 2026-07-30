@@ -2397,33 +2397,83 @@ describe('CLI execution', () => {
     }
   })
 
-  test('running-only GitHub token refresh does not invoke the lifecycle gate', async () => {
-    const workspace = tempDir('running-refresh-no-lifecycle-gate-workspace')
-    const dataHome = tempDir('running-refresh-no-lifecycle-gate-data')
-    const cacheHome = tempDir('running-refresh-no-lifecycle-gate-cache')
-    const env = { CI: '1', BOXDOWN_DATA_HOME: dataHome, BOXDOWN_CACHE_HOME: cacheHome }
+  test('refreshes GitHub auth in a matching running devcontainer without startup', async () => {
+    const workspace = tempDir('running-refresh-workspace')
+    const env = { CI: '1', BOXDOWN_DATA_HOME: tempDir('running-refresh-data'), BOXDOWN_CACHE_HOME: tempDir('running-refresh-cache') }
+    const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
     const calls: string[] = []
 
-    await assert.rejects(withProcessEnv(env, async () => runCli([
-      'refresh-gh-token-running',
-      '--workspace',
-      workspace
-    ], {
+    const code = await withProcessEnv(env, async () => runCli(['refresh-gh-token', '--workspace', workspace], {
       env,
-      prepareContainerLifecycle: async () => {
-        calls.push('gate')
+      findRunningContainerId: async () => { calls.push('find'); return 'running-container' },
+      assertContainerAgentProfile: async (id, profile) => {
+        assert.strictEqual(id, 'running-container')
+        assert.strictEqual(profile, 'auth')
+        calls.push('profile')
       },
-      findRunningContainerId: async () => {
-        calls.push('find-running')
-        return undefined
+      prepareContainerLifecycle: async () => { calls.push('unexpected:lifecycle') },
+      startDevcontainer: async () => { calls.push('unexpected:start'); return 'unexpected' },
+      refreshContainerGhAuth: async (_context, refreshOptions) => {
+        assert.strictEqual(refreshOptions.agentProfile, 'auth')
+        assert.strictEqual(refreshOptions.progress?.hasStep('devcontainer-running'), true)
+        assert.strictEqual(refreshOptions.progress?.hasStep('devcontainer-start'), false)
+        calls.push('refresh')
       }
-    })), /No running devcontainer found/)
+    }))
 
-    const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
-    assert.deepStrictEqual(calls, ['find-running'])
+    assert.strictEqual(code, 0)
+    assert.deepStrictEqual(calls, ['find', 'profile', 'refresh'])
     assert.strictEqual(existsSync(workspaceMetadataPath(context)), false)
-    assert.strictEqual(existsSync(context.generatedConfigPath), false)
-    assert.strictEqual(existsSync(context.sshKeyPath), false)
+  })
+
+  test('rejects a profile mismatch in a running devcontainer before refresh or startup', async () => {
+    const workspace = tempDir('running-refresh-mismatch-workspace')
+    const env = { CI: '1', BOXDOWN_DATA_HOME: tempDir('running-refresh-mismatch-data'), BOXDOWN_CACHE_HOME: tempDir('running-refresh-mismatch-cache') }
+    const calls: string[] = []
+    const mismatch = new Error('Agent profile full is not active in this devcontainer.')
+
+    await assert.rejects(withProcessEnv(env, async () => runCli(['refresh-gh-token', '--workspace', workspace, '--agent-profile', 'full'], {
+      env,
+      findRunningContainerId: async () => { calls.push('find'); return 'running-container' },
+      assertContainerAgentProfile: async (_id, profile) => {
+        assert.strictEqual(profile, 'full')
+        calls.push('profile')
+        throw mismatch
+      },
+      prepareContainerLifecycle: async () => { calls.push('unexpected:lifecycle') },
+      startDevcontainer: async () => { calls.push('unexpected:start'); return 'unexpected' },
+      refreshContainerGhAuth: async () => { calls.push('unexpected:refresh') }
+    })), (error: unknown) => error === mismatch)
+
+    assert.deepStrictEqual(calls, ['find', 'profile'])
+  })
+
+  test('starts then refreshes GitHub auth when no devcontainer is running', async () => {
+    const workspace = tempDir('fallback-refresh-workspace')
+    const env = { CI: '1', BOXDOWN_DATA_HOME: tempDir('fallback-refresh-data'), BOXDOWN_CACHE_HOME: tempDir('fallback-refresh-cache') }
+    const calls: string[] = []
+
+    const code = await withProcessEnv(env, async () => runCli(['refresh-gh-token', '--workspace', workspace, '--agent-profile', 'none'], {
+      env,
+      findRunningContainerId: async () => { calls.push('find'); return undefined },
+      prepareContainerLifecycle: async (_context, _alias, _progress, _options, _logger, profile) => {
+        assert.strictEqual(profile, 'none')
+        calls.push('lifecycle')
+      },
+      startDevcontainer: async (_context, startOptions) => {
+        assert.strictEqual(startOptions.agentProfile, 'none')
+        calls.push('start')
+        return 'started-container'
+      },
+      refreshContainerGhAuth: async (_context, refreshOptions) => {
+        assert.strictEqual(refreshOptions.agentProfile, 'none')
+        assert.strictEqual(refreshOptions.progress?.hasStep('devcontainer-start'), true)
+        calls.push('refresh')
+      }
+    }))
+
+    assert.strictEqual(code, 0)
+    assert.deepStrictEqual(calls, ['find', 'lifecycle', 'start', 'refresh'])
   })
 
   test('container lifecycle writes metadata only after readiness succeeds', async () => {
