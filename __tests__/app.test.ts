@@ -937,7 +937,7 @@ describe('CLI parsing', () => {
     const githubAuth = readFileSync(join(process.cwd(), 'docs/features/github-auth-refresh.md'), 'utf8')
 
     assert.match(githubAuth, /only GitHub CLI auth-refresh command/)
-    assert.match(githubAuth, /running.*container.*refreshes.*in place/is)
+    assert.match(githubAuth, /refreshes.*running.*container.*in place/is)
     assert.match(githubAuth, /no.*running.*container.*starts/is)
     assert.doesNotMatch(githubAuth, /refresh-gh-token-running/)
   })
