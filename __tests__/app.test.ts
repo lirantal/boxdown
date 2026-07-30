@@ -907,6 +907,7 @@ describe('CLI parsing', () => {
     assert.match(readme, /`boxdown down` removes the container.*runtime-secret state/is)
     assert.match(readme, /retains persistent cache\/data state/)
     assert.match(readme, /`stop`.*`down`.*`purge`/is)
+    assert.doesNotMatch(readme, /refresh-gh-token-running/)
   })
 
   test('lifecycle docs preserve down cleanup and context-sensitive verbosity semantics', () => {
@@ -930,6 +931,15 @@ describe('CLI parsing', () => {
       assert.match(document, /CI|non-interactive/is)
       assert.match(document, /raw .*output/is)
     }
+  })
+
+  test('feature docs distinguish GitHub auth refresh container reuse from startup fallback', () => {
+    const githubAuth = readFileSync(join(process.cwd(), 'docs/features/github-auth-refresh.md'), 'utf8')
+
+    assert.match(githubAuth, /only GitHub CLI auth-refresh command/)
+    assert.match(githubAuth, /running.*container.*refreshes.*in place/is)
+    assert.match(githubAuth, /no.*running.*container.*starts/is)
+    assert.doesNotMatch(githubAuth, /refresh-gh-token-running/)
   })
 
   test('help aligns wrapped command descriptions', () => {

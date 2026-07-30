@@ -7,6 +7,8 @@ boxdown refresh-gh-token
 boxdown refresh-gh-token --verbose
 ```
 
+This is Boxdown's only GitHub CLI auth-refresh command.
+
 The command copies host GitHub CLI auth into the container using the host token
 from:
 
@@ -26,8 +28,9 @@ container.
 
 ## refresh-gh-token
 
-`refresh-gh-token` refreshes GitHub CLI auth in a matching running
-devcontainer. If no workspace devcontainer is running, it starts one first.
+Boxdown refreshes GitHub CLI auth in a matching running workspace devcontainer
+in place. When no matching running workspace devcontainer exists, Boxdown
+starts the devcontainer and then refreshes auth.
 
 ## Container Work
 
