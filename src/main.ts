@@ -1572,7 +1572,7 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
       const refreshGhAuth = options.refreshContainerGhAuth ?? refreshContainerGhAuth
       const assertProfile = options.assertContainerAgentProfile ?? assertContainerAgentProfile
       const findRunning = options.findRunningContainerId ?? findRunningContainerId
-      return await runLoggedLifecycle(context, 'refresh-gh-token', argv, async (logger) => {
+      return runLoggedLifecycle(context, 'refresh-gh-token', argv, async (logger) => {
         const runningContainerId = await findRunning(context, { logger })
         const progress = createCliProgress(parsed, 'stdout', { env: options.env })
         await withProgressSection(progress, 'Boxdown GitHub auth refresh', [
