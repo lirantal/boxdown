@@ -1,5 +1,11 @@
 # boxdown
 
+## 4.1.0
+
+### Minor Changes
+
+- [`fe85db9`](https://github.com/lirantal/boxdown/commit/fe85db9a139efd371bcb84f41d5e7b819d0ddb42) Thanks [@lirantal](https://github.com/lirantal)! - 'full' agent profile now uses a live host-write bind mount
+
 ## 4.0.0
 
 ### Major Changes
