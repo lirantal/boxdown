@@ -76,6 +76,34 @@ host values and failed 1Password lookup are non-blocking. `boxdown down` and
 `boxdown purge` remove the workspace runtime directory after container removal.
 Boxdown does not use or modify project `.env.development` files.
 
+### Varlock credential proxy mode
+
+When the workspace has a `.env.schema` and [varlock](https://varlock.dev) is
+installed (the workspace's `node_modules/.bin/varlock` is preferred, then a
+global install on `PATH`), initialization routes secrets through varlock's
+credential proxy instead of writing plaintext secret files. It reuses the
+workspace's running `varlock proxy` session or boots one (headless, with
+schema reload disabled), then writes proxy wiring into the runtime-secret
+directory: a sourceable `varlock.env` (placeholder values plus `HTTP(S)_PROXY`
+and CA-bundle variables pointing at the host proxy through
+`host.docker.internal`) and a `varlock-ca/` directory with the proxy CA
+certificates. Real secret values then never enter the container; the proxy
+substitutes them at the network boundary on the host and scrubs them from
+responses. The per-secret plaintext files are removed in this mode.
+
+Because varlock resolves values on the host, the schema can pull secrets from
+any varlock plugin (1Password, Bitwarden, AWS Secrets Manager, HashiCorp
+Vault, Doppler, and others) or varlock's built-in local encryption, without
+those managers' tokens entering the container.
+
+Set `BOXDOWN_VARLOCK=0` to skip proxy detection,
+`BOXDOWN_VARLOCK_PROXY_SESSION=<id>` to select a specific session, and
+`BOXDOWN_VARLOCK_BOOT_TIMEOUT_SECONDS` (default 30) to bound the boot wait.
+The booted daemon logs to `varlock-proxy-start.log` in the workspace runtime
+directory and keeps running after `boxdown down`; stop it with plain `kill`
+using the PID from `varlock proxy status`. When varlock is absent or the
+proxy cannot start, behavior falls back to plaintext secret files.
+
 ## Agent profile staging and authentication
 
 Only `auth` agent-profile sources are mounted at a read-only staging path below
