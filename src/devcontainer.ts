@@ -13,8 +13,8 @@ import { runBuffered, runInteractive } from './process.ts'
 import { assertProgressCommandSucceeded, type ProgressReporter, runProgressCommand } from './progress.ts'
 import { interactiveCommandScript, interactiveShellEnvArgs, interactiveShellScript } from './shell.ts'
 import { ensureHostSshKey } from './ssh-key.ts'
-import { type ContainerSummary, parseDockerPsJsonLines } from './status.ts'
-import { DEFAULT_AGENT_PROFILE, isAgentProfile, type AgentProfile } from './agent-profile.ts'
+import { containerProfileMatches, type ContainerSummary, parseDockerPsJsonLines } from './status.ts'
+import { DEFAULT_AGENT_PROFILE, parseAgentProfileMarker, type AgentProfile, type ContainerAgentProfile } from './agent-profile.ts'
 
 export interface StartOptions {
   agentProfile?: AgentProfile
@@ -148,7 +148,7 @@ export async function findRunningContainerId (context: WorkspaceContext, options
 export async function inspectContainerAgentProfile (
   containerId: string,
   options: { logger?: WorkspaceCommandLogger } = {}
-): Promise<AgentProfile | undefined> {
+): Promise<ContainerAgentProfile | undefined> {
   const result = await runBuffered('docker', [
     'exec',
     containerId,
@@ -163,8 +163,7 @@ export async function inspectContainerAgentProfile (
 
   if (result.code !== 0) return undefined
 
-  const agentProfile = result.stdout.trim()
-  return isAgentProfile(agentProfile) ? agentProfile : undefined
+  return parseAgentProfileMarker(result.stdout.trim())
 }
 
 export function parseDockerInspectImage (output: string, containerId: string): DockerImageInfo | undefined {
@@ -316,7 +315,10 @@ export async function assertContainerAgentProfile (
   agentProfile: AgentProfile,
   logger?: WorkspaceCommandLogger
 ): Promise<void> {
-  if (await inspectContainerAgentProfile(containerId, { logger }) !== agentProfile) {
+  if (!containerProfileMatches(
+    await inspectContainerAgentProfile(containerId, { logger }),
+    agentProfile
+  )) {
     throw new Error(agentProfileMismatchMessage(agentProfile))
   }
 }
@@ -358,9 +360,12 @@ export async function startDevcontainer (context: WorkspaceContext, options: Sta
     const runningAgentProfile = existingContainer.state?.toLowerCase() === 'running'
       ? await inspectContainerAgentProfile(existingContainer.id, { logger: options.logger })
       : undefined
-    const activeAgentProfile = runningAgentProfile ?? priorGeneratedAgentProfile
 
-    if (activeAgentProfile !== agentProfile) {
+    if (
+      runningAgentProfile === undefined
+        ? priorGeneratedAgentProfile !== agentProfile
+        : !containerProfileMatches(runningAgentProfile, agentProfile)
+    ) {
       throw new Error(agentProfileMismatchMessage(agentProfile))
     }
   }

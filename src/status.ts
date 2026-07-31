@@ -15,7 +15,7 @@ import {
   BOXDOWN_CONTAINER_CODEX_AUTH_PATH,
   BOXDOWN_CONTAINER_CODEX_DIR
 } from './constants.ts'
-import { isAgentProfile, resolveAgentProfile, type AgentProfile, type AgentProfileSelection, type AgentProfileSelectionSource } from './agent-profile.ts'
+import { agentProfileAccessText, isAgentProfile, resolveAgentProfile, type AgentProfile, type AgentProfileSelection, type AgentProfileSelectionSource, type ContainerAgentProfile } from './agent-profile.ts'
 import {
   classifyPosixPath,
   inspectDevcontainerMount,
@@ -33,6 +33,7 @@ export type ContainerProfileState = 'active' | 'recreate-required' | 'not-create
 export interface AgentProfileStatus {
   selected: AgentProfile
   selectionSource: AgentProfileSelectionSource
+  access: string
   generated?: AgentProfile
   container?: AgentProfile
   containerState: ContainerProfileState
@@ -206,6 +207,63 @@ interface GeneratedAgentProfileInfo {
   customDestinations: string[]
 }
 
+function mountFieldValue (mount: unknown, aliases: readonly string[]): string | undefined {
+  let fields: Array<[string, unknown]>
+
+  if (typeof mount === 'string') {
+    if (/["\r\n\0]/.test(mount) || mount.includes('${')) return undefined
+    fields = mount.split(',').flatMap((field) => {
+      const separator = field.indexOf('=')
+      return separator === -1
+        ? []
+        : [[field.slice(0, separator).trim().toLowerCase(), field.slice(separator + 1)]]
+    })
+  } else if (typeof mount === 'object' && mount !== null && !Array.isArray(mount)) {
+    fields = Object.entries(mount).map(([key, value]) => [key.toLowerCase(), value])
+  } else {
+    return undefined
+  }
+
+  const values = fields
+    .filter(([key]) => aliases.includes(key))
+    .map(([, value]) => value)
+  if (values.length !== 1 || typeof values[0] !== 'string') return undefined
+
+  const value = values[0].trim()
+  return value.length > 0 && !/[\r\n\0]/.test(value) && !value.includes('${')
+    ? value
+    : undefined
+}
+
+function managedFullMountDestination (
+  context: WorkspaceContext,
+  profile: AgentProfile | undefined,
+  mount: unknown,
+  destinations: string[],
+  destinationIndeterminate: boolean
+): string | undefined {
+  if (
+    profile !== 'full' ||
+    destinationIndeterminate ||
+    destinations.length !== 1 ||
+    mountFieldValue(mount, ['type'])?.toLowerCase() !== 'bind'
+  ) {
+    return undefined
+  }
+
+  const destination = destinations[0]
+  if (destination === undefined) return undefined
+  const source = mountFieldValue(mount, ['source', 'src'])
+  const managedSources = new Map<string, string>([
+    [BOXDOWN_CONTAINER_AGENTS_DIR, context.hostAgentsDir],
+    [BOXDOWN_CONTAINER_CODEX_DIR, context.hostCodexDir],
+    [BOXDOWN_CONTAINER_CLAUDE_DIR, context.hostClaudeDir],
+    [BOXDOWN_CONTAINER_CLAUDE_CONFIG_PATH, context.hostClaudeConfigPath]
+  ])
+
+  return source === managedSources.get(destination) ? destination : undefined
+}
+
 function normalizedCustomDestinations (targets: string[]): string[] {
   const destinations = new Set<string>()
 
@@ -243,6 +301,7 @@ function normalizedCustomDestinations (targets: string[]): string[] {
 }
 
 function inspectGeneratedAgentProfile (
+  context: WorkspaceContext,
   path: string,
   readFile: (path: string) => string
 ): GeneratedAgentProfileInfo {
@@ -269,6 +328,7 @@ function inspectGeneratedAgentProfile (
     ? config.containerEnv as Record<string, unknown>
     : {}
   const profileValue = containerEnv.BOXDOWN_AGENT_PROFILE
+  const profile = typeof profileValue === 'string' && isAgentProfile(profileValue) ? profileValue : undefined
   const sourceValue = containerEnv.BOXDOWN_AGENT_PROFILE_SOURCES
   const sources = new Set<AgentProfileSourceName>()
 
@@ -282,21 +342,32 @@ function inspectGeneratedAgentProfile (
 
   const mountPolicies = Array.isArray(config.mounts)
     ? config.mounts
-      .map(inspectDevcontainerMount)
+      .map(mount => ({ mount, policy: inspectDevcontainerMount(mount) }))
     : []
-  const targets = mountPolicies.flatMap(policy => policy.destinations)
+  const targets = mountPolicies.flatMap(({ policy }) => policy.destinations)
+  const customTargets = mountPolicies.flatMap(({ mount, policy }) =>
+    managedFullMountDestination(
+      context,
+      profile,
+      mount,
+      policy.destinations,
+      policy.destinationIndeterminate
+    ) === undefined
+      ? policy.destinations
+      : []
+  )
   const mountDestinationIndeterminate = mountPolicies
-    .some(policy => policy.destinationIndeterminate)
+    .some(({ policy }) => policy.destinationIndeterminate)
 
   return {
-    profile: typeof profileValue === 'string' && isAgentProfile(profileValue) ? profileValue : undefined,
+    profile,
     sources,
     stagingTargets: new Set(targets),
-    mountTargets: new Set(targets),
+    mountTargets: new Set(customTargets),
     mountDestinationIndeterminate,
     customDestinations: mountDestinationIndeterminate
       ? [...canonicalTopLevelAgentProfileDestinations].sort()
-      : normalizedCustomDestinations(targets)
+      : normalizedCustomDestinations(customTargets)
   }
 }
 
@@ -312,7 +383,8 @@ function generatedSourceState (
   destination: string
 ): AgentProfileSourceState {
   if (sourceIsCustom(generated, destination)) return 'custom'
-  return generated.sources.has(source) && generated.stagingTargets.has(stagingTarget)
+  const expectedTarget = generated.profile === 'full' ? destination : stagingTarget
+  return generated.sources.has(source) && generated.stagingTargets.has(expectedTarget)
     ? 'available'
     : 'missing'
 }
@@ -449,24 +521,32 @@ function inspectCurrentSources (
   return sources
 }
 
+export function containerProfileMatches (
+  inspected: ContainerAgentProfile | undefined,
+  selected: AgentProfile
+): boolean {
+  const expectedMode = selected === 'full' ? 'live' : 'copy'
+  return inspected?.profile === selected && inspected.mode === expectedMode
+}
+
 function containerProfileState (
   selected: AgentProfile,
   generated: AgentProfile | undefined,
   container: ContainerSummary | undefined,
-  containerAgentProfile: AgentProfile | undefined
+  containerAgentProfile: ContainerAgentProfile | undefined
 ): ContainerProfileState {
   if (container === undefined) return 'not-created'
 
   if (
     (generated !== undefined && generated !== selected) ||
-    (containerAgentProfile !== undefined && containerAgentProfile !== selected)
+    (containerAgentProfile !== undefined && !containerProfileMatches(containerAgentProfile, selected))
   ) {
     return 'recreate-required'
   }
 
   return container.state?.toLowerCase() === 'running' &&
     generated === selected &&
-    containerAgentProfile === selected
+    containerProfileMatches(containerAgentProfile, selected)
     ? 'active'
     : 'unknown'
 }
@@ -545,7 +625,7 @@ export function createStatusInfo (
     isFile?: (path: string) => boolean
     isDirectory?: (path: string) => boolean
     agentProfileSelection?: AgentProfileSelection
-    containerAgentProfile?: AgentProfile
+    containerAgentProfile?: ContainerAgentProfile
   } = {}
 ): StatusInfo {
   const state = container?.state?.toLowerCase()
@@ -558,7 +638,7 @@ export function createStatusInfo (
     readFile
   )
   const selection = options.agentProfileSelection ?? resolveAgentProfile(undefined, undefined)
-  const generatedInfo = inspectGeneratedAgentProfile(context.generatedConfigPath, readFile)
+  const generatedInfo = inspectGeneratedAgentProfile(context, context.generatedConfigPath, readFile)
   const generatedMatchesSelection = generatedInfo.profile === selection.value
   const sources = generatedMatchesSelection
     ? inspectGeneratedSources(context, selection.value, generatedInfo)
@@ -610,8 +690,9 @@ export function createStatusInfo (
     agentProfile: {
       selected: selection.value,
       selectionSource: selection.source,
+      access: agentProfileAccessText(selection.value),
       ...(generatedInfo.profile === undefined ? {} : { generated: generatedInfo.profile }),
-      ...(options.containerAgentProfile === undefined ? {} : { container: options.containerAgentProfile }),
+      ...(options.containerAgentProfile === undefined ? {} : { container: options.containerAgentProfile.profile }),
       containerState: profileState,
       sources,
       customDestinations: generatedInfo.customDestinations
@@ -719,6 +800,7 @@ export function formatStatusText (status: StatusInfo, options: { color?: boolean
     `  Codex home: ${agentProfileSourceText(profile.sources.codexHome)}`,
     `  Claude home: ${agentProfileSourceText(profile.sources.claudeHome)}`,
     `  ~/.claude.json: ${agentProfileSourceText(profile.sources.claudeConfig)}`,
+    `  Profile access: ${profile.access}`,
     `  Container profile: ${containerProfileText(profile.containerState)}`
   ]
 

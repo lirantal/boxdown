@@ -137,37 +137,35 @@ test('auth copies only credentials and all agent content', () => {
   assert.strictEqual(readFileSync(paths.marker, 'utf8'), 'auth\n')
 })
 
-test('full copies all four opaque top-level sources', () => {
+test('full leaves canonical destinations unchanged and writes the live marker', () => {
   const paths = roots('full')
   writeSourceFile(paths.source, 'agents/skill.md', 'skill\n')
-  writeSourceFile(paths.source, 'codex/config.toml', '[features]\n')
+  writeSourceFile(paths.source, 'codex/config.toml', 'host config\n')
   writeSourceFile(paths.source, 'claude/settings.json', '{"theme":"dark"}\n')
   writeSourceFile(paths.source, 'claude-config.json', '{"mcpServers":{}}\n')
+  mkdirSync(join(paths.home, '.codex'), { recursive: true })
+  writeFileSync(join(paths.home, '.codex', 'sentinel'), 'live mount\n')
 
   const result = runBootstrap('full', paths)
 
   assertSucceeded(result)
-  assert.strictEqual(readFileSync(join(paths.home, '.agents', 'skill.md'), 'utf8'), 'skill\n')
-  assert.strictEqual(readFileSync(join(paths.home, '.codex', 'config.toml'), 'utf8'), '[features]\n')
-  assert.strictEqual(readFileSync(join(paths.home, '.claude', 'settings.json'), 'utf8'), '{"theme":"dark"}\n')
-  assert.strictEqual(readFileSync(join(paths.home, '.claude.json'), 'utf8'), '{"mcpServers":{}}\n')
-  assert.strictEqual(readFileSync(paths.marker, 'utf8'), 'full\n')
+  assert.strictEqual(readFileSync(join(paths.home, '.codex', 'sentinel'), 'utf8'), 'live mount\n')
+  assert.strictEqual(lstatSync(join(paths.home, '.codex', 'config.toml'), { throwIfNoEntry: false }), undefined)
+  assert.strictEqual(readFileSync(paths.marker, 'utf8'), 'full:live\n')
 })
 
 test('source trees remain byte-for-byte unchanged after bootstrap and canonical writes', () => {
   const paths = roots('source-immutable')
   writeSourceFile(paths.source, 'agents/notes.txt', 'source notes\n')
-  writeSourceFile(paths.source, 'codex/config.toml', 'source codex\n')
-  writeSourceFile(paths.source, 'claude/settings.json', 'source claude\n')
-  writeSourceFile(paths.source, 'claude-config.json', 'source config\n')
+  writeSourceFile(paths.source, 'codex-auth.json', 'source codex\n')
+  writeSourceFile(paths.source, 'claude-credentials.json', 'source claude\n')
   const before = treeSnapshot(paths.source)
 
-  const result = runBootstrap('full', paths)
+  const result = runBootstrap('auth', paths)
   assertSucceeded(result)
   writeFileSync(join(paths.home, '.agents', 'notes.txt'), 'container notes\n')
-  writeFileSync(join(paths.home, '.codex', 'config.toml'), 'container codex\n')
-  writeFileSync(join(paths.home, '.claude', 'settings.json'), 'container claude\n')
-  writeFileSync(join(paths.home, '.claude.json'), 'container config\n')
+  writeFileSync(join(paths.home, '.codex', 'auth.json'), 'container codex\n')
+  writeFileSync(join(paths.home, '.claude', '.credentials.json'), 'container claude\n')
 
   assert.deepStrictEqual(treeSnapshot(paths.source), before)
 })
@@ -295,7 +293,7 @@ test('missing sources are non-fatal', () => {
 
   assertSucceeded(result)
   assert.deepStrictEqual(readdirSync(paths.home), [])
-  assert.strictEqual(readFileSync(paths.marker, 'utf8'), 'full\n')
+  assert.strictEqual(readFileSync(paths.marker, 'utf8'), 'full:live\n')
 })
 
 test('an unreadable credential is a non-fatal warning when reproducible', {

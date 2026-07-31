@@ -211,11 +211,12 @@ async function invalidateMarker() {
 }
 
 async function writeMarker(profile) {
+  const marker = profile === 'full' ? 'full:live' : profile
   const markerParent = dirname(markerPath)
   const temporary = siblingPath(markerPath, 'temporary')
   await mkdir(markerParent, { recursive: true, mode: 0o700 })
   try {
-    await writeFile(temporary, `${profile}\n`, { mode: 0o600 })
+    await writeFile(temporary, `${marker}\n`, { mode: 0o600 })
     await rename(temporary, markerPath)
   } finally {
     await rm(temporary, { force: true })
@@ -241,29 +242,6 @@ async function main() {
       join(sourceRoot, 'claude-credentials.json'),
       join(destinationHome, '.claude', '.credentials.json'),
       'CLAUDE_CONFIG_DIR'
-    )
-  }
-
-  if (profile === 'full') {
-    await copyRequired(
-      join(sourceRoot, 'agents'),
-      join(destinationHome, '.agents'),
-      '~/.agents'
-    )
-    await copyRequired(
-      join(sourceRoot, 'codex'),
-      join(destinationHome, '.codex'),
-      '$CODEX_HOME'
-    )
-    await copyRequired(
-      join(sourceRoot, 'claude'),
-      join(destinationHome, '.claude'),
-      'CLAUDE_CONFIG_DIR'
-    )
-    await copyRequired(
-      join(sourceRoot, 'claude-config.json'),
-      join(destinationHome, '.claude.json'),
-      '.claude.json'
     )
   }
 
