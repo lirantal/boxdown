@@ -171,6 +171,7 @@ export function buildGeneratedDevcontainerConfig (context: WorkspaceContext, sig
   }
 
   const availableAgentProfileSources = agentProfileSources(context, agentProfile)
+  const managedAgentProfileSources: string[] = []
   for (const source of availableAgentProfileSources) {
     if (!source.exists() || hasMountConflict(mounts, source.canonicalDestination)) continue
 
@@ -181,6 +182,7 @@ export function buildGeneratedDevcontainerConfig (context: WorkspaceContext, sig
     boxdownMounts.push(
       `type=bind,source=${source.source},target=${destination}${readOnly}`
     )
+    if (agentProfile === 'full') managedAgentProfileSources.push(source.availability)
   }
 
   return {
@@ -223,6 +225,9 @@ export function buildGeneratedDevcontainerConfig (context: WorkspaceContext, sig
       BOXDOWN_AGENT_PROFILE_SOURCES: availableAgentProfileSources
         .filter(source => source.exists())
         .map(source => source.availability)
+        .sort()
+        .join(','),
+      BOXDOWN_AGENT_PROFILE_MANAGED_SOURCES: managedAgentProfileSources
         .sort()
         .join(','),
       ...(signing?.enabled === false && signing.reason !== undefined ? { BOXDOWN_GIT_SIGNING_REASON: signing.reason } : {}),

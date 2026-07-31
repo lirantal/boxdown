@@ -1024,7 +1024,10 @@ test('documents agent profile tiers', () => {
   assert.ok(!stateDocs.includes(String.raw`%USERPROFILE%\.claude.credentials.json`))
   assert.match(lifecycleDocs, /stop.*preserves.*profile/is)
   assert.match(lifecycleDocs, /container-local `auth` profile.*down.*recreate.*discard that copy/is)
-  assert.match(architecture, /metadata selection\s*->\s*generated staging intent\s*->\s*container applied marker/)
+  assert.match(architecture, /`auth`.*read-only staging.*container-local writable cop(?:y|ies)/is)
+  assert.match(architecture, /`full`.*live, read-write.*host/is)
+  assert.match(architecture, /full:live/)
+  assert.doesNotMatch(architecture, /It never mounts a\s+Boxdown-selected host source directly/)
   assert.match(architecture, /mismatch.*recreation/is)
   assert.match(assetDocs, /staging tree/is)
   assert.match(assetDocs, /bootstrap.*marker/is)
@@ -5430,7 +5433,8 @@ describe('status output', () => {
     writeFileSync(context.generatedConfigPath, `${JSON.stringify({
       containerEnv: {
         BOXDOWN_AGENT_PROFILE: 'full',
-        BOXDOWN_AGENT_PROFILE_SOURCES: 'claude-home'
+        BOXDOWN_AGENT_PROFILE_SOURCES: 'claude-home',
+        BOXDOWN_AGENT_PROFILE_MANAGED_SOURCES: 'claude-home'
       },
       mounts: [
         `type=bind,source=${claudeDir},target=${BOXDOWN_CONTAINER_CLAUDE_DIR}`,
@@ -8123,6 +8127,11 @@ describe('devcontainer config generation', () => {
       }
       assert.strictEqual(config.containerEnv?.BOXDOWN_AGENT_PROFILE, profile)
       assert.strictEqual(config.containerEnv?.BOXDOWN_AGENT_PROFILE_SOURCES, expectation.sources)
+      assert.strictEqual(
+        config.containerEnv?.BOXDOWN_AGENT_PROFILE_MANAGED_SOURCES,
+        profile === 'full' ? expectation.sources : ''
+      )
+      assert.doesNotMatch(config.containerEnv?.BOXDOWN_AGENT_PROFILE_MANAGED_SOURCES ?? '', /(?:\/|\\|\.)/)
       assert.ok(config.initializeCommand?.includes(`BOXDOWN_AGENT_PROFILE='${profile}'`))
       if (profile !== 'full') {
         assert.ok(!profileMounts.some(mount => /target=\/home\/node\/\.(agents|codex|claude)(,|$)/.test(mount)))
@@ -8737,6 +8746,42 @@ describe('devcontainer config generation', () => {
       assert.strictEqual(status.agentProfile.sources.codexHome, 'custom', `${entry.name}: read-only mount is user-owned`)
       assert.ok(status.agentProfile.customDestinations.includes(BOXDOWN_CONTAINER_CODEX_DIR), `${entry.name}: report custom destination`)
     }
+  })
+
+  test('read-write matching user full mounts remain custom without Boxdown provenance', () => {
+    const home = tempDir('matching-user-full-profile-home')
+    mkdirSync(join(home, '.codex'))
+    const assets = tempDir('matching-user-full-profile-assets')
+    const context = createWorkspaceContext({
+      workspace: tempDir('matching-user-full-profile-workspace'),
+      env: {
+        HOME: home,
+        BOXDOWN_CACHE_HOME: tempDir('matching-user-full-profile-cache'),
+        BOXDOWN_DATA_HOME: tempDir('matching-user-full-profile-data')
+      },
+      platform: 'linux',
+      assetsDevcontainerDir: assets
+    })
+    const userMount = `type=bind,source=${context.hostCodexDir},target=${BOXDOWN_CONTAINER_CODEX_DIR}`
+    writeFileSync(join(assets, 'devcontainer.json'), `${JSON.stringify({ mounts: [userMount] })}\n`)
+
+    const config = buildGeneratedDevcontainerConfig(context, undefined, 'full')
+    assert.ok(config.mounts?.includes(userMount))
+    assert.doesNotMatch(config.containerEnv?.BOXDOWN_AGENT_PROFILE_MANAGED_SOURCES ?? '', /(?:^|,)codex-home(?:,|$)/)
+    mkdirSync(context.workspaceCacheDir, { recursive: true })
+    writeFileSync(context.generatedConfigPath, `${JSON.stringify(config, null, 2)}\n`)
+
+    const status = createStatusInfo(context, 'matching-user-full-profile', {
+      id: 'matching-user-full-profile-container',
+      state: 'running'
+    }, existsSync, {
+      sshConfigPath: join(tempDir('matching-user-full-profile-ssh'), 'config'),
+      agentProfileSelection: resolveAgentProfile(undefined, 'full'),
+      containerAgentProfile: liveFullContainerProfile
+    })
+
+    assert.strictEqual(status.agentProfile.sources.codexHome, 'custom')
+    assert.ok(status.agentProfile.customDestinations.includes(BOXDOWN_CONTAINER_CODEX_DIR))
   })
 
   test('parses JSONC without stripping URLs inside strings', () => {
@@ -11332,9 +11377,10 @@ describe('packaged assets', () => {
     const postCreate = readFileSync(join(assetsDevcontainerDir, 'hooks', 'post-create.sh'), 'utf8')
     const gitConfigBootstrap = readFileSync(join(assetsDevcontainerDir, 'utils', 'git-config-bootstrap.sh'), 'utf8')
 
-    assert.match(postCreate, /run_step "Copying isolated agent profile" configure_agent_profile/)
+    assert.match(postCreate, /run_step "Configuring agent profile" configure_agent_profile/)
     assert.match(postCreate, /agent-profile-bootstrap\.mjs/)
-    assert.ok(postCreate.indexOf('Copying isolated agent profile') < postCreate.indexOf('Installing workspace dependencies'))
+    assert.ok(postCreate.indexOf('Configuring agent profile') < postCreate.indexOf('Installing workspace dependencies'))
+    assert.doesNotMatch(postCreate, /Copying isolated agent profile/)
     assert.match(postCreate, /configure_global_git/)
     assert.match(postCreate, /git-config-bootstrap\.sh/)
     assert.match(postCreate, /configure_git_signing/)

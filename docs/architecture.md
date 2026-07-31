@@ -77,35 +77,41 @@ integrations.
 The generated config mounts `assets/devcontainer/` read-only into the container
 at `/opt/boxdown/devcontainer`.
 
-Agent-profile sources are mounted read-only only below
-`/opt/boxdown/agent-profile-source`. The post-create bootstrap copies selected
-sources to writable container-local canonical homes. It never mounts a
-Boxdown-selected host source directly at `/home/node/.agents`,
-`/home/node/.codex`, `/home/node/.claude`, or `/home/node/.claude.json`, and it
-never synchronizes a container copy back to the host.
+The `auth` default uses read-only staging mounts below
+`/opt/boxdown/agent-profile-source`, then the post-create bootstrap makes a
+container-local writable copy of supported file-backed authentication and the
+complete host `~/.agents` tree. Changes to that copy do not write back to the
+host.
 
-The `auth` default copies supported file-backed authentication and the complete
-host `~/.agents` tree. The `full` tier also copies opaque Codex and Claude homes;
-the `none` tier omits host user-scoped profile data. Repository-scoped agent
-configuration is outside this boundary because the workspace mount exposes it
-in every tier.
+The `full` tier instead exposes available host `~/.agents`, Codex, and Claude
+profiles as live, read-write mounts at their canonical container destinations.
+Changes made inside the container affect the host immediately. The `none` tier
+omits host user-scoped profile data. Repository-scoped agent configuration is
+outside this boundary because the workspace mount exposes it in every tier.
 
 A custom mount at, above, or below a canonical profile destination is externally
 managed. Boxdown skips the matching profile staging source and bootstrap copy,
-so custom-mount ownership and write policy remain with the custom mount.
+or the corresponding `full` live mount, so custom-mount ownership and write
+policy remain with the custom mount.
 
 Profile lifecycle has three truth points:
 
 ```text
-metadata selection -> generated staging intent -> container applied marker
+metadata selection -> generated profile intent -> container applied marker
 ```
 
 Workspace metadata records the selected tier, generated configuration records
-the create-time staging intent, and the bootstrap writes the container-local
-marker only after a successful copy. Status compares all three. A mismatch
-requires recreation: Docker cannot add or replace create-time mounts in an
-existing container, and host changes never update its stopped or running copied
-profile.
+the source availability and create-time mount or copy intent, and the bootstrap
+writes the container-local marker after setup succeeds. The generated config
+also records Boxdown-managed `full` mounts by logical source name in
+`BOXDOWN_AGENT_PROFILE_MANAGED_SOURCES`, without duplicating host paths in that
+provenance metadata, so status can distinguish them from preserved user mounts.
+`auth` writes its marker after a successful copy;
+`full` writes `full:live` without copying profile data. Status compares all
+three truth points. A mismatch requires recreation because Docker cannot add or
+replace create-time mounts in an existing container. A legacy `full` marker
+therefore requires recreation, while host changes under an active `full:live`
+profile are visible immediately.
 
 The container receives only a public SSH key mount. The private host key stays
 on the host and is referenced from the user's SSH config.

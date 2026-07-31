@@ -201,6 +201,7 @@ const canonicalTopLevelAgentProfileDestinations = [
 interface GeneratedAgentProfileInfo {
   profile?: AgentProfile
   sources: Set<AgentProfileSourceName>
+  managedSources: Set<AgentProfileSourceName>
   stagingTargets: Set<string>
   mountTargets: Set<string>
   mountDestinationIndeterminate: boolean
@@ -278,6 +279,7 @@ function mountIsReadWrite (mount: unknown): boolean {
 function managedFullMountDestination (
   context: WorkspaceContext,
   profile: AgentProfile | undefined,
+  managedSources: Set<AgentProfileSourceName>,
   mount: unknown,
   destinations: string[],
   destinationIndeterminate: boolean
@@ -295,14 +297,33 @@ function managedFullMountDestination (
   const destination = destinations[0]
   if (destination === undefined) return undefined
   const source = mountFieldValue(mount, ['source', 'src'])
-  const managedSources = new Map<string, string>([
-    [BOXDOWN_CONTAINER_AGENTS_DIR, context.hostAgentsDir],
-    [BOXDOWN_CONTAINER_CODEX_DIR, context.hostCodexDir],
-    [BOXDOWN_CONTAINER_CLAUDE_DIR, context.hostClaudeDir],
-    [BOXDOWN_CONTAINER_CLAUDE_CONFIG_PATH, context.hostClaudeConfigPath]
+  const managedMounts = new Map<string, { name: AgentProfileSourceName, source: string }>([
+    [BOXDOWN_CONTAINER_AGENTS_DIR, { name: 'agents', source: context.hostAgentsDir }],
+    [BOXDOWN_CONTAINER_CODEX_DIR, { name: 'codex-home', source: context.hostCodexDir }],
+    [BOXDOWN_CONTAINER_CLAUDE_DIR, { name: 'claude-home', source: context.hostClaudeDir }],
+    [BOXDOWN_CONTAINER_CLAUDE_CONFIG_PATH, { name: 'claude-config', source: context.hostClaudeConfigPath }]
   ])
+  const managedMount = managedMounts.get(destination)
 
-  return source === managedSources.get(destination) ? destination : undefined
+  return managedMount !== undefined &&
+    managedSources.has(managedMount.name) &&
+    source === managedMount.source
+    ? destination
+    : undefined
+}
+
+function parseAgentProfileSourceNames (value: unknown): Set<AgentProfileSourceName> {
+  const sources = new Set<AgentProfileSourceName>()
+
+  if (typeof value !== 'string') return sources
+
+  for (const source of value.split(',').map(value => value.trim())) {
+    if (agentProfileSourceNames.includes(source as AgentProfileSourceName)) {
+      sources.add(source as AgentProfileSourceName)
+    }
+  }
+
+  return sources
 }
 
 function normalizedCustomDestinations (targets: string[]): string[] {
@@ -348,6 +369,7 @@ function inspectGeneratedAgentProfile (
 ): GeneratedAgentProfileInfo {
   const empty: GeneratedAgentProfileInfo = {
     sources: new Set(),
+    managedSources: new Set(),
     stagingTargets: new Set(),
     mountTargets: new Set(),
     mountDestinationIndeterminate: false,
@@ -370,16 +392,8 @@ function inspectGeneratedAgentProfile (
     : {}
   const profileValue = containerEnv.BOXDOWN_AGENT_PROFILE
   const profile = typeof profileValue === 'string' && isAgentProfile(profileValue) ? profileValue : undefined
-  const sourceValue = containerEnv.BOXDOWN_AGENT_PROFILE_SOURCES
-  const sources = new Set<AgentProfileSourceName>()
-
-  if (typeof sourceValue === 'string') {
-    for (const source of sourceValue.split(',').map(value => value.trim())) {
-      if (agentProfileSourceNames.includes(source as AgentProfileSourceName)) {
-        sources.add(source as AgentProfileSourceName)
-      }
-    }
-  }
+  const sources = parseAgentProfileSourceNames(containerEnv.BOXDOWN_AGENT_PROFILE_SOURCES)
+  const managedSources = parseAgentProfileSourceNames(containerEnv.BOXDOWN_AGENT_PROFILE_MANAGED_SOURCES)
 
   const mountPolicies = Array.isArray(config.mounts)
     ? config.mounts
@@ -390,6 +404,7 @@ function inspectGeneratedAgentProfile (
     managedFullMountDestination(
       context,
       profile,
+      managedSources,
       mount,
       policy.destinations,
       policy.destinationIndeterminate
@@ -403,6 +418,7 @@ function inspectGeneratedAgentProfile (
   return {
     profile,
     sources,
+    managedSources,
     stagingTargets: new Set(targets),
     mountTargets: new Set(customTargets),
     mountDestinationIndeterminate,
