@@ -1,5 +1,16 @@
 # boxdown
 
+## 4.0.0
+
+### Major Changes
+
+- [`2af88c1`](https://github.com/lirantal/boxdown/commit/2af88c17386641b7cff113d19457e592248f1aad) Thanks [@lirantal](https://github.com/lirantal)! - breaking: remove the `refresh-gh-token-running` CLI command; use
+  `refresh-gh-token` to refresh auth in a running container or start one when needed.
+
+### Patch Changes
+
+- [`b9cde6d`](https://github.com/lirantal/boxdown/commit/b9cde6d221dc8b1e28425d3b9c37d897d3bc0cab) Thanks [@lirantal](https://github.com/lirantal)! - fix: gh token refresh command runs on a live container
+
 ## 3.1.0
 
 ### Minor Changes
