@@ -5,7 +5,7 @@ HOOKS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEVCONTAINER_DIR="$(cd "${HOOKS_DIR}/.." && pwd)"
 
 main() {
-  run_step "Copying isolated agent profile" configure_agent_profile
+  run_step "Configuring agent profile" configure_agent_profile
   run_step "Configuring global Git" configure_global_git
   run_step "Configuring Git commit signing" configure_git_signing
   run_step "Configuring workspace Git" configure_local_git

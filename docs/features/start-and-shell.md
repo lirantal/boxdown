@@ -73,8 +73,8 @@ boxdown claude -- --continue
 
 1. Resolve the workspace to a real absolute path.
 2. Ensure per-workspace SSH key material exists.
-3. Generate a Boxdown-owned devcontainer config with the selected profile's
-   read-only staging mounts.
+3. Generate a Boxdown-owned devcontainer config with `auth` read-only staging
+   mounts or `full` live, read-write host mounts.
 4. Install or reuse the pinned Dev Containers CLI.
 5. Reuse a running devcontainer; otherwise run `devcontainer up` with the
    workspace and generated config.
@@ -134,11 +134,12 @@ BOXDOWN_TTY_NORMALIZE=0 boxdown start
 Containers CLI. Use it when changing create-time settings such as image, mounts,
 or Docker `runArgs`.
 
-Use `boxdown start --recreate --agent-profile <tier>` after changing a profile
-selection or host source. Existing containers keep their own writable copied
-profile; host changes do not synchronize into a stopped or running container.
-Stopping and restarting preserves that copied state, while recreation replaces
-it with a fresh copy.
+Use `boxdown start --recreate --agent-profile full` after changing a full-profile
+selection or mount configuration. Existing `full` containers use live,
+read-write host mounts, so changes inside the container persist to the host
+immediately. Use `boxdown start --recreate --agent-profile auth` after changing
+an `auth` selection or refreshing copied host sources; stopping and restarting
+preserves that copied state, while recreation replaces it with a fresh copy.
 
 Workspaces created before the release-matched image remain on their existing
 container. Switch them only with `boxdown start --recreate` or

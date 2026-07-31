@@ -42,7 +42,8 @@
     "mounts": [
         // Optional custom agent mounts remain user-managed:
         // "source=${localEnv:HOME}/.gemini,target=/home/node/.gemini,type=bind,consistency=cached"
-        // Boxdown profile sources are staged read-only, then copied into container-local writable copies.
+        // Only `auth` profile sources are staged read-only, then copied into container-local writable copies.
+        // `full` is not staged; its live read-write host mounts mean host writes are intentional.
     ],
 
     // Initialize host runtime state before container create/start.

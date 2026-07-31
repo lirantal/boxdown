@@ -15,7 +15,7 @@ import {
   BOXDOWN_CONTAINER_CODEX_AUTH_PATH,
   BOXDOWN_CONTAINER_CODEX_DIR
 } from './constants.ts'
-import { isAgentProfile, resolveAgentProfile, type AgentProfile, type AgentProfileSelection, type AgentProfileSelectionSource } from './agent-profile.ts'
+import { agentProfileAccessText, isAgentProfile, resolveAgentProfile, type AgentProfile, type AgentProfileSelection, type AgentProfileSelectionSource, type ContainerAgentProfile } from './agent-profile.ts'
 import {
   classifyPosixPath,
   inspectDevcontainerMount,
@@ -33,6 +33,7 @@ export type ContainerProfileState = 'active' | 'recreate-required' | 'not-create
 export interface AgentProfileStatus {
   selected: AgentProfile
   selectionSource: AgentProfileSelectionSource
+  access: string
   generated?: AgentProfile
   container?: AgentProfile
   containerState: ContainerProfileState
@@ -200,10 +201,129 @@ const canonicalTopLevelAgentProfileDestinations = [
 interface GeneratedAgentProfileInfo {
   profile?: AgentProfile
   sources: Set<AgentProfileSourceName>
+  managedSources: Set<AgentProfileSourceName>
   stagingTargets: Set<string>
   mountTargets: Set<string>
   mountDestinationIndeterminate: boolean
   customDestinations: string[]
+}
+
+function mountFieldValue (mount: unknown, aliases: readonly string[]): string | undefined {
+  let fields: Array<[string, unknown]>
+
+  if (typeof mount === 'string') {
+    if (/["\r\n\0]/.test(mount) || mount.includes('${')) return undefined
+    fields = mount.split(',').flatMap((field) => {
+      const separator = field.indexOf('=')
+      return separator === -1
+        ? []
+        : [[field.slice(0, separator).trim().toLowerCase(), field.slice(separator + 1)]]
+    })
+  } else if (typeof mount === 'object' && mount !== null && !Array.isArray(mount)) {
+    fields = Object.entries(mount).map(([key, value]) => [key.toLowerCase(), value])
+  } else {
+    return undefined
+  }
+
+  const values = fields
+    .filter(([key]) => aliases.includes(key))
+    .map(([, value]) => value)
+  if (values.length !== 1 || typeof values[0] !== 'string') return undefined
+
+  const value = values[0].trim()
+  return value.length > 0 && !/[\r\n\0]/.test(value) && !value.includes('${')
+    ? value
+    : undefined
+}
+
+function mountIsReadWrite (mount: unknown): boolean {
+  const readOnlyAliases = new Set(['readonly', 'ro'])
+  const readWriteAliases = new Set(['rw'])
+  const parseBoolean = (value: unknown): boolean | undefined => {
+    if (value === true || value === 'true' || value === '1') return true
+    if (value === false || value === 'false' || value === '0') return false
+    return undefined
+  }
+  const modes: Array<{ key: string, value: unknown }> = []
+
+  if (typeof mount === 'string') {
+    if (/["\r\n\0]/.test(mount) || mount.includes('${')) return false
+
+    for (const field of mount.split(',')) {
+      const separator = field.indexOf('=')
+      if (separator === -1) {
+        modes.push({ key: field.trim().toLowerCase(), value: true })
+      } else {
+        modes.push({
+          key: field.slice(0, separator).trim().toLowerCase(),
+          value: field.slice(separator + 1).trim().toLowerCase()
+        })
+      }
+    }
+  } else if (typeof mount === 'object' && mount !== null && !Array.isArray(mount)) {
+    modes.push(...Object.entries(mount).map(([key, value]) => ({ key: key.toLowerCase(), value })))
+  } else {
+    return false
+  }
+
+  for (const { key, value } of modes) {
+    if (!readOnlyAliases.has(key) && !readWriteAliases.has(key)) continue
+
+    const enabled = parseBoolean(value)
+    if (enabled === undefined || (readOnlyAliases.has(key) ? enabled : !enabled)) return false
+  }
+
+  return true
+}
+
+function managedFullMountDestination (
+  context: WorkspaceContext,
+  profile: AgentProfile | undefined,
+  managedSources: Set<AgentProfileSourceName>,
+  mount: unknown,
+  destinations: string[],
+  destinationIndeterminate: boolean
+): string | undefined {
+  if (
+    profile !== 'full' ||
+    destinationIndeterminate ||
+    destinations.length !== 1 ||
+    mountFieldValue(mount, ['type'])?.toLowerCase() !== 'bind' ||
+    !mountIsReadWrite(mount)
+  ) {
+    return undefined
+  }
+
+  const destination = destinations[0]
+  if (destination === undefined) return undefined
+  const source = mountFieldValue(mount, ['source', 'src'])
+  const managedMounts = new Map<string, { name: AgentProfileSourceName, source: string }>([
+    [BOXDOWN_CONTAINER_AGENTS_DIR, { name: 'agents', source: context.hostAgentsDir }],
+    [BOXDOWN_CONTAINER_CODEX_DIR, { name: 'codex-home', source: context.hostCodexDir }],
+    [BOXDOWN_CONTAINER_CLAUDE_DIR, { name: 'claude-home', source: context.hostClaudeDir }],
+    [BOXDOWN_CONTAINER_CLAUDE_CONFIG_PATH, { name: 'claude-config', source: context.hostClaudeConfigPath }]
+  ])
+  const managedMount = managedMounts.get(destination)
+
+  return managedMount !== undefined &&
+    managedSources.has(managedMount.name) &&
+    source === managedMount.source
+    ? destination
+    : undefined
+}
+
+function parseAgentProfileSourceNames (value: unknown): Set<AgentProfileSourceName> {
+  const sources = new Set<AgentProfileSourceName>()
+
+  if (typeof value !== 'string') return sources
+
+  for (const source of value.split(',').map(value => value.trim())) {
+    if (agentProfileSourceNames.includes(source as AgentProfileSourceName)) {
+      sources.add(source as AgentProfileSourceName)
+    }
+  }
+
+  return sources
 }
 
 function normalizedCustomDestinations (targets: string[]): string[] {
@@ -243,11 +363,13 @@ function normalizedCustomDestinations (targets: string[]): string[] {
 }
 
 function inspectGeneratedAgentProfile (
+  context: WorkspaceContext,
   path: string,
   readFile: (path: string) => string
 ): GeneratedAgentProfileInfo {
   const empty: GeneratedAgentProfileInfo = {
     sources: new Set(),
+    managedSources: new Set(),
     stagingTargets: new Set(),
     mountTargets: new Set(),
     mountDestinationIndeterminate: false,
@@ -269,34 +391,40 @@ function inspectGeneratedAgentProfile (
     ? config.containerEnv as Record<string, unknown>
     : {}
   const profileValue = containerEnv.BOXDOWN_AGENT_PROFILE
-  const sourceValue = containerEnv.BOXDOWN_AGENT_PROFILE_SOURCES
-  const sources = new Set<AgentProfileSourceName>()
-
-  if (typeof sourceValue === 'string') {
-    for (const source of sourceValue.split(',').map(value => value.trim())) {
-      if (agentProfileSourceNames.includes(source as AgentProfileSourceName)) {
-        sources.add(source as AgentProfileSourceName)
-      }
-    }
-  }
+  const profile = typeof profileValue === 'string' && isAgentProfile(profileValue) ? profileValue : undefined
+  const sources = parseAgentProfileSourceNames(containerEnv.BOXDOWN_AGENT_PROFILE_SOURCES)
+  const managedSources = parseAgentProfileSourceNames(containerEnv.BOXDOWN_AGENT_PROFILE_MANAGED_SOURCES)
 
   const mountPolicies = Array.isArray(config.mounts)
     ? config.mounts
-      .map(inspectDevcontainerMount)
+      .map(mount => ({ mount, policy: inspectDevcontainerMount(mount) }))
     : []
-  const targets = mountPolicies.flatMap(policy => policy.destinations)
+  const targets = mountPolicies.flatMap(({ policy }) => policy.destinations)
+  const customTargets = mountPolicies.flatMap(({ mount, policy }) =>
+    managedFullMountDestination(
+      context,
+      profile,
+      managedSources,
+      mount,
+      policy.destinations,
+      policy.destinationIndeterminate
+    ) === undefined
+      ? policy.destinations
+      : []
+  )
   const mountDestinationIndeterminate = mountPolicies
-    .some(policy => policy.destinationIndeterminate)
+    .some(({ policy }) => policy.destinationIndeterminate)
 
   return {
-    profile: typeof profileValue === 'string' && isAgentProfile(profileValue) ? profileValue : undefined,
+    profile,
     sources,
+    managedSources,
     stagingTargets: new Set(targets),
-    mountTargets: new Set(targets),
+    mountTargets: new Set(customTargets),
     mountDestinationIndeterminate,
     customDestinations: mountDestinationIndeterminate
       ? [...canonicalTopLevelAgentProfileDestinations].sort()
-      : normalizedCustomDestinations(targets)
+      : normalizedCustomDestinations(customTargets)
   }
 }
 
@@ -312,7 +440,8 @@ function generatedSourceState (
   destination: string
 ): AgentProfileSourceState {
   if (sourceIsCustom(generated, destination)) return 'custom'
-  return generated.sources.has(source) && generated.stagingTargets.has(stagingTarget)
+  const expectedTarget = generated.profile === 'full' ? destination : stagingTarget
+  return generated.sources.has(source) && generated.stagingTargets.has(expectedTarget)
     ? 'available'
     : 'missing'
 }
@@ -449,24 +578,32 @@ function inspectCurrentSources (
   return sources
 }
 
+export function containerProfileMatches (
+  inspected: ContainerAgentProfile | undefined,
+  selected: AgentProfile
+): boolean {
+  const expectedMode = selected === 'full' ? 'live' : 'copy'
+  return inspected?.profile === selected && inspected.mode === expectedMode
+}
+
 function containerProfileState (
   selected: AgentProfile,
   generated: AgentProfile | undefined,
   container: ContainerSummary | undefined,
-  containerAgentProfile: AgentProfile | undefined
+  containerAgentProfile: ContainerAgentProfile | undefined
 ): ContainerProfileState {
   if (container === undefined) return 'not-created'
 
   if (
     (generated !== undefined && generated !== selected) ||
-    (containerAgentProfile !== undefined && containerAgentProfile !== selected)
+    (containerAgentProfile !== undefined && !containerProfileMatches(containerAgentProfile, selected))
   ) {
     return 'recreate-required'
   }
 
   return container.state?.toLowerCase() === 'running' &&
     generated === selected &&
-    containerAgentProfile === selected
+    containerProfileMatches(containerAgentProfile, selected)
     ? 'active'
     : 'unknown'
 }
@@ -545,7 +682,7 @@ export function createStatusInfo (
     isFile?: (path: string) => boolean
     isDirectory?: (path: string) => boolean
     agentProfileSelection?: AgentProfileSelection
-    containerAgentProfile?: AgentProfile
+    containerAgentProfile?: ContainerAgentProfile
   } = {}
 ): StatusInfo {
   const state = container?.state?.toLowerCase()
@@ -558,7 +695,7 @@ export function createStatusInfo (
     readFile
   )
   const selection = options.agentProfileSelection ?? resolveAgentProfile(undefined, undefined)
-  const generatedInfo = inspectGeneratedAgentProfile(context.generatedConfigPath, readFile)
+  const generatedInfo = inspectGeneratedAgentProfile(context, context.generatedConfigPath, readFile)
   const generatedMatchesSelection = generatedInfo.profile === selection.value
   const sources = generatedMatchesSelection
     ? inspectGeneratedSources(context, selection.value, generatedInfo)
@@ -610,8 +747,9 @@ export function createStatusInfo (
     agentProfile: {
       selected: selection.value,
       selectionSource: selection.source,
+      access: agentProfileAccessText(selection.value),
       ...(generatedInfo.profile === undefined ? {} : { generated: generatedInfo.profile }),
-      ...(options.containerAgentProfile === undefined ? {} : { container: options.containerAgentProfile }),
+      ...(options.containerAgentProfile === undefined ? {} : { container: options.containerAgentProfile.profile }),
       containerState: profileState,
       sources,
       customDestinations: generatedInfo.customDestinations
@@ -719,6 +857,7 @@ export function formatStatusText (status: StatusInfo, options: { color?: boolean
     `  Codex home: ${agentProfileSourceText(profile.sources.codexHome)}`,
     `  Claude home: ${agentProfileSourceText(profile.sources.claudeHome)}`,
     `  ~/.claude.json: ${agentProfileSourceText(profile.sources.claudeConfig)}`,
+    `  Profile access: ${profile.access}`,
     `  Container profile: ${containerProfileText(profile.containerState)}`
   ]
 

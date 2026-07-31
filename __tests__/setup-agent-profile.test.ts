@@ -68,9 +68,9 @@ describe('setup agent profile resolution', () => {
     streams.input.write('3\n')
 
     assert.deepStrictEqual(await resultPromise, { cancelled: false, profile: 'full' })
-    assert.match(streams.outputText(), /How much host agent data should Boxdown copy/)
+    assert.match(streams.outputText(), /How much host agent data should Boxdown use in the container/)
     assert.match(streams.outputText(), /Authentication and ~\/\.agents/)
-    assert.match(streams.outputText(), /may include sensitive data/)
+    assert.match(streams.outputText(), /Mount live read-write Codex, Claude, and ~\/\.agents host profiles/)
   })
 
   test('defaults the prompt to the recorded profile', async () => {
