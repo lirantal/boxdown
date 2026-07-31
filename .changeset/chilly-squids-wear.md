@@ -1,5 +1,5 @@
 ---
-'boxdown': patch
+'boxdown': minor
 ---
 
 'full' agent profile now uses a live host-write bind mount
