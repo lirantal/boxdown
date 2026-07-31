@@ -27,8 +27,9 @@ interactive shell. It accepts:
 agent-profile metadata; only a workspace without a recorded profile defaults to
 `auth`. The selected profile is recorded for later container-starting commands.
 Changing it requires `--recreate` when a container already exists, because
-Docker mount configuration and the container-local profile copy are created
-together.
+Docker mount configuration and the container-local `auth` profile copy are
+created together. `full` uses live, read-write host mounts, so recreate after
+changing its mount configuration.
 
 The profile-selector eligibility matrix is: during interactive setup, selecting
 or explicitly supplying at least one Codex or Claude app target opens the
@@ -63,7 +64,8 @@ the workspace container is already running.
 3. Resolve the agent profile after target resolution, using its selector only
    when eligible.
 4. Persist the resolved profile, then generate a Boxdown-owned devcontainer
-   config with its read-only staging mounts.
+   config with read-only staging mounts for `auth` or live host mounts for
+   `full`.
 5. Run `devcontainer up --workspace-folder <repo> --override-config <config>`.
 6. Install or update the Boxdown-managed SSH alias and selected app targets.
 
@@ -110,6 +112,8 @@ APM is deferred on ARM64 until you explicitly opt in to a Python-based
 installation. Existing workspaces switch to the published image only with
 `boxdown setup --recreate` or `boxdown start --recreate`.
 
-Agent-profile sources are copied into container-local writable homes during
-container creation. They are not synchronized from the host after creation, so
-recreate when you need current host authentication or profile contents.
+`auth` sources are copied into container-local writable homes during container
+creation and are not synchronized from the host after creation. `full` mounts
+live, read-write host profiles instead, so profile changes inside the container
+persist to the host immediately. Recreate after changing the selected profile
+or full-profile mount configuration.

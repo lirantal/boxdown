@@ -21,7 +21,7 @@ const setupAgentProfileChoices: readonly SelectPromptChoice<AgentProfile>[] = [
   {
     value: 'full',
     label: 'Full agent profiles',
-    description: 'Copy complete Codex, Claude, and ~/.agents profiles; may include sensitive data.'
+    description: 'Mount live read-write Codex, Claude, and ~/.agents host profiles.'
   }
 ]
 
@@ -51,7 +51,7 @@ export async function resolveSetupAgentProfile (
   }
 
   const result = await promptSelect({
-    title: 'How much host agent data should Boxdown copy into the container?',
+    title: 'How much host agent data should Boxdown use in the container?',
     choices: setupAgentProfileChoices,
     defaultValue: current,
     summaryLabel: 'Agent profile',

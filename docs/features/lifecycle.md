@@ -64,9 +64,10 @@ and is not required for a healthy status exit.
 ### Agent profile state
 
 `status` also reports the selected `none`, `auth`, or `full` profile, its source
-availability without enumerating profile contents, generated staging intent,
-and the container-local applied marker when the container is running. The three
-truth points are:
+availability without enumerating profile contents, generated intent, access,
+and the container-local applied marker when the container is running. A live
+`full` profile is reported as `Profile access: live, read-write host mounts`.
+The three truth points are:
 
 ```text
 metadata selection -> generated staging intent -> container applied marker
@@ -74,9 +75,9 @@ metadata selection -> generated staging intent -> container applied marker
 
 They must agree for a container profile to be active. A changed selection or a
 mismatch requires recreation because Docker mount configuration cannot be
-changed on an existing container. Host profile changes likewise do not update a
-stopped or running container; they are copied only when a new container is
-created.
+changed on an existing container. `auth` host profile changes are copied only
+when a new container is created; `full` host profile changes are live and
+visible immediately.
 
 ## Stop, Down, and Purge
 
@@ -88,11 +89,12 @@ per-workspace runtime-secret state. It does not remove persistent Boxdown
 cache, generated config, data directories, or SSH keys.
 
 Agent profile data follows the container lifecycle. `stop` preserves the
-container profile, and a later start of the same container preserves its
-container-local writable profile changes. `down`, `purge`, and
-`start --recreate` discard the profile copy; recreation seeds a new copy from
-the current staged host sources. None of these commands writes container profile
-changes back to the host.
+container-local `auth` profile, and a later start of the same container
+preserves its changes. `down`, `purge`, and `start --recreate` discard that copy;
+recreation seeds a new one from current staged host sources. `full` uses live,
+read-write host mounts, so its changes persist immediately on the host and none
+of these commands removes the host profile. Do not use `full` for an untrusted
+workspace.
 
 Lifecycle commands append managed output to the workspace command log under the
 workspace data directory. In an interactive terminal, `--verbose` displays the

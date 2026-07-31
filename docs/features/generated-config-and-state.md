@@ -78,13 +78,13 @@ Boxdown does not use or modify project `.env.development` files.
 
 ## Agent profile staging and authentication
 
-Every agent profile source is mounted at a read-only staging path below
+Only `auth` agent-profile sources are mounted at a read-only staging path below
 `/opt/boxdown/agent-profile-source`. During container creation, the profile
 bootstrap makes container-local writable copies in the canonical homes:
 `/home/node/.agents`, `/home/node/.codex`, `/home/node/.claude`, and, when
-applicable, `/home/node/.claude.json`. Boxdown never mounts a selected host
-source at one of those canonical destinations, and there is no reverse
-synchronization from the container to the host.
+applicable, `/home/node/.claude.json`. `full` is not staged: it uses live,
+read-write host mounts at the canonical destinations, so container changes
+persist to the host immediately.
 
 `auth` stages the complete `~/.agents` tree, available file-backed Codex auth,
 and available supported file-backed Claude credentials. On Linux and WSL, the
@@ -95,16 +95,16 @@ The bootstrap copies those credentials into the container-local home, so Claude
 can refresh its copy without changing the host credential file. Missing or
 unreadable credential sources are non-fatal.
 
-`full` stages opaque complete Codex and Claude homes, `~/.agents`, and a
-separate `.claude.json` when applicable. The bootstrap treats full directories
-and `~/.agents` as required when they were staged: a copy failure stops creation
-and identifies only the top-level source, never credential contents. On macOS,
-Claude credentials in Keychain are not copied. A runtime `ANTHROPIC_API_KEY`,
-when available and the tier is not `none`, remains the supported alternative.
+`full` mounts opaque complete Codex and Claude homes, `~/.agents`, and a
+separate `.claude.json` when applicable, directly from the host. These mounts
+are intentionally read-write: changes inside the container persist to the host
+immediately. On macOS, Claude credentials in Keychain are not mounted. A runtime
+`ANTHROPIC_API_KEY`, when available and the tier is not `none`, remains the
+supported alternative. Never use `full` for an untrusted workspace.
 
 A custom mount at, above, or below a canonical profile destination is externally
-managed. Boxdown skips the matching staging input and copy rather than writing
-over it.
+managed. Boxdown skips the matching `auth` staging input and copy, or its `full`
+live mount, rather than writing over it.
 
 A malformed CSV string mount, or any unresolved `${...}` expression anywhere
 in a string mount, makes all canonical profile destinations externally managed.
@@ -178,8 +178,8 @@ Boxdown starts from `assets/devcontainer/devcontainer.json` and rewrites:
 - `postCreateCommand`, to call mounted container assets.
 - `postStartCommand`, to call mounted container assets.
 - `mounts`, to add the read-only asset mount, public-key mount, host Git config
-  snapshot mount, runtime secret mount, and profile-specific read-only staging
-  mounts below `/opt/boxdown/agent-profile-source`.
+  snapshot mount, runtime secret mount, and `auth` read-only staging mounts or
+  `full` live, read-write host mounts.
 - `containerEnv`, to point SSH bootstrap at the mounted public key and actual
   container workspace, and record the non-secret selected profile as
   `BOXDOWN_AGENT_PROFILE`.
@@ -187,6 +187,7 @@ Boxdown starts from `assets/devcontainer/devcontainer.json` and rewrites:
 The target repository is still the Dev Container workspace via
 `--workspace-folder`.
 
-Mounts are create-time container settings. A profile selection or source change
-does not update a stopped or running existing container; run
-`boxdown start --recreate` to seed a fresh container-local copy.
+Mounts are create-time container settings. Run `boxdown start --recreate` after
+changing a profile selection or full-profile mount configuration. Recreate also
+seeds a fresh container-local `auth` copy; live `full` host profile content does
+not need synchronization.

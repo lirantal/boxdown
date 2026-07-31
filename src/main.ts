@@ -144,11 +144,9 @@ Options:
                       <local:remote>. Repeatable. Supported by tunnel.
   --recreate          Remove the existing devcontainer before starting.
   --agent-profile <tier>
-                      Select which host agent data is copied when creating a
-                      container: none, auth, full. Defaults to auth. Each
-                      container receives copy-on-create isolation. The full
-                      profile exposes all supported host agent data to the
-                      container; use it only when that exposure is intended.
+                      Select host agent data for a container: none, auth, full.
+                      Defaults to auth. auth copies into container-local storage; full profile uses live, read-write host mounts; changes persist immediately.
+                      Use full only when that host exposure is intended.
   --json              Print JSON output. Supported by status and list.
   --format json       Print JSON output. Equivalent to --json.
   --details           Print detailed human list output. Supported by list.

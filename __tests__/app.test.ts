@@ -896,8 +896,8 @@ describe('CLI parsing', () => {
     assert.match(USAGE, /--agent-profile <tier>/)
     assert.match(USAGE, /none, auth, full/)
     assert.match(USAGE, /Defaults to auth/)
-    assert.match(USAGE, /copy-on-create isolation/)
-    assert.match(USAGE, /full\s+profile exposes/)
+    assert.match(USAGE, /auth copies into container-local storage/i)
+    assert.match(USAGE, /full profile uses live, read-write host mounts/i)
     assert.match(USAGE, /--port <port>\s+Tunnel a local port/)
     assert.match(USAGE, /refresh-gh-token\s+Start or reuse the devcontainer/)
     assert.doesNotMatch(USAGE, /refresh-gh-token-running/)
@@ -915,11 +915,12 @@ describe('CLI parsing', () => {
     assert.match(readme, /packaged assets, public SSH key, host Git-config\s+snapshot, and runtime-secret directory read-only/is)
     assert.match(readme, /host Git-config\s+snapshot.*writable `\/home\/node\/\.gitconfig`/is)
     assert.match(readme, /Agent profiles/is)
-    assert.match(readme, /copy on container creation/is)
+    assert.match(readme, /`auth`.*copy.*container creation/is)
+    assert.match(readme, /`full`.*live, read-write host mounts/is)
     assert.match(readme, /SSH-agent socket.*`\/run\/boxdown\/ssh-agent\.sock`.*signing-key state.*read-only/is)
-    assert.match(readme, /Recreate the container.*--agent-profile.*custom mount.*host sources/is)
-    assert.match(readme, /Changes on the host do not update a stopped\s+or running existing container\./)
-    assert.match(readme, /`boxdown down` removes the container.*runtime-secret state/is)
+    assert.match(readme, /Recreate the container.*--agent-profile.*full-profile mount\s+configuration.*copied `auth` sources/is)
+    assert.match(readme, /Changes to live `full`\s+profiles are already visible to a running container\./)
+    assert.match(readme, /`boxdown down` removes the\s+container.*runtime-secret\s+state/is)
     assert.match(readme, /retains persistent cache\/data state/)
     assert.match(readme, /`stop`.*`down`.*`purge`/is)
     assert.doesNotMatch(readme, /refresh-gh-token-running/)
@@ -985,22 +986,21 @@ test('documents agent profile tiers', () => {
   const testingDocs = readFileSync(join(process.cwd(), 'docs/testing.md'), 'utf8')
   const architecture = readFileSync(join(process.cwd(), 'docs/architecture.md'), 'utf8')
   const assetDocs = readFileSync(join(process.cwd(), 'assets/devcontainer/README.md'), 'utf8')
-  const profileDesign = readFileSync(join(process.cwd(), 'docs/superpowers/specs/2026-07-28-agent-profile-tiers-design.md'), 'utf8')
   const devcontainerTemplate = readFileSync(join(process.cwd(), 'assets/devcontainer/devcontainer.json'), 'utf8')
 
   assert.match(readme, /\| `none` \| no host user-scoped agent profile or Claude API key \|/)
   assert.match(readme, /\| `auth` \| file-backed auth, Claude API key, complete `~\/\.agents` \|/)
-  assert.match(readme, /\| `full` \| opaque complete Codex\/Claude homes plus `~\/\.agents` \|/)
+  assert.match(readme, /\| `full` \| live, read-write host Codex\/Claude homes plus `~\/\.agents` \|/)
   assert.match(readme, /`auth` is the default/is)
   assert.match(readme, /--agent-profile none\|auth\|full/)
-  assert.match(readme, /read-only staging.*container-local writable cop(?:y|ies)/is)
-  assert.match(readme, /no reverse synchronization/is)
+  assert.match(readme, /`auth`.*read-only staging.*container-local writable cop(?:y|ies)/is)
+  assert.match(readme, /changes.*inside the container.*host profile.*immediately/is)
   assert.match(readme, /repository-scoped.*remains? visible/is)
   assert.match(readme, /macOS.*Keychain.*not copied/is)
-  assert.match(readme, /sensitive.*size.*portab(?:ility|le).*broken paths.*native\s+dependenc(?:y|ies)/is)
+  assert.match(readme, /sensitive.*host.*immediately.*untrusted/is)
   assert.match(readme, /custom mount.*canonical.*externally managed/is)
   assert.match(readme, /changes the previous forwarding model.*Codex\s+config.*Claude MCP projection.*writable host mount/is)
-  assert.match(readme, /user-scoped MCP.*repository.*`full`/is)
+  assert.match(readme, /portable user-scoped.*MCP.*repository.*untrusted/is)
   assert.match(
     readme,
     /setup.*app target.*agent profile.*--agent-profile.*suppress/is
@@ -1017,22 +1017,23 @@ test('documents agent profile tiers', () => {
     /profile selector.*fully explicit.*non-interactive/is
   )
   assert.match(startDocs, /--agent-profile <tier>/)
-  assert.match(stateDocs, /read-only staging.*container-local writable cop(?:y|ies)/is)
-  assert.match(stateDocs, /no reverse\s+synchronization/is)
+  assert.match(startDocs, /start --recreate.*agent-profile full/is)
+  assert.match(stateDocs, /`auth`.*read-only staging.*container-local writable cop(?:y|ies)/is)
+  assert.match(stateDocs, /`full`.*live, read-write host mounts/is)
   assert.ok(stateDocs.includes(String.raw`%USERPROFILE%\.claude\.credentials.json`))
   assert.ok(!stateDocs.includes(String.raw`%USERPROFILE%\.claude.credentials.json`))
   assert.match(lifecycleDocs, /stop.*preserves.*profile/is)
-  assert.match(lifecycleDocs, /down.*recreate.*discard.*profile/is)
+  assert.match(lifecycleDocs, /container-local `auth` profile.*down.*recreate.*discard that copy/is)
   assert.match(architecture, /metadata selection\s*->\s*generated staging intent\s*->\s*container applied marker/)
   assert.match(architecture, /mismatch.*recreation/is)
   assert.match(assetDocs, /staging tree/is)
   assert.match(assetDocs, /bootstrap.*marker/is)
   assert.match(assetDocs, /non-root\s+remote user/is)
   assert.match(assetDocs, /source-file.*failure.*non-fatal/is)
-  for (const document of [stateDocs, assetDocs, profileDesign]) {
+  for (const document of [stateDocs, assetDocs]) {
     assert.match(
       document,
-      /static symlinks.*(?:reproduced|copied)\s+as links.*final-component regular file.*fails\s+closed/is
+      /static symlinks.*(?:reproduced|copied)\s+as links.*final-component regular\s+file.*fails\s+closed/is
     )
     assert.match(
       document,
@@ -1058,7 +1059,8 @@ test('documents agent profile tiers', () => {
       /original mount.*preserved unchanged.*status.*canonical.*never.*substitution values/is
     )
   }
-  assert.match(devcontainerTemplate, /profile sources are staged read-only.*container-local writable copies/is)
+  assert.match(devcontainerTemplate, /only `auth` profile sources are staged read-only.*container-local writable copies/is)
+  assert.match(devcontainerTemplate, /`full` is not staged.*host writes are intentional/is)
   assert.doesNotMatch(devcontainerTemplate, /Codex auth\.json is mounted automatically|host-owned writable credential mounts/i)
 })
 
@@ -1076,14 +1078,14 @@ describe('interactive install target prompt', () => {
     const profilePromptChoices = [
       { value: 'none', label: 'No agent profile', description: 'Copy no host user-scoped agent data.' },
       { value: 'auth', label: 'Authentication and ~/.agents', description: 'Copy agent authentication and ~/.agents; Boxdown default.' },
-      { value: 'full', label: 'Full agent profiles', description: 'Copy complete Codex, Claude, and ~/.agents profiles; may include sensitive data.' }
+      { value: 'full', label: 'Full agent profiles', description: 'Mount live read-write Codex, Claude, and ~/.agents host profiles.' }
     ] as const
 
     test('focuses and selects each raw single-choice default with Enter', async () => {
       for (const entry of profilePromptChoices) {
         const { input, output, outputText } = fakePromptStreams()
         const resultPromise = promptSelect({
-          title: 'How much host agent data should Boxdown copy into the container?',
+          title: 'How much host agent data should Boxdown use in the container?',
           choices: profilePromptChoices,
           defaultValue: entry.value,
           summaryLabel: 'Agent profile',
@@ -1807,7 +1809,7 @@ describe('CLI execution', () => {
     assert.strictEqual(existsSync(context.sshKeyPath), false)
     assert.strictEqual(existsSync(context.generatedConfigPath), false)
     assert.doesNotMatch(outputText(), /Add this project to an AI coding app/)
-    assert.doesNotMatch(outputText(), /How much host agent data should Boxdown copy/)
+    assert.doesNotMatch(outputText(), /How much host agent data should Boxdown use/)
   })
 
   test('prompts for an agent profile after an explicit setup target', async () => {
@@ -1836,7 +1838,7 @@ describe('CLI execution', () => {
 
     await waitForPromptOutput(
       outputText,
-      /How much host agent data should Boxdown copy into the container\?/
+      /How much host agent data should Boxdown use in the container\?/
     )
     input.write('\u001B[B\r')
 
@@ -1870,7 +1872,7 @@ describe('CLI execution', () => {
 
     await waitForPromptOutput(outputText, /Add this project to an AI coding app/)
     input.write('\u001B[A\u001B[A \r')
-    await waitForPromptOutput(outputText, /How much host agent data should Boxdown copy/)
+    await waitForPromptOutput(outputText, /How much host agent data should Boxdown use/)
     input.write('\u001B[A\r')
 
     assert.strictEqual(await runPromise, 0)
@@ -1916,7 +1918,7 @@ describe('CLI execution', () => {
       assert.strictEqual(await runPromise, 0, entry.name)
       assert.strictEqual(receivedProfile, entry.expected, entry.name)
       assert.strictEqual(readWorkspaceMetadata(context)?.agentProfile, entry.expected, entry.name)
-      assert.doesNotMatch(outputText(), /How much host agent data should Boxdown copy/, entry.name)
+      assert.doesNotMatch(outputText(), /How much host agent data should Boxdown use/, entry.name)
     }
   })
 
@@ -1951,7 +1953,7 @@ describe('CLI execution', () => {
     assert.strictEqual(setupCalls, 0)
     assert.strictEqual(existsSync(context.workspaceDataDir), false)
     assert.strictEqual(existsSync(context.generatedConfigPath), false)
-    assert.doesNotMatch(outputText(), /How much host agent data should Boxdown copy/)
+    assert.doesNotMatch(outputText(), /How much host agent data should Boxdown use/)
   })
 
   test('persists and forwards prompted default auth', async () => {
@@ -1978,7 +1980,7 @@ describe('CLI execution', () => {
       }
     }))
 
-    await waitForPromptOutput(outputText, /How much host agent data should Boxdown copy/)
+    await waitForPromptOutput(outputText, /How much host agent data should Boxdown use/)
     input.write('\r')
 
     assert.strictEqual(await runPromise, 0)
@@ -2012,7 +2014,7 @@ describe('CLI execution', () => {
       }
     }))
 
-    await waitForPromptOutput(outputText, /How much host agent data should Boxdown copy/)
+    await waitForPromptOutput(outputText, /How much host agent data should Boxdown use/)
     input.write('\u0003')
 
     assert.strictEqual(await runPromise, 1)

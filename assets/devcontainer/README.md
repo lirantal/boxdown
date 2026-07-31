@@ -31,7 +31,7 @@ is mounted as the workspace after the image is pulled.
 | `utils/git-config-bootstrap.sh` | Container-side Git config copy/sanitization helper used by lifecycle scripts. |
 | `utils/python-bootstrap.sh` | Container-side Debian Python runtime helper for explicit opt-in use. |
 | `utils/ssh-bootstrap.sh` | Container-side OpenSSH install/runtime helper used by lifecycle scripts. |
-| `utils/agent-profile-bootstrap.mjs` | Copies staged agent-profile sources into container-local writable homes. |
+| `utils/agent-profile-bootstrap.mjs` | Copies staged `auth` agent-profile sources into container-local writable homes. |
 | `utils/coding-agent-cli-update.sh` | Shared install/update helper for Codex, OpenCode, Claude Code, and Antigravity CLI. |
 | `utils/deps-install.sh` | Workspace dependency installation helper used by `hooks/post-create.sh`; bootstraps pnpm/yarn when required. |
 
@@ -212,43 +212,45 @@ If an older version left a service-account token in `.env.development` or
 ## Agent profiles and optional customization
 
 Boxdown supports `none`, `auth`, and `full` agent profiles; `auth` is the
-default. It mounts selected host sources read-only in the staging tree at
-`/opt/boxdown/agent-profile-source`, never directly at a canonical agent home.
-At container creation, `post-create.sh` runs the agent-profile bootstrap before
-Git setup, runtime-secret setup, SSH runtime preparation, agent refresh state,
-and dependency installation.
+default. Only `auth` mounts selected host sources read-only in the staging tree
+at `/opt/boxdown/agent-profile-source`; `post-create.sh` copies them into
+container-local homes before Git setup, runtime-secret setup, SSH runtime
+preparation, agent refresh state, and dependency installation. `full` is not
+staged: it mounts its host profiles directly at canonical agent homes.
 
-The bootstrap copies staged sources to writable `/home/node/.agents`,
+The `auth` bootstrap copies staged sources to writable `/home/node/.agents`,
 `/home/node/.codex`, `/home/node/.claude`, and `/home/node/.claude.json` as
 needed, then writes the applied-profile marker at
 `/opt/boxdown/state/agent-profile`. The state parent is a root-owned sticky
 directory so a UID-remapped non-root remote user can safely create its
-owner-only marker. Canonical profile copies and the marker are owned by that
-active remote user and are container-local: no copy is synchronized back to
-the host.
+owner-only marker. Canonical `auth` profile copies and the marker are owned by
+that active remote user and are container-local: no copy is synchronized back
+to the host.
 
-Source-file failures for missing or unreadable individual credentials are
-non-fatal. A failed `~/.agents` or full-profile directory copy is fatal; the
-error identifies only the top-level source and never prints profile or
-credential contents. Static symlinks observed during traversal are reproduced
-as links, and a final-component regular file changed to a symlink after
-classification fails closed. Recursive directory traversal is path-based:
-concurrent host replacement of a traversed parent directory during container
-creation is outside the isolation guarantee and may fail or copy best-effort
-from the replacement. Do not mutate selected source trees while a container is
-being created. Special files are skipped with a warning.
+Source-file failures for missing or unreadable individual `auth` credentials are
+non-fatal. A failed `~/.agents` copy is fatal; the error identifies only the
+top-level source and never prints profile or credential contents. Static symlinks
+observed during traversal are reproduced as links, and a final-component regular
+file changed to a symlink after classification fails closed. Recursive directory
+traversal is path-based: concurrent host replacement of a traversed parent
+directory during container creation is outside the isolation guarantee and may
+fail or copy best-effort from the replacement. Do not mutate selected `auth`
+source trees while a container is being created. Special files are skipped with a
+warning.
 
 Select the profile with `--agent-profile none|auth|full` when creating or
-recreating. `auth` copies file-backed authentication and complete `~/.agents`;
-`full` copies opaque Codex and Claude homes as well. On macOS, Claude Keychain
-credentials are not copied. Repository-scoped agent configuration remains
-available through the workspace mount in every tier.
+recreating. `auth` stages and copies file-backed authentication and complete
+`~/.agents`; `full` directly mounts live, read-write Codex and Claude homes as
+well. `full` host writes are intentional and persist immediately. On macOS,
+Claude Keychain credentials are not mounted. Repository-scoped agent
+configuration remains available through the workspace mount in every tier.
 
 If a custom mount is at, above, or below one of the canonical profile
-destinations, that destination is externally managed. Boxdown skips its staging
-and copy for it; the custom mount owner controls its contents and write policy.
-Recreate after changing a profile, custom mount, or host source. Host changes do
-not update an existing stopped or running container.
+destinations, that destination is externally managed. Boxdown skips its `auth`
+staging and copy or its `full` live mount; the custom mount owner controls its
+contents and write policy. Recreate after changing a profile, custom mount, or
+full-profile mount configuration. Host changes do not update an existing `auth`
+copy, while `full` host changes are immediately visible.
 
 A malformed CSV string mount, or any unresolved `${...}` expression anywhere
 in a string mount, makes all canonical profile destinations externally managed.
@@ -261,8 +263,9 @@ as mount grammar. The original mount is preserved unchanged. Status reports
 only canonical destination names and never reports substitution values.
 
 The previous direct host mounts, Codex config forwarding, and Claude MCP
-projection no longer apply to `auth`. Put portable MCP configuration in the
-repository, or choose `full` when user-scoped configuration is required.
+projection no longer apply to `auth`. `full` intentionally uses direct host
+mounts and is unsuitable for untrusted workspaces. Put portable MCP
+configuration in the repository whenever possible.
 
 - **Other agent config on the host** — Uncomment the generic `mounts` entries
   in `devcontainer.json` to bind other agent configuration directories such as

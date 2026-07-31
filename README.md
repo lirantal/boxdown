@@ -156,14 +156,16 @@ filtered to the selected app.
 | --- | --- |
 | `none` | no host user-scoped agent profile or Claude API key |
 | `auth` | file-backed auth, Claude API key, complete `~/.agents` |
-| `full` | opaque complete Codex/Claude homes plus `~/.agents` |
+| `full` | live, read-write host Codex/Claude homes plus `~/.agents` |
 
-Boxdown mounts selected host sources only at read-only staging paths, then makes
-a container-local writable copy on container creation. Agent homes such as
-`/home/node/.agents`, `/home/node/.codex`, and `/home/node/.claude` are never
-Boxdown-selected host mounts. There is no reverse synchronization: container
-logins, settings, history, plugins, and caches stay with that container and
-cannot write back to the host or another workspace.
+`auth` mounts selected host sources only at read-only staging paths, then makes
+a container-local writable copy on container creation. `full` instead mounts the
+live host `/home/node/.agents`, `/home/node/.codex`, and `/home/node/.claude`
+profiles read-write. Changes made inside the container to a `full` profile write
+to the host profile immediately; this is intentional and there is no copy or
+reverse synchronization layer.
+
+`full` uses live, read-write host mounts.
 
 On macOS, Claude credentials stored in Keychain are not copied. `auth` and
 `full` can still expose an `ANTHROPIC_API_KEY` already available through
@@ -171,12 +173,12 @@ Boxdown's runtime-secret mechanism; otherwise Claude starts unauthenticated in
 that container.
 
 Choose `full` only when you need host user-scoped Codex or Claude configuration
-such as MCP definitions. It copies opaque complete homes, so it can include
-sensitive history, settings, plugins, and credentials; increase profile size;
-reduce portability; retain broken paths from the host; or contain native
-dependencies that do not run in the container. Put portable user-scoped MCP
-configuration in the repository instead, or choose `full` when copying the
-complete host profile is acceptable.
+such as MCP definitions. It exposes live complete homes, which can include
+sensitive history, settings, plugins, and credentials and lets the container
+change them on the host immediately. It can also retain broken host paths or
+native dependencies that do not run in the container. Put portable user-scoped
+MCP configuration in the repository instead, and never use `full` for an
+untrusted workspace.
 
 A custom mount at, above, or below a canonical agent-home destination is
 externally managed. Boxdown skips its staging and copy for that destination so
@@ -188,9 +190,9 @@ config, Boxdown no longer creates a Claude MCP projection, and the supported
 Claude credential is no longer a writable host mount. Existing containers keep
 their previous configuration until recreated.
 
-Recreate the container when changing `--agent-profile`, adding a custom mount,
-or refreshing copied host sources. Changes on the host do not update a stopped
-or running existing container.
+Recreate the container when changing `--agent-profile` or full-profile mount
+configuration, or when refreshing copied `auth` sources. Changes to live `full`
+profiles are already visible to a running container.
 `boxdown status` reports the exact generated paths for a workspace.
 
 ### Host integrations
@@ -203,10 +205,11 @@ integration records only when you select or explicitly request those targets.
 The `stop`, `down`, and `purge` commands define the cleanup boundary.
 
 `boxdown stop` keeps the container and all Boxdown state, including its copied
-agent profile. Restarting the same container preserves its profile changes.
-`boxdown down` removes the container and its copied profile along with
-per-workspace runtime-secret state. `boxdown start --recreate` also discards the
-previous container copy and seeds a new one from current host sources. `down`
+`auth` profile; a `full` profile remains in its host location. Restarting the
+same container preserves its `auth` profile changes. `boxdown down` removes the
+container and its copied `auth` profile along with per-workspace runtime-secret
+state. `boxdown start --recreate` seeds a new `auth` copy from current host
+sources; it does not remove a live `full` host profile. `down`
 retains persistent cache/data state: metadata, SSH keys, generated config, and
 command log. `boxdown purge` removes the workspace's Boxdown-managed container,
 recorded image, generated state, command log, and managed SSH/app integrations;
@@ -377,7 +380,7 @@ Shared options:
 --target <name>     # with setup/ssh install/ssh uninstall, optional target; repeatable; supported: codex, claude
 --port <port>       # tunnel port for `boxdown tunnel`; repeatable
 --recreate          # recreate the devcontainer before starting
---agent-profile <tier> # host agent data copied into a new container; none, auth (default), or full
+--agent-profile <tier> # host agent data: none, auth (copied; default), or full (live read-write mounts)
 --json              # JSON output for status and list
 --format json       # JSON output for status and list; equivalent to --json
 --details           # detailed human output for list
