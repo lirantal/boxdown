@@ -8679,6 +8679,64 @@ describe('devcontainer config generation', () => {
     }
   })
 
+  test('read-only matching full mounts remain custom in status', () => {
+    const home = tempDir('read-only-full-profile-home')
+    mkdirSync(join(home, '.codex'))
+
+    const cases = [
+      {
+        name: 'string readonly',
+        mount: (context: ReturnType<typeof createWorkspaceContext>) =>
+          `type=bind,source=${context.hostCodexDir},target=${BOXDOWN_CONTAINER_CODEX_DIR},readonly`
+      },
+      {
+        name: 'string ro alias',
+        mount: (context: ReturnType<typeof createWorkspaceContext>) =>
+          `type=bind,source=${context.hostCodexDir},target=${BOXDOWN_CONTAINER_CODEX_DIR},ro`
+      },
+      {
+        name: 'structured readOnly',
+        mount: (context: ReturnType<typeof createWorkspaceContext>) => ({
+          type: 'bind',
+          source: context.hostCodexDir,
+          target: BOXDOWN_CONTAINER_CODEX_DIR,
+          readOnly: true
+        })
+      }
+    ] as const
+
+    for (const entry of cases) {
+      const assets = tempDir(`read-only-full-profile-assets-${entry.name.replaceAll(' ', '-')}`)
+      const context = createWorkspaceContext({
+        workspace: tempDir(`read-only-full-profile-workspace-${entry.name.replaceAll(' ', '-')}`),
+        env: {
+          HOME: home,
+          BOXDOWN_CACHE_HOME: tempDir(`read-only-full-profile-cache-${entry.name.replaceAll(' ', '-')}`),
+          BOXDOWN_DATA_HOME: tempDir(`read-only-full-profile-data-${entry.name.replaceAll(' ', '-')}`)
+        },
+        platform: 'linux',
+        assetsDevcontainerDir: assets
+      })
+      const mount = entry.mount(context)
+      writeFileSync(join(assets, 'devcontainer.json'), `${JSON.stringify({ mounts: [mount] })}\n`)
+      const config = buildGeneratedDevcontainerConfig(context, undefined, 'full')
+      mkdirSync(context.workspaceCacheDir, { recursive: true })
+      writeFileSync(context.generatedConfigPath, `${JSON.stringify(config, null, 2)}\n`)
+
+      const status = createStatusInfo(context, 'read-only-full-profile', {
+        id: 'read-only-full-profile-container',
+        state: 'running'
+      }, existsSync, {
+        sshConfigPath: join(tempDir(`read-only-full-profile-ssh-${entry.name.replaceAll(' ', '-')}`), 'config'),
+        agentProfileSelection: resolveAgentProfile(undefined, 'full'),
+        containerAgentProfile: liveFullContainerProfile
+      })
+
+      assert.strictEqual(status.agentProfile.sources.codexHome, 'custom', `${entry.name}: read-only mount is user-owned`)
+      assert.ok(status.agentProfile.customDestinations.includes(BOXDOWN_CONTAINER_CODEX_DIR), `${entry.name}: report custom destination`)
+    }
+  })
+
   test('parses JSONC without stripping URLs inside strings', () => {
     const parsed = parseJsonc<{ url: string }>('{ "url": "https://example.com/path" // keep string URL\n }')
     assert.strictEqual(parsed.url, 'https://example.com/path')

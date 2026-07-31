@@ -235,6 +235,46 @@ function mountFieldValue (mount: unknown, aliases: readonly string[]): string | 
     : undefined
 }
 
+function mountIsReadWrite (mount: unknown): boolean {
+  const readOnlyAliases = new Set(['readonly', 'ro'])
+  const readWriteAliases = new Set(['rw'])
+  const parseBoolean = (value: unknown): boolean | undefined => {
+    if (value === true || value === 'true' || value === '1') return true
+    if (value === false || value === 'false' || value === '0') return false
+    return undefined
+  }
+  const modes: Array<{ key: string, value: unknown }> = []
+
+  if (typeof mount === 'string') {
+    if (/["\r\n\0]/.test(mount) || mount.includes('${')) return false
+
+    for (const field of mount.split(',')) {
+      const separator = field.indexOf('=')
+      if (separator === -1) {
+        modes.push({ key: field.trim().toLowerCase(), value: true })
+      } else {
+        modes.push({
+          key: field.slice(0, separator).trim().toLowerCase(),
+          value: field.slice(separator + 1).trim().toLowerCase()
+        })
+      }
+    }
+  } else if (typeof mount === 'object' && mount !== null && !Array.isArray(mount)) {
+    modes.push(...Object.entries(mount).map(([key, value]) => ({ key: key.toLowerCase(), value })))
+  } else {
+    return false
+  }
+
+  for (const { key, value } of modes) {
+    if (!readOnlyAliases.has(key) && !readWriteAliases.has(key)) continue
+
+    const enabled = parseBoolean(value)
+    if (enabled === undefined || (readOnlyAliases.has(key) ? enabled : !enabled)) return false
+  }
+
+  return true
+}
+
 function managedFullMountDestination (
   context: WorkspaceContext,
   profile: AgentProfile | undefined,
@@ -246,7 +286,8 @@ function managedFullMountDestination (
     profile !== 'full' ||
     destinationIndeterminate ||
     destinations.length !== 1 ||
-    mountFieldValue(mount, ['type'])?.toLowerCase() !== 'bind'
+    mountFieldValue(mount, ['type'])?.toLowerCase() !== 'bind' ||
+    !mountIsReadWrite(mount)
   ) {
     return undefined
   }
