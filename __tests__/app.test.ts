@@ -12,7 +12,7 @@ import { describe, test } from 'node:test'
 import { claudeSshConfigEntryForWorkspace, defaultClaudeSshConfigsPath, installClaudeSshConfigHost, mergeClaudeSshConfigHost, parseClaudeSshConfigs, removeClaudeSshConfigHost, uninstallClaudeSshConfigHost } from '../src/claude-app-config.ts'
 import { canonicalCodexRemotePathForWorkspace, codexDiscoveredRemoteHostId, codexProjectEntryForWorkspace, defaultCodexAppConfigPath, defaultCodexGlobalStatePath, installCodexAppConfigProject, installCodexGlobalStateProject, legacyCodexRemotePathForWorkspace, mergeCodexAppProject, normalizeCodexGlobalStateProject, parseCodexAppConfig, removeCodexAppProject, removeCodexGlobalStateProject, uninstallCodexAppConfigProject, uninstallCodexGlobalStateProject } from '../src/codex-app-config.ts'
 import { codingAgentBinary, codingAgentFromCommand, type CodingAgentCli } from '../src/coding-agents.ts'
-import { AGENT_PROFILES, isAgentProfile, resolveAgentProfile, type AgentProfile } from '../src/agent-profile.ts'
+import { AGENT_PROFILES, agentProfileMarker, isAgentProfile, parseAgentProfileMarker, resolveAgentProfile, type AgentProfile } from '../src/agent-profile.ts'
 import { color, formatPromptEnd, formatPromptTitle, promptRail, selectedMark } from '../src/cli-style.ts'
 import { buildGeneratedDevcontainerConfig, publishContainerPortFromConfig, readGeneratedAgentProfile, sourcePathIsInside, writeGeneratedDevcontainerConfig } from '../src/config.ts'
 import { BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_AGENTS_DIR, BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CLAUDE_CONFIG_PATH, BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CLAUDE_CREDENTIALS_PATH, BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CLAUDE_DIR, BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CODEX_AUTH_PATH, BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CODEX_DIR, BOXDOWN_CONTAINER_AGENTS_DIR, BOXDOWN_CONTAINER_CLAUDE_CONFIG_PATH, BOXDOWN_CONTAINER_CLAUDE_CREDENTIALS_PATH, BOXDOWN_CONTAINER_CLAUDE_DIR, BOXDOWN_CONTAINER_CODEX_AUTH_PATH, BOXDOWN_CONTAINER_CODEX_DIR, BOXDOWN_CONTAINER_GITCONFIG_PATH, BOXDOWN_CONTAINER_HOST_GITCONFIG_DIR, BOXDOWN_CONTAINER_SECRET_ENV_BOOTSTRAP, BOXDOWN_CONTAINER_SECRET_ENV_DIR, DEVCONTAINER_CLI_VERSION } from '../src/constants.ts'
@@ -397,6 +397,18 @@ describe('CLI parsing', () => {
     assert.deepStrictEqual(AGENT_PROFILES, ['none', 'auth', 'full'])
     for (const profile of AGENT_PROFILES) assert.strictEqual(isAgentProfile(profile), true)
     for (const value of ['', 'bare', 'portable', 'other', 'AUTH', 'full ']) assert.strictEqual(isAgentProfile(value), false)
+  })
+
+  test('models full-profile live container markers while accepting legacy markers', () => {
+    assert.deepStrictEqual(parseAgentProfileMarker('full:live'), {
+      profile: 'full',
+      mode: 'live'
+    })
+    assert.deepStrictEqual(parseAgentProfileMarker('full'), {
+      profile: 'full',
+      mode: 'legacy'
+    })
+    assert.strictEqual(agentProfileMarker('full'), 'full:live')
   })
 
   test('parses setup options', () => {
@@ -5627,14 +5639,19 @@ describe('status output', () => {
       container: 'full',
       containerState: 'active',
       sources: {
-        codexAuthentication: 'available',
-        claudeAuthentication: 'available',
-        agents: 'available',
-        codexHome: 'available',
-        claudeHome: 'available',
-        claudeConfig: 'available'
+        codexAuthentication: 'custom',
+        claudeAuthentication: 'custom',
+        agents: 'custom',
+        codexHome: 'custom',
+        claudeHome: 'custom',
+        claudeConfig: 'custom'
       },
-      customDestinations: []
+      customDestinations: [
+        BOXDOWN_CONTAINER_AGENTS_DIR,
+        BOXDOWN_CONTAINER_CLAUDE_DIR,
+        BOXDOWN_CONTAINER_CLAUDE_CONFIG_PATH,
+        BOXDOWN_CONTAINER_CODEX_DIR
+      ]
     })
     assert.doesNotMatch(json, /private-mcp-name|private-plugin-name|private-history-name/)
   })
@@ -8016,7 +8033,7 @@ describe('devcontainer config generation', () => {
     assert.strictEqual(publishContainerPortFromConfig(config), '3000')
   })
 
-  test('agent profile mounts use read-only Boxdown staging sources', () => {
+  test('agent profile mounts stage auth sources and mount full sources live', () => {
     const home = tempDir('agent-profile-home')
     const agentsDir = join(home, '.agents')
     const codexDir = join(home, '.codex')
@@ -8051,10 +8068,10 @@ describe('devcontainer config generation', () => {
       },
       full: {
         mounts: [
-          `source=${agentsDir},target=${BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_AGENTS_DIR}`,
-          `source=${codexDir},target=${BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CODEX_DIR}`,
-          `source=${claudeDir},target=${BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CLAUDE_DIR}`,
-          `source=${join(home, '.claude.json')},target=${BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CLAUDE_CONFIG_PATH}`
+          `source=${agentsDir},target=${BOXDOWN_CONTAINER_AGENTS_DIR}`,
+          `source=${codexDir},target=${BOXDOWN_CONTAINER_CODEX_DIR}`,
+          `source=${claudeDir},target=${BOXDOWN_CONTAINER_CLAUDE_DIR}`,
+          `source=${join(home, '.claude.json')},target=${BOXDOWN_CONTAINER_CLAUDE_CONFIG_PATH}`
         ],
         sources: 'agents,claude-config,claude-home,codex-home'
       }
@@ -8063,13 +8080,36 @@ describe('devcontainer config generation', () => {
     for (const [profile, expectation] of Object.entries(expected)) {
       const config = buildGeneratedDevcontainerConfig(context, undefined, profile as 'none' | 'auth' | 'full')
       const profileMounts = config.mounts?.filter(mount => mount.includes('/opt/boxdown/agent-profile-source')) ?? []
-      assert.deepStrictEqual(profileMounts.map(mount => mount.replace(',readonly', '')).sort(), expectation.mounts.map(mount => `type=bind,${mount}`).sort())
-      assert.ok(profileMounts.every(mount => mount.endsWith(',readonly')))
+      const expectedMounts = expectation.mounts.map(mount => `type=bind,${mount}`)
+      const actualMounts = profile === 'full'
+        ? config.mounts?.filter(mount => typeof mount === 'string' && mount.includes('/home/node/.')) ?? []
+        : profileMounts
+      assert.deepStrictEqual(actualMounts.map(mount => mount.replace(',readonly', '')).sort(), expectedMounts.sort())
+      if (profile === 'full') {
+        assert.ok(actualMounts.every(mount => !mount.endsWith(',readonly')))
+        assert.deepStrictEqual(profileMounts, [])
+      } else {
+        assert.ok(profileMounts.every(mount => mount.endsWith(',readonly')))
+      }
       assert.strictEqual(config.containerEnv?.BOXDOWN_AGENT_PROFILE, profile)
       assert.strictEqual(config.containerEnv?.BOXDOWN_AGENT_PROFILE_SOURCES, expectation.sources)
       assert.ok(config.initializeCommand?.includes(`BOXDOWN_AGENT_PROFILE='${profile}'`))
-      assert.ok(!profileMounts.some(mount => /target=\/home\/node\/\.(agents|codex|claude)(,|$)/.test(mount)))
+      if (profile !== 'full') {
+        assert.ok(!profileMounts.some(mount => /target=\/home\/node\/\.(agents|codex|claude)(,|$)/.test(mount)))
+      }
     }
+
+    const fullConfig = buildGeneratedDevcontainerConfig(context, undefined, 'full')
+    const fullMounts = fullConfig.mounts?.filter(mount =>
+      typeof mount === 'string' && mount.includes('/home/node/.codex')
+    ) ?? []
+    assert.ok(fullMounts.some(mount =>
+      mount.includes(`source=${context.hostCodexDir},target=/home/node/.codex`) &&
+      !mount.endsWith(',readonly')
+    ))
+    assert.ok(!fullConfig.mounts?.some(mount =>
+      typeof mount === 'string' && mount.includes('/opt/boxdown/agent-profile-source')
+    ))
   })
 
   test('host agent paths honor configured roots and classify only top-level sources', () => {
@@ -8092,8 +8132,8 @@ describe('devcontainer config generation', () => {
     assert.strictEqual(context.hostClaudeCredentialsPath, join(customClaudeDir, '.credentials.json'))
     assert.strictEqual(context.hostClaudeConfigPath, join(customClaudeDir, '.claude.json'))
     const config = buildGeneratedDevcontainerConfig(context, undefined, 'full')
-    assert.ok(config.mounts?.some(mount => mount.includes(`source=${customClaudeDir},target=${BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CLAUDE_DIR}`)))
-    assert.ok(!config.mounts?.some(mount => mount.includes(`target=${BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CLAUDE_CONFIG_PATH}`)))
+    assert.ok(config.mounts?.some(mount => mount.includes(`source=${customClaudeDir},target=${BOXDOWN_CONTAINER_CLAUDE_DIR}`) && !mount.endsWith(',readonly')))
+    assert.ok(!config.mounts?.some(mount => mount.includes(`target=${BOXDOWN_CONTAINER_CLAUDE_CONFIG_PATH}`)))
 
     const defaults = createWorkspaceContext({ workspace: tempDir('agent-profile-default-paths'), env: { HOME: home, BOXDOWN_CACHE_HOME: tempDir('agent-profile-default-cache'), BOXDOWN_DATA_HOME: tempDir('agent-profile-default-data') }, platform: 'linux', assetsDevcontainerDir })
     assert.strictEqual(defaults.hostCodexDir, join(home, '.codex'))
@@ -8102,7 +8142,7 @@ describe('devcontainer config generation', () => {
     assert.strictEqual(buildGeneratedDevcontainerConfig(defaults, undefined, 'auth').containerEnv?.BOXDOWN_AGENT_PROFILE_SOURCES, '')
   })
 
-  test('does not separately stage Claude config nested in configured roots', () => {
+  test('does not separately mount Claude config nested in configured roots', () => {
     const home = tempDir('agent-profile-nested-claude-home')
     const claudeDir = join(home, 'configured-claude')
     mkdirSync(claudeDir)
@@ -8115,8 +8155,8 @@ describe('devcontainer config generation', () => {
     })
     const config = buildGeneratedDevcontainerConfig(context, undefined, 'full')
 
-    assert.ok(config.mounts?.some(mount => mount.includes(`source=${context.hostClaudeDir},target=${BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CLAUDE_DIR},readonly`)))
-    assert.ok(!config.mounts?.some(mount => mount.includes(`target=${BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CLAUDE_CONFIG_PATH},readonly`)))
+    assert.ok(config.mounts?.some(mount => mount.includes(`source=${context.hostClaudeDir},target=${BOXDOWN_CONTAINER_CLAUDE_DIR}`) && !mount.endsWith(',readonly')))
+    assert.ok(!config.mounts?.some(mount => mount.includes(`target=${BOXDOWN_CONTAINER_CLAUDE_CONFIG_PATH}`)))
     assert.strictEqual(sourcePathIsInside('C:\\custom\\claude\\.claude.json', 'C:\\custom\\claude'), true)
     assert.strictEqual(sourcePathIsInside('C:\\custom\\claude-other\\.claude.json', 'C:\\custom\\claude'), false)
     assert.strictEqual(sourcePathIsInside('C:\\custom\\claude\\..\\outside.json', 'C:\\custom\\claude'), false)
@@ -8134,17 +8174,17 @@ describe('devcontainer config generation', () => {
     writeFileSync(join(claudeDir, '.credentials.json'), '{}\n')
     writeFileSync(join(home, '.claude.json'), '{}\n')
     const cases = [
-      [BOXDOWN_CONTAINER_AGENTS_DIR, BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_AGENTS_DIR],
-      [BOXDOWN_CONTAINER_CODEX_DIR, BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CODEX_DIR],
-      [BOXDOWN_CONTAINER_CODEX_AUTH_PATH, BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CODEX_DIR],
-      [BOXDOWN_CONTAINER_CLAUDE_DIR, BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CLAUDE_DIR],
-      [BOXDOWN_CONTAINER_CLAUDE_CREDENTIALS_PATH, BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CLAUDE_DIR],
-      [BOXDOWN_CONTAINER_CLAUDE_CONFIG_PATH, BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CLAUDE_CONFIG_PATH],
-      ['/home/node', BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_AGENTS_DIR],
-      ['/home/node/.codex/custom-child', BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CODEX_DIR]
+      [BOXDOWN_CONTAINER_AGENTS_DIR, 'agents', BOXDOWN_CONTAINER_AGENTS_DIR],
+      [BOXDOWN_CONTAINER_CODEX_DIR, 'codex', BOXDOWN_CONTAINER_CODEX_DIR],
+      [BOXDOWN_CONTAINER_CODEX_AUTH_PATH, 'codex', BOXDOWN_CONTAINER_CODEX_DIR],
+      [BOXDOWN_CONTAINER_CLAUDE_DIR, 'claude', BOXDOWN_CONTAINER_CLAUDE_DIR],
+      [BOXDOWN_CONTAINER_CLAUDE_CREDENTIALS_PATH, 'claude', BOXDOWN_CONTAINER_CLAUDE_DIR],
+      [BOXDOWN_CONTAINER_CLAUDE_CONFIG_PATH, 'claude-config', BOXDOWN_CONTAINER_CLAUDE_CONFIG_PATH],
+      ['/home/node', 'agents', BOXDOWN_CONTAINER_AGENTS_DIR],
+      ['/home/node/.codex/custom-child', 'codex', BOXDOWN_CONTAINER_CODEX_DIR]
     ] as const
 
-    for (const [destination, skippedTarget] of cases) {
+    for (const [destination, sourceName, skippedTarget] of cases) {
       const mount = `type=bind,source=/custom/${destination.replaceAll('/', '-')},target=${destination},readonly`
       const customAssetsDir = tempDir('custom-profile-assets')
       writeFileSync(join(customAssetsDir, 'devcontainer.json'), `${JSON.stringify({ mounts: [mount] })}\n`)
@@ -8155,16 +8195,28 @@ describe('devcontainer config generation', () => {
         assetsDevcontainerDir: customAssetsDir
       })
       const config = buildGeneratedDevcontainerConfig(context, undefined, 'full')
+      const source = sourceName === 'agents'
+        ? context.hostAgentsDir
+        : sourceName === 'codex'
+          ? context.hostCodexDir
+          : sourceName === 'claude'
+            ? context.hostClaudeDir
+            : context.hostClaudeConfigPath
       assert.ok(config.mounts?.includes(mount))
       assert.ok(
-        !config.mounts?.some(candidate => candidate.includes('/opt/boxdown/agent-profile-source') && candidate.includes(`target=${skippedTarget},`)),
+        !config.mounts?.some(candidate => candidate.includes(`source=${source},target=${skippedTarget},`)),
         `${destination} should suppress ${skippedTarget}: ${JSON.stringify(config.mounts)}`
       )
       if (destination === '/home/node') {
         assert.deepStrictEqual(
-          config.mounts?.filter(candidate => candidate.includes('/opt/boxdown/agent-profile-source')),
+          config.mounts?.filter(candidate => [
+            BOXDOWN_CONTAINER_AGENTS_DIR,
+            BOXDOWN_CONTAINER_CODEX_DIR,
+            BOXDOWN_CONTAINER_CLAUDE_DIR,
+            BOXDOWN_CONTAINER_CLAUDE_CONFIG_PATH
+          ].some(target => candidate.includes(`target=${target},`))),
           [],
-          '/home/node ownership should suppress every staged profile source'
+          '/home/node ownership should suppress every direct profile source'
         )
       }
       assert.strictEqual(config.containerEnv?.BOXDOWN_AGENT_PROFILE_SOURCES, 'agents,claude-config,claude-home,codex-home')
@@ -8179,10 +8231,10 @@ describe('devcontainer config generation', () => {
       platform: 'linux',
       assetsDevcontainerDir: boundaryAssetsDir
     })
-    assert.ok(buildGeneratedDevcontainerConfig(boundaryContext, undefined, 'full').mounts?.some(mount => mount.includes(`target=${BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CODEX_DIR},readonly`)))
+    assert.ok(buildGeneratedDevcontainerConfig(boundaryContext, undefined, 'full').mounts?.some(mount => mount.includes(`target=${BOXDOWN_CONTAINER_CODEX_DIR}`) && !mount.endsWith(',readonly')))
   })
 
-  test('string mount aliases and normalized POSIX destinations consistently control profile staging and status', () => {
+  test('string mount aliases and normalized POSIX destinations consistently control profile mounts and status', () => {
     const home = tempDir('normalized-string-profile-home')
     mkdirSync(join(home, '.agents'))
     mkdirSync(join(home, '.codex'))
@@ -8277,16 +8329,17 @@ describe('devcontainer config generation', () => {
       })
 
       const config = buildGeneratedDevcontainerConfig(context, undefined, 'full')
-      const hasCodexBootstrapInput = config.mounts?.some(mount =>
+      const hasCodexProfileMount = config.mounts?.some(mount =>
         typeof mount === 'string' &&
-        mount.includes(`target=${BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CODEX_DIR},`)
+        mount.includes(`source=${context.hostCodexDir},target=${BOXDOWN_CONTAINER_CODEX_DIR}`) &&
+        !mount.endsWith(',readonly')
       ) ?? false
 
       assert.ok(config.mounts?.includes(entry.mount), `${entry.name}: preserve original mount`)
       assert.strictEqual(
-        hasCodexBootstrapInput,
+        hasCodexProfileMount,
         !entry.ownsCodex,
-        `${entry.name}: custom ownership must suppress the corresponding bootstrap input`
+        `${entry.name}: custom ownership must suppress the corresponding profile mount`
       )
       assert.match(config.containerEnv?.BOXDOWN_AGENT_PROFILE_SOURCES ?? '', /(?:^|,)codex-home(?:,|$)/)
 
@@ -8303,18 +8356,18 @@ describe('devcontainer config generation', () => {
 
       assert.strictEqual(
         status.agentProfile.sources.codexHome,
-        entry.ownsCodex ? 'custom' : 'available',
-        `${entry.name}: status must match generation`
+        'custom',
+        `${entry.name}: status recognizes canonical direct mounts`
       )
       assert.strictEqual(
         status.agentProfile.customDestinations.includes(BOXDOWN_CONTAINER_CODEX_DIR),
-        entry.ownsCodex,
-        `${entry.name}: normalized custom destination`
+        true,
+        `${entry.name}: canonical direct mount destination`
       )
     }
   })
 
-  test('indeterminate mounts suppress all profile staging and report only canonical custom ownership', () => {
+  test('indeterminate mounts suppress all profile mounts and report only canonical custom ownership', () => {
     const home = tempDir('indeterminate-profile-home')
     mkdirSync(join(home, '.agents'))
     mkdirSync(join(home, '.codex'))
@@ -8466,10 +8519,15 @@ describe('devcontainer config generation', () => {
       assert.deepStrictEqual(
         config.mounts?.filter(mount =>
           typeof mount === 'string' &&
-          mount.includes('/opt/boxdown/agent-profile-source')
+          [
+            BOXDOWN_CONTAINER_AGENTS_DIR,
+            BOXDOWN_CONTAINER_CODEX_DIR,
+            BOXDOWN_CONTAINER_CLAUDE_DIR,
+            BOXDOWN_CONTAINER_CLAUDE_CONFIG_PATH
+          ].some(target => mount.includes(`target=${target}`))
         ),
         [],
-        `${entry.name}: uncertainty must suppress every staged profile source`
+        `${entry.name}: uncertainty must suppress every profile source`
       )
 
       mkdirSync(context.workspaceCacheDir, { recursive: true })
@@ -8560,13 +8618,14 @@ describe('devcontainer config generation', () => {
       })
 
       const config = buildGeneratedDevcontainerConfig(context, undefined, 'full')
-      const hasCodexBootstrapInput = config.mounts?.some(candidate =>
+      const hasCodexProfileMount = config.mounts?.some(candidate =>
         typeof candidate === 'string' &&
-        candidate.includes(`target=${BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CODEX_DIR},`)
+        candidate.includes(`source=${context.hostCodexDir},target=${BOXDOWN_CONTAINER_CODEX_DIR}`) &&
+        !candidate.endsWith(',readonly')
       ) ?? false
 
       assert.deepStrictEqual(config.mounts?.[0], mount, `${entry.name}: preserve every structured field`)
-      assert.strictEqual(hasCodexBootstrapInput, !entry.ownsCodex, `${entry.name}: staging decision`)
+      assert.strictEqual(hasCodexProfileMount, !entry.ownsCodex, `${entry.name}: profile mount decision`)
 
       mkdirSync(context.workspaceCacheDir, { recursive: true })
       writeFileSync(context.generatedConfigPath, `${JSON.stringify(config, null, 2)}\n`)
@@ -8581,13 +8640,13 @@ describe('devcontainer config generation', () => {
 
       assert.strictEqual(
         status.agentProfile.sources.codexHome,
-        entry.ownsCodex ? 'custom' : 'available',
-        `${entry.name}: status must classify the same normalized dst`
+        'custom',
+        `${entry.name}: status recognizes canonical direct mounts`
       )
       assert.strictEqual(
         status.agentProfile.customDestinations.includes(BOXDOWN_CONTAINER_CODEX_DIR),
-        entry.ownsCodex,
-        `${entry.name}: canonical destination reporting`
+        true,
+        `${entry.name}: canonical direct mount destination`
       )
     }
   })

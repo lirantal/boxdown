@@ -172,9 +172,15 @@ export function buildGeneratedDevcontainerConfig (context: WorkspaceContext, sig
 
   const availableAgentProfileSources = agentProfileSources(context, agentProfile)
   for (const source of availableAgentProfileSources) {
-    if (source.exists() && !hasMountConflict(mounts, source.canonicalDestination)) {
-      boxdownMounts.push(`type=bind,source=${source.source},target=${source.stagingTarget},readonly`)
-    }
+    if (!source.exists() || hasMountConflict(mounts, source.canonicalDestination)) continue
+
+    const destination = agentProfile === 'full'
+      ? source.canonicalDestination
+      : source.stagingTarget
+    const readOnly = agentProfile !== 'full' ? ',readonly' : ''
+    boxdownMounts.push(
+      `type=bind,source=${source.source},target=${destination}${readOnly}`
+    )
   }
 
   return {
