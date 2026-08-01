@@ -31,7 +31,8 @@ compact row fits, but emitted ANSI sequences do not count toward visible width.
 ## Error Handling and Compatibility
 
 If terminal width is unavailable or invalid, the renderer uses the existing
-inline row. No input handling, cancellation behavior, selected-summary output,
+80-column fallback and then applies the normal inline-versus-wrapped layout
+decision. No input handling, cancellation behavior, selected-summary output,
 or non-interactive fallback changes.
 
 ## Testing
