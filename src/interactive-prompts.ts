@@ -150,6 +150,45 @@ function formatChoiceLine <T extends string> (
   return `${promptRail()}  ${mark} ${formatPromptLabel(choice.label, isFocused)}${description}`
 }
 
+function wrapPromptDescription (description: string, maxWidth: number): string[] {
+  const words = description === '' ? [''] : description.trim().split(/\s+/u)
+  const lines: string[] = []
+  let line = ''
+
+  for (const word of words) {
+    const next = line === '' ? word : `${line} ${word}`
+    if (line !== '' && visibleLength(next) > maxWidth) {
+      lines.push(line)
+      line = word
+    } else {
+      line = next
+    }
+  }
+
+  lines.push(line)
+  return lines
+}
+
+function formatSelectChoiceLines <T extends string> (
+  choice: SelectPromptChoice<T>,
+  isFocused: boolean,
+  output: PromptOutput
+): string[] {
+  const mark = isFocused ? selectedMark() : emptyMark(false)
+  const prefix = `${promptRail()}  ${mark} ${formatPromptLabel(choice.label, isFocused)}`
+  const inline = `${prefix}${color(` - ${choice.description}`, 'dim')}`
+  if (visibleLength(inline) <= terminalColumns(output)) return [inline]
+
+  const indent = `${promptRail()}    `
+  const width = terminalColumns(output) - visibleLength(indent)
+  return [
+    prefix,
+    ...wrapPromptDescription(choice.description, width).map(
+      (line) => `${indent}${color(line, 'dim')}`
+    )
+  ]
+}
+
 function formatSkipLine (skipLabel: string, isFocused: boolean, selectedCount: number): string {
   const mark = selectedCount === 0 ? selectedMark() : emptyMark(isFocused)
   return `${promptRail()}  ${mark} ${formatPromptLabel(skipLabel, isFocused)}`
@@ -393,10 +432,10 @@ function promptRawSelect <T extends string> (
       return [
         formatPromptTitle(options.title),
         promptRail(),
-        ...options.choices.map((choice, index) => formatChoiceLine(
+        ...options.choices.flatMap((choice, index) => formatSelectChoiceLines(
           choice,
           focusedIndex === index,
-          focusedIndex === index
+          options.output
         )),
         formatPromptEnd()
       ]

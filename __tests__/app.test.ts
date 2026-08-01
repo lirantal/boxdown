@@ -1105,6 +1105,41 @@ describe('interactive install target prompt', () => {
       }
     })
 
+    test('keeps a raw single-choice description inline when it fits', async () => {
+      const { input, output, outputText } = fakePromptStreams({ columns: 120 })
+      const resultPromise = promptSelect({
+        title: 'Agent profile?',
+        choices: [{ value: 'auth', label: 'Authentication and ~/.agents', description: 'Copy agent authentication and ~/.agents; Boxdown default.' }],
+        defaultValue: 'auth',
+        input,
+        output,
+        env: { CI: 'false' }
+      })
+
+      assert.match(outputText(), /Authentication and ~\/\.agents.* - Copy agent authentication and ~\/\.agents; Boxdown default\./)
+      input.write('\r')
+      assert.deepStrictEqual(await resultPromise, { status: 'selected', value: 'auth' })
+    })
+
+    test('indents wrapped raw single-choice descriptions below their option', async () => {
+      const { input, output, outputText } = fakePromptStreams({ columns: 36 })
+      const resultPromise = promptSelect({
+        title: 'Agent profile?',
+        choices: [{ value: 'full', label: 'Full agent profiles', description: 'Copy complete Codex, Claude, and ~/.agents profiles; may include sensitive data.' }],
+        defaultValue: 'full',
+        input,
+        output,
+        env: { CI: 'false' }
+      })
+
+      const rendered = outputText().replace(/\u001B\[[0-?]*[ -/]*[@-~]|\r/gu, '')
+      assert.match(rendered, /■ Full agent profiles\n│ {4}Copy complete Codex, Claude,/)
+      assert.match(rendered, /\n│ {4}and ~\/\.agents profiles; may\n│ {4}include sensitive data\./)
+      assert.doesNotMatch(rendered, /\nCopy complete|\nand ~\/\.agents|\ninclude sensitive/)
+      input.write('\r')
+      assert.deepStrictEqual(await resultPromise, { status: 'selected', value: 'full' })
+    })
+
     test('moves and wraps a raw single-choice prompt', async () => {
       for (const entry of [
         { keys: '\u001B[B\r', expected: 'full' },
