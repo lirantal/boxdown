@@ -312,6 +312,41 @@ export function readGeneratedToolchainPlanMount (context: WorkspaceContext): boo
   }
 }
 
+function isExpectedToolchainResultMount (mount: unknown, context: WorkspaceContext): boolean {
+  if (typeof mount !== 'string' || mount.includes('"') || mount.includes('\r') || mount.includes('\n')) {
+    return false
+  }
+
+  const fields = new Map<string, string>()
+  for (const field of mount.split(',')) {
+    const separator = field.indexOf('=')
+    if (separator <= 0) return false
+    const key = field.slice(0, separator)
+    const value = field.slice(separator + 1)
+    if (fields.has(key)) return false
+    fields.set(key, value)
+  }
+
+  return fields.size === 3 &&
+    fields.get('type') === 'bind' &&
+    fields.get('source') === context.toolchainResultDir &&
+    fields.get('target') === BOXDOWN_CONTAINER_TOOLCHAIN_RESULTS_DIR
+}
+
+export function generatedConfigHasToolchainResultMount (config: unknown, context: WorkspaceContext): boolean {
+  if (typeof config !== 'object' || config === null) return false
+  const mounts = (config as {mounts?: unknown}).mounts
+  return Array.isArray(mounts) && mounts.some((mount) => isExpectedToolchainResultMount(mount, context))
+}
+
+export function readGeneratedToolchainResultMount (context: WorkspaceContext): boolean {
+  try {
+    return generatedConfigHasToolchainResultMount(parseJsonc<unknown>(readFileSync(context.generatedConfigPath, 'utf8')), context)
+  } catch {
+    return false
+  }
+}
+
 export function agentProfileFromDevcontainerConfig (config: unknown): AgentProfile | undefined {
   if (typeof config !== 'object' || config === null) return undefined
   const containerEnv = (config as { containerEnv?: unknown }).containerEnv

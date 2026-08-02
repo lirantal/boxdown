@@ -5195,6 +5195,137 @@ describe('workspace state', () => {
 })
 
 describe('status output', () => {
+  test('reports selected toolchains, a CLI override note, and the last sync result', () => {
+    const workspace = tempDir('status-toolchain-override-workspace')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('status-toolchain-override-cache'),
+        BOXDOWN_DATA_HOME: tempDir('status-toolchain-override-data')
+      },
+      assetsDevcontainerDir
+    })
+    const goOverridePlan = resolveToolchainPlan({
+      workspaceId: context.workspaceId,
+      detections: [{
+        id: 'go',
+        exactVersion: '1.26.5',
+        evidence: [{path: 'go.mod', source: 'toolchain', value: '1.26.5', exact: true}]
+      }],
+      selectors: [parseToolchainSelector('go@1.27.0')],
+      selectionSource: 'cli'
+    })
+
+    writeToolchainPlan(context, goOverridePlan)
+    writeFileSync(context.toolchainResultPath, JSON.stringify({
+      version: 1,
+      fingerprint: goOverridePlan.fingerprint,
+      state: 'succeeded',
+      updatedAt: '2026-08-02T00:00:00.000Z',
+      runtimes: [{id: 'go', state: 'succeeded'}]
+    }))
+
+    const status = createStatusInfo(context, 'demo-devcontainer', undefined, existsSync)
+    const text = formatStatusText(status)
+
+    assert.match(text, /Toolchains: Go 1\.27\.0 \(CLI override\)/)
+    assert.match(text, /Explicit Go 1\.27\.0 override differs from go\.mod toolchain 1\.26\.5\./)
+    assert.match(text, /Last sync: succeeded/)
+    assert.deepStrictEqual(JSON.parse(JSON.stringify(status.toolchains)), {
+      plan: goOverridePlan,
+      result: {
+        version: 1,
+        fingerprint: goOverridePlan.fingerprint,
+        state: 'succeeded',
+        updatedAt: '2026-08-02T00:00:00.000Z',
+        runtimes: [{id: 'go', state: 'succeeded'}]
+      },
+      containerState: 'active'
+    })
+  })
+
+  test('distinguishes unselected, disabled, stale, failed, and unreadable toolchain state', () => {
+    const workspace = tempDir('status-toolchain-states-workspace')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('status-toolchain-states-cache'),
+        BOXDOWN_DATA_HOME: tempDir('status-toolchain-states-data')
+      },
+      assetsDevcontainerDir
+    })
+    const container = {id: 'toolchain-container', state: 'running'}
+
+    assert.deepStrictEqual(createStatusInfo(context, 'demo-devcontainer', undefined, existsSync).toolchains, {
+      containerState: 'not-selected'
+    })
+
+    const disabledPlan = toolchainPlanFor(context, 'none')
+    writeToolchainPlan(context, disabledPlan)
+    const disabled = createStatusInfo(context, 'demo-devcontainer', undefined, existsSync)
+    assert.strictEqual(disabled.toolchains.containerState, 'disabled')
+    assert.match(formatStatusText(disabled), /Toolchains: disabled/)
+
+    const selectedPlan = toolchainPlanFor(context, 'go@1.27.0')
+    writeToolchainPlan(context, selectedPlan)
+    writeGeneratedDevcontainerConfig(context, undefined, undefined, selectedPlan)
+    writeFileSync(context.toolchainResultPath, JSON.stringify({
+      version: 1,
+      fingerprint: 'stale-fingerprint',
+      state: 'failed',
+      updatedAt: '2026-08-02T00:00:00.000Z',
+      runtimes: [{id: 'go', state: 'failed', message: 'install failed'}]
+    }))
+    const stale = createStatusInfo(context, 'demo-devcontainer', container, existsSync)
+    assert.strictEqual(stale.toolchains.containerState, 'recreate-required')
+    assert.match(formatStatusText(stale), /Last sync: failed/)
+    assert.match(formatStatusText(stale), /Run `boxdown start --recreate`\./)
+    assert.strictEqual(statusIsHealthy({
+      ...stale,
+      paths: {...stale.paths, generatedConfigExists: true, assetsDevcontainerExists: true},
+      ssh: {...stale.ssh, keyExists: true, publicKeyExists: true, publicKeyRuntimeExists: true},
+      agentProfile: {...stale.agentProfile, containerState: 'active'}
+    }), false)
+
+    writeFileSync(context.toolchainResultPath, JSON.stringify({
+      version: 1,
+      fingerprint: selectedPlan.fingerprint,
+      state: 'failed',
+      updatedAt: '2026-08-02T00:00:00.000Z',
+      runtimes: [{id: 'go', state: 'failed', message: 'install failed'}]
+    }))
+    const failed = createStatusInfo(context, 'demo-devcontainer', container, existsSync)
+    assert.strictEqual(failed.toolchains.containerState, 'active')
+    assert.match(formatStatusText(failed), /Last sync: failed/)
+    assert.doesNotMatch(formatStatusText(failed), /Run `boxdown start --recreate`\./)
+
+    const planMount = `type=bind,source=${context.toolchainsDir},target=${BOXDOWN_CONTAINER_TOOLCHAINS_DIR}/plan,readonly`
+    for (const resultMount of [
+      undefined,
+      `type=bind,source=/tmp/not-boxdown,target=${BOXDOWN_CONTAINER_TOOLCHAIN_RESULTS_DIR}`,
+      `type=bind,source=${context.toolchainResultDir},target=${BOXDOWN_CONTAINER_TOOLCHAIN_RESULTS_DIR},readonly`
+    ]) {
+      writeFileSync(context.generatedConfigPath, JSON.stringify({
+        mounts: [planMount, ...(resultMount === undefined ? [] : [resultMount])]
+      }))
+      assert.strictEqual(
+        createStatusInfo(context, 'demo-devcontainer', container, existsSync).toolchains.containerState,
+        'recreate-required'
+      )
+    }
+
+    writeGeneratedDevcontainerConfig(context, undefined, undefined, null)
+    const missingMount = createStatusInfo(context, 'demo-devcontainer', container, existsSync)
+    assert.strictEqual(missingMount.toolchains.containerState, 'recreate-required')
+
+    writeGeneratedDevcontainerConfig(context, undefined, undefined, selectedPlan)
+
+    writeFileSync(context.toolchainResultPath, '{ malformed')
+    const unreadable = createStatusInfo(context, 'demo-devcontainer', container, existsSync)
+    assert.strictEqual(unreadable.toolchains.result, undefined)
+    assert.strictEqual(unreadable.toolchains.containerState, 'recreate-required')
+  })
+
   test('parses docker ps JSON lines', () => {
     assert.deepStrictEqual(parseDockerPsJsonLines('{"ID":"abc123","Names":"demo","State":"running","Status":"Up 2 minutes","Labels":"devcontainer.local_folder=/tmp/demo,other=value"}\n'), [
       {

@@ -24,6 +24,10 @@ import {
 import { parseJsonc } from './jsonc.ts'
 import type { ClaudeCredentialsSupport, WorkspaceContext } from './paths.ts'
 import { buildSshConfigBlock, defaultSshConfigPath } from './ssh-config.ts'
+import { readGeneratedToolchainPlanMount, readGeneratedToolchainResultMount } from './config.ts'
+import { readToolchainPlan, readToolchainResult } from './toolchains/plan.ts'
+import { TOOLCHAIN_DEFAULTS } from './toolchains/defaults.ts'
+import { TOOLCHAIN_IDS, type ResolvedToolchain, type ToolchainPlan, type ToolchainResult } from './toolchains/types.ts'
 
 export type SshAliasSource = 'default' | 'provided'
 export type SshManagedBlockState = 'missing' | 'installed' | 'outdated'
@@ -54,6 +58,12 @@ export interface ContainerSummary {
   state?: string
   status?: string
   localFolder?: string
+}
+
+export interface ToolchainStatus {
+  plan?: ToolchainPlan
+  result?: ToolchainResult
+  containerState: 'active' | 'disabled' | 'recreate-required' | 'not-selected'
 }
 
 export interface StatusInfo {
@@ -88,6 +98,7 @@ export interface StatusInfo {
     assetsDevcontainerExists: boolean
   }
   agentProfile: AgentProfileStatus
+  toolchains: ToolchainStatus
   container: {
     found: boolean
     running: boolean
@@ -608,6 +619,45 @@ function containerProfileState (
     : 'unknown'
 }
 
+function readStatusToolchains (context: WorkspaceContext): {plan?: ToolchainPlan, result?: ToolchainResult} {
+  let plan: ToolchainPlan | undefined
+  let result: ToolchainResult | undefined
+
+  try {
+    plan = readToolchainPlan(context)
+  } catch {
+    // Status must remain available when Boxdown-owned state is malformed or unreadable.
+  }
+
+  try {
+    result = readToolchainResult(context)
+  } catch {
+    // Status must remain available when Boxdown-owned state is malformed or unreadable.
+  }
+
+  return {plan, result}
+}
+
+function toolchainContainerState (
+  context: WorkspaceContext,
+  plan: ToolchainPlan | undefined,
+  result: ToolchainResult | undefined,
+  container: ContainerSummary | undefined
+): ToolchainStatus['containerState'] {
+  if (plan === undefined) return 'not-selected'
+  if (plan.selected.length === 0) return 'disabled'
+
+  if (container !== undefined && (
+    !readGeneratedToolchainPlanMount(context) ||
+    !readGeneratedToolchainResultMount(context) ||
+    result?.fingerprint !== plan.fingerprint
+  )) {
+    return 'recreate-required'
+  }
+
+  return 'active'
+}
+
 function managedSshBlockMarkers (alias: string): { begin: string, end: string } {
   return {
     begin: `# BEGIN ${alias} boxdown devcontainer ssh`,
@@ -712,6 +762,13 @@ export function createStatusInfo (
     container,
     options.containerAgentProfile
   )
+  const toolchainRecords = readStatusToolchains(context)
+  const toolchainState = toolchainContainerState(
+    context,
+    toolchainRecords.plan,
+    toolchainRecords.result,
+    container
+  )
 
   const status: StatusInfo = {
     workspace: {
@@ -754,6 +811,11 @@ export function createStatusInfo (
       sources,
       customDestinations: generatedInfo.customDestinations
     },
+    toolchains: {
+      ...(toolchainRecords.plan === undefined ? {} : {plan: toolchainRecords.plan}),
+      ...(toolchainRecords.result === undefined ? {} : {result: toolchainRecords.result}),
+      containerState: toolchainState
+    },
     container: {
       found: container !== undefined,
       running: state === 'running',
@@ -776,7 +838,8 @@ export function statusIsHealthy (status: StatusInfo): boolean {
     status.ssh.publicKeyRuntimeExists &&
     status.container.found &&
     status.container.running &&
-    status.agentProfile.containerState !== 'recreate-required'
+    status.agentProfile.containerState !== 'recreate-required' &&
+    status.toolchains.containerState !== 'recreate-required'
 }
 
 const color = {
@@ -841,11 +904,62 @@ function containerProfileText (state: ContainerProfileState): string {
   return state
 }
 
+function toolchainSourceText (toolchain: ResolvedToolchain): string {
+  const selectionSource = toolchain.selectionSource === 'cli'
+    ? 'CLI'
+    : toolchain.selectionSource === 'interactive'
+      ? 'interactive'
+      : 'persisted'
+
+  if (toolchain.resolutionSource === 'override') return `${selectionSource} override`
+  if (toolchain.resolutionSource === 'project') return `${selectionSource} project`
+  return `${selectionSource} Boxdown default`
+}
+
+function toolchainStatusLines (status: ToolchainStatus): string[] {
+  if (status.plan === undefined) {
+    return [
+      'Toolchains: not selected',
+      ...(status.result === undefined ? [] : [`  Last sync: ${status.result.state}`]),
+      `  Container state: ${status.containerState}`
+    ]
+  }
+
+  if (status.plan.selected.length === 0) {
+    return [
+      'Toolchains: disabled',
+      ...(status.result === undefined ? [] : [`  Last sync: ${status.result.state}`]),
+      `  Container state: ${status.containerState}`
+    ]
+  }
+
+  const selected = [...status.plan.selected]
+    .sort((left, right) => TOOLCHAIN_IDS.indexOf(left.id) - TOOLCHAIN_IDS.indexOf(right.id))
+  const lines = selected.flatMap((toolchain, index) => [
+    `${index === 0 ? 'Toolchains: ' : '  '}${TOOLCHAIN_DEFAULTS[toolchain.id].label} ${toolchain.version} (${toolchainSourceText(toolchain)})`,
+    ...(toolchain.compatibilityNote === undefined
+      ? []
+      : [`${index === 0 ? '  ' : '    '}${toolchain.compatibilityNote}`])
+  ])
+
+  lines.push(
+    `  Last sync: ${status.result?.state ?? 'not recorded'}`,
+    `  Container state: ${status.containerState}`
+  )
+
+  if (status.containerState === 'recreate-required') {
+    lines.push('  Run `boxdown start --recreate`.')
+  }
+
+  return lines
+}
+
 export function formatStatusText (status: StatusInfo, options: { color?: boolean } = {}): string {
   const colorEnabled = options.color ?? false
   const containerState = status.container.found ? status.container.state ?? 'unknown' : 'absent'
   const healthy = statusIsHealthy(status)
   const profile = status.agentProfile
+  const toolchainLines = toolchainStatusLines(status.toolchains)
   const agentProfileLines = [
     `Agent profile: ${profile.selected} (${profileSelectionSourceText(profile.selectionSource)})`,
     `  Codex authentication: ${agentProfileSourceText(profile.sources.codexAuthentication)}`,
@@ -888,6 +1002,8 @@ export function formatStatusText (status: StatusInfo, options: { color?: boolean
     `  Devcontainer assets: ${status.paths.assetsDevcontainerDir} (${existenceText(status.paths.assetsDevcontainerExists, colorEnabled)})`,
     '',
     ...agentProfileLines,
+    '',
+    ...toolchainLines,
     '',
     'SSH:',
     `  SSH config: ${status.ssh.configPath} (${existenceText(status.ssh.configExists, colorEnabled)})`,
