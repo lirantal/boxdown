@@ -429,6 +429,19 @@ test('does not mount toolchain state for a legacy workspace or a none plan', () 
   assert.ok(!buildGeneratedDevcontainerConfig(context, undefined, undefined, nonePlan).mounts?.some((mount) => mount.includes(BOXDOWN_CONTAINER_TOOLCHAINS_DIR)))
 })
 
+test('toolchain bootstrap disables mise config and records retryable failures', () => {
+  const bootstrap = readFileSync(join(assetsDevcontainerDir, 'utils', 'toolchains-bootstrap.sh'), 'utf8')
+  const postCreate = readFileSync(join(assetsDevcontainerDir, 'hooks', 'post-create.sh'), 'utf8')
+  const postStart = readFileSync(join(assetsDevcontainerDir, 'hooks', 'post-start.sh'), 'utf8')
+
+  assert.match(bootstrap, /MISE_NO_CONFIG=1/)
+  assert.match(bootstrap, /mise --no-config install/)
+  assert.match(bootstrap, /toolchain-results\/result\.json/)
+  assert.match(bootstrap, /state.*failed/)
+  assert.match(postCreate, /run_step "Preparing workspace toolchains" configure_toolchains/)
+  assert.match(postStart, /configure_toolchains_if_needed/)
+})
+
 test('setup resolves explicit toolchain selectors before invoking the workspace setup', async () => {
   const workspace = tempDir('setup-toolchain-cli')
   const env = {

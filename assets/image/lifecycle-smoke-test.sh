@@ -20,6 +20,48 @@ sudo -n -l /usr/local/sbin/boxdown-ssh-agent-proxy >/dev/null
 workspace="$(mktemp -d)"
 trap 'rm -rf "${workspace}"' EXIT
 
+toolchain_plan="${workspace}/toolchains/plan.json"
+toolchain_results="${workspace}/toolchain-results"
+mkdir -p "$(dirname "${toolchain_plan}")" "${toolchain_results}"
+cat > "${toolchain_plan}" <<'JSON'
+{
+  "version": 1,
+  "workspaceId": "lifecycle-smoke-test",
+  "fingerprint": "lifecycle-smoke-toolchains-v1",
+  "selected": [
+    {"id": "node", "version": "24.17.0"},
+    {"id": "python", "version": "3.14.6"},
+    {"id": "go", "version": "1.26.5"},
+    {"id": "rust", "version": "1.97.1"}
+  ],
+  "updatedAt": "2026-08-02T00:00:00.000Z"
+}
+JSON
+printf 'module lifecycle-smoke\n\ngo 1.26.5\n' > "${workspace}/go.mod"
+cat > "${workspace}/Cargo.toml" <<'TOML'
+[package]
+name = "lifecycle-smoke"
+version = "0.1.0"
+edition = "2024"
+TOML
+mkdir -p "${workspace}/src"
+printf 'pub fn lifecycle_smoke() {}\n' > "${workspace}/src/lib.rs"
+
+BOXDOWN_CONTAINER_TOOLCHAIN_PLAN_PATH="${toolchain_plan}" \
+BOXDOWN_CONTAINER_TOOLCHAIN_RESULTS_DIR="${toolchain_results}" \
+BOXDOWN_CONTAINER_WORKSPACE_FOLDER="${workspace}" \
+  bash "/opt/boxdown/devcontainer/utils/toolchains-bootstrap.sh"
+
+export PATH="${HOME}/.local/bin:${PATH}"
+test "$(node --version)" = "v24.17.0"
+test "$(python --version)" = "Python 3.14.6"
+[[ "$(go version)" == *"go1.26.5"* ]]
+[[ "$(rustc --version)" == *"1.97.1"* ]]
+test "$(node -e 'process.stdout.write(`ok`)')" = "ok"
+test "$(python -c 'print("ok")')" = "ok"
+test -x "${HOME}/.local/bin/cargo"
+test "$(node -e 'const r = require(process.argv[1]); process.stdout.write(`${r.state}:${r.runtimes.length}`)' "${toolchain_results}/result.json")" = "succeeded:4"
+
 profile_source="${workspace}/agent-profile-source"
 profile_home="${workspace}/agent-profile-home"
 profile_marker="/opt/boxdown/state/agent-profile"

@@ -12,6 +12,7 @@ main() {
   run_step "Configuring runtime secret environment" configure_runtime_secret_environment
   run_step "Preparing SSH runtime" configure_sshd_runtime
   run_step "Initializing coding-agent refresh state" initialize_coding_agent_refresh_state
+  run_step "Preparing workspace toolchains" configure_toolchains
   run_step "Installing workspace dependencies" run_deps_install
 }
 
@@ -69,7 +70,21 @@ initialize_coding_agent_refresh_state() {
   bash "${DEVCONTAINER_DIR}/utils/coding-agent-cli-update.sh" initialize-stamps
 }
 
+configure_toolchains() {
+  bash "${DEVCONTAINER_DIR}/utils/toolchains-bootstrap.sh" ||
+    echo "post-create: warning: workspace toolchain provisioning could not start." >&2
+}
+
 run_deps_install() {
+  if [[ -f "${BOXDOWN_CONTAINER_TOOLCHAIN_PLAN_PATH:-/opt/boxdown/state/toolchains/plan/plan.json}" ]] &&
+    node - "${BOXDOWN_CONTAINER_TOOLCHAIN_PLAN_PATH:-/opt/boxdown/state/toolchains/plan/plan.json}" <<'NODE'
+const { readFileSync } = require('node:fs')
+const plan = JSON.parse(readFileSync(process.argv[2], 'utf8'))
+process.exit(plan?.selected?.some((item) => item?.id === 'node') ? 0 : 1)
+NODE
+  then
+    return 0
+  fi
   bash "${DEVCONTAINER_DIR}/utils/deps-install.sh"
 }
 
