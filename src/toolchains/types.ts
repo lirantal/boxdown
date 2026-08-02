@@ -48,7 +48,7 @@ export interface ToolchainResult {
   fingerprint: string
   state: ToolchainSyncState
   updatedAt: string
-  runtimes: Array<{id: ToolchainId, state: ToolchainSyncState, message?: string}>
+  runtimes: Array<{id: ToolchainId, version?: string, state: ToolchainSyncState, message?: string}>
 }
 
 export type ToolchainSelector =

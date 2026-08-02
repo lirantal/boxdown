@@ -10,6 +10,7 @@ RESULTS_DIR="${BOXDOWN_CONTAINER_TOOLCHAIN_RESULTS_DIR:-/opt/boxdown/state/toolc
 WORKSPACE_FOLDER="${BOXDOWN_CONTAINER_WORKSPACE_FOLDER:-$PWD}"
 BOXDOWN_TOOLCHAINS_HOME="${HOME}/.local/share/boxdown/toolchains"
 PLAN_NODE="${BOXDOWN_PLAN_NODE:-/usr/local/bin/node}"
+MISE_BIN='/usr/local/bin/mise'
 
 export MISE_DATA_DIR="${BOXDOWN_TOOLCHAINS_HOME}/data"
 export MISE_CACHE_DIR="${BOXDOWN_TOOLCHAINS_HOME}/cache"
@@ -40,7 +41,7 @@ try {
 } catch {
   process.exit(2)
 }
-if (plan.version !== 1 || !Array.isArray(plan.selected) || typeof plan.fingerprint !== 'string' || plan.selected.length > 4) process.exit(2)
+if (plan.version !== 1 || !Array.isArray(plan.selected) || !/^[a-f0-9]{64}$/.test(plan.fingerprint) || plan.selected.length > 4) process.exit(2)
 const ids = new Set()
 for (const item of plan.selected) {
   if (item === null || typeof item !== 'object' || !['node', 'python', 'go', 'rust'].includes(item.id) ||
@@ -76,8 +77,8 @@ const [target] = process.argv.slice(2)
 const runtimes = process.env.RESULT_RECORDS === ''
   ? []
   : process.env.RESULT_RECORDS.split('\n').filter(Boolean).map((line) => {
-      const [id, state, message = ''] = line.split('\t')
-      return message === '' ? { id, state } : { id, state, message }
+      const [id, version, state, message = ''] = line.split('\t')
+      return message === '' ? { id, version, state } : { id, version, state, message }
     })
 writeFileSync(target, `${JSON.stringify({
   version: 1,
@@ -113,7 +114,7 @@ export MISE_DATA_DIR='${MISE_DATA_DIR}'
 export MISE_CACHE_DIR='${MISE_CACHE_DIR}'
 export MISE_CONFIG_DIR='${MISE_CONFIG_DIR}'
 export MISE_STATE_DIR='${MISE_STATE_DIR}'
-exec mise --no-config exec '${runtime}@${version}' -- '${command}' "\$@"
+exec /usr/local/bin/mise --no-config exec '${runtime}@${version}' -- '${command}' "\$@"
 EOF
   chmod 0755 "${temporary}" && mv -f "${temporary}" "${target}"
 }
@@ -145,6 +146,28 @@ ensure_ssh_login_path() {
     touch "${file}" || return 1
     grep -Fqx "${path_line}" "${file}" || printf '%s\n' "${path_line}" >> "${file}"
   done
+  if [[ -n "${BASH_ENV:-}" && "${BASH_ENV}" = /* && ! -L "${BASH_ENV}" ]]; then
+    touch "${BASH_ENV}" || return 1
+    grep -Fqx "${path_line}" "${BASH_ENV}" || printf '%s\n' "${path_line}" >> "${BASH_ENV}"
+  fi
+}
+
+remove_deselected_wrappers() {
+  local records="$1" id command target
+  local -a commands=(node npm npx corepack python python3 pip go cargo rustc rustup)
+  for command in "${commands[@]}"; do
+    case "${command}" in
+      node|npm|npx|corepack) id=node ;;
+      python|python3|pip) id=python ;;
+      go) id=go ;;
+      *) id=rust ;;
+    esac
+    grep -q "^${id}"$'\t' <<< "${records}" && continue
+    target="${HOME}/.local/bin/${command}"
+    if [[ -f "${target}" && ! -L "${target}" ]] && grep -Fq '/usr/local/bin/mise --no-config exec' "${target}"; then
+      rm -f "${target}"
+    fi
+  done
 }
 
 install_runtime() {
@@ -154,7 +177,7 @@ install_runtime() {
   if [[ "${id}" == node ]] && [[ -x "${PLAN_NODE}" ]] && [[ "$("${PLAN_NODE}" --version 2>/dev/null)" == "v${version}" ]]; then
     return 0
   fi
-  MISE_NO_CONFIG=1 mise --no-config install "${id}@${version}"
+  MISE_NO_CONFIG=1 /usr/local/bin/mise --no-config install "${id}@${version}"
 }
 
 run_python_sync() {
@@ -162,10 +185,10 @@ run_python_sync() {
   local candidate
   local -a requirement_matches=()
 
-  MISE_NO_CONFIG=1 mise --no-config install uv@0.11.32 || return 1
+  MISE_NO_CONFIG=1 /usr/local/bin/mise --no-config install uv@0.11.32 || return 1
   if [[ -f "${WORKSPACE_FOLDER}/pyproject.toml" && ! -L "${WORKSPACE_FOLDER}/pyproject.toml" &&
         -f "${WORKSPACE_FOLDER}/uv.lock" && ! -L "${WORKSPACE_FOLDER}/uv.lock" ]]; then
-    (cd "${WORKSPACE_FOLDER}" && MISE_NO_CONFIG=1 mise --no-config exec uv@0.11.32 -- uv sync)
+    (cd "${WORKSPACE_FOLDER}" && MISE_NO_CONFIG=1 /usr/local/bin/mise --no-config exec uv@0.11.32 -- uv sync)
     return
   fi
   for candidate in requirements.txt requirements-dev.txt; do
@@ -186,7 +209,7 @@ run_python_sync() {
     done
   fi
   [[ -n "${requirements}" ]] || return 0
-  MISE_NO_CONFIG=1 mise --no-config exec uv@0.11.32 -- uv pip install -r "${requirements}"
+  MISE_NO_CONFIG=1 /usr/local/bin/mise --no-config exec uv@0.11.32 -- uv pip install -r "${requirements}"
 }
 
 sync_runtime() {
@@ -205,6 +228,9 @@ main() {
   local aggregate_state='succeeded'
   local runtime_records=''
 
+  if [[ ! -e "${PLAN_PATH}" ]]; then
+    return 0
+  fi
   if ! plan_records="$(read_plan)"; then
     warn 'mounted toolchain plan is missing or invalid; retrying on the next container start.'
     write_result 'invalid-plan' failed '' || true
@@ -224,6 +250,7 @@ main() {
     return 0
   fi
   export PATH="${HOME}/.local/bin:${PATH}"
+  remove_deselected_wrappers "${plan_records}"
 
   while IFS=$'\t' read -r id version; do
     [[ -n "${id}" ]] || continue
@@ -238,11 +265,11 @@ main() {
 
     if [[ -n "${message}" ]]; then
       message="$(one_line "${message}")"
-      runtime_records+="${id}"$'\t''failed'$'\t'"${message}"$'\n'
+      runtime_records+="${id}"$'\t'"${version}"$'\t''failed'$'\t'"${message}"$'\n'
       aggregate_state='failed'
       warn "${id} ${version}: ${message}; retrying on the next container start."
     else
-      runtime_records+="${id}"$'\t''succeeded'$'\n'
+      runtime_records+="${id}"$'\t'"${version}"$'\t''succeeded'$'\n'
     fi
   done <<< "${plan_records}"
 

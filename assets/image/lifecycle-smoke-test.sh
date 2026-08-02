@@ -27,7 +27,7 @@ cat > "${toolchain_plan}" <<'JSON'
 {
   "version": 1,
   "workspaceId": "lifecycle-smoke-test",
-  "fingerprint": "lifecycle-smoke-toolchains-v1",
+  "fingerprint": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
   "selected": [
     {"id": "node", "version": "24.17.0"},
     {"id": "python", "version": "3.14.6"},

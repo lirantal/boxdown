@@ -210,7 +210,7 @@ function isToolchainResult (value: unknown): value is ToolchainResult {
     isSyncState(value.state) &&
     typeof value.updatedAt === 'string' &&
     Array.isArray(value.runtimes) && value.runtimes.every((runtime) =>
-      isRecord(runtime) && isToolchainId(runtime.id) && isSyncState(runtime.state) &&
+      isRecord(runtime) && isToolchainId(runtime.id) && (runtime.version === undefined || typeof runtime.version === 'string') && isSyncState(runtime.state) &&
       (runtime.message === undefined || typeof runtime.message === 'string')
     )
 }
