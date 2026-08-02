@@ -1,11 +1,13 @@
 import assert from 'node:assert'
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
 
 import { TOOLCHAIN_DEFAULTS } from '../src/toolchains/defaults.ts'
 import { detectToolchains, resolveDetectedVersion } from '../src/toolchains/detect.ts'
+import { parseToolchainSelector, readToolchainPlan, readToolchainResult, resolveToolchainPlan, writeToolchainPlan, writeToolchainResult } from '../src/toolchains/plan.ts'
+import { createWorkspaceContext } from '../src/paths.ts'
 
 function withWorkspace (run: (workspace: string) => void): void {
   const workspace = mkdtempSync(join(tmpdir(), 'boxdown-toolchains-'))
@@ -614,5 +616,174 @@ test('keeps defaults release-pinned', () => {
     python: {version: '3.14.6', label: 'Python'},
     go: {version: '1.26.5', label: 'Go'},
     rust: {version: '1.97.1', label: 'Rust'}
+  })
+})
+
+test('an explicit version overrides a conflicting project declaration with a note', () => {
+  const plan = resolveToolchainPlan({
+    workspaceId: 'workspace-id',
+    detections: [{id: 'go', exactVersion: '1.26.5', evidence: [{path: 'go.mod', source: 'toolchain', value: '1.26.5', exact: true}]}],
+    selectors: [parseToolchainSelector('go@1.27.0')],
+    selectionSource: 'cli',
+    now: new Date('2026-08-02T00:00:00.000Z')
+  })
+
+  assert.deepStrictEqual(plan.selected[0], {
+    id: 'go',
+    version: '1.27.0',
+    selectionSource: 'cli',
+    resolutionSource: 'override',
+    evidence: [{path: 'go.mod', source: 'toolchain', value: '1.26.5', exact: true}],
+    compatibilityNote: 'Explicit Go 1.27.0 override differs from go.mod toolchain 1.26.5.'
+  })
+})
+
+test('an explicit version notes an incompatible project constraint override', () => {
+  const plan = resolveToolchainPlan({
+    workspaceId: 'workspace-id',
+    detections: [{
+      id: 'python',
+      constraint: '<3.12',
+      evidence: [{path: 'pyproject.toml', source: 'requires-python', value: '<3.12', exact: false}]
+    }],
+    selectors: [parseToolchainSelector('python@3.14.6')],
+    selectionSource: 'cli',
+    now: new Date('2026-08-02T00:00:00.000Z')
+  })
+
+  assert.strictEqual(
+    plan.selected[0]?.compatibilityNote,
+    'Explicit Python 3.14.6 override conflicts with pyproject.toml requires-python <3.12.'
+  )
+})
+
+test('none cannot be combined with another selector', () => {
+  assert.throws(() => resolveToolchainPlan({
+    workspaceId: 'workspace-id',
+    detections: [],
+    selectors: [parseToolchainSelector('none'), parseToolchainSelector('node')],
+    selectionSource: 'cli'
+  }), /--toolchain none cannot be combined/)
+})
+
+test('auto selects only resolvable detections and fingerprints plans deterministically', () => {
+  const input = {
+    workspaceId: 'workspace-id',
+    detections: [
+      {id: 'node' as const, exactVersion: '24.17.0', evidence: [{path: '.nvmrc', source: '.nvmrc', value: '24.17.0', exact: true}]},
+      {id: 'python' as const, constraint: '<3.12', evidence: [{path: 'pyproject.toml', source: 'requires-python', value: '<3.12', exact: false}]}
+    ],
+    selectors: [parseToolchainSelector('auto')],
+    selectionSource: 'cli' as const,
+    now: new Date('2026-08-02T00:00:00.000Z')
+  }
+
+  const first = resolveToolchainPlan(input)
+  const second = resolveToolchainPlan({...input, detections: [...input.detections].reverse()})
+
+  assert.deepStrictEqual(first.selected, [{
+    id: 'node',
+    version: '24.17.0',
+    selectionSource: 'cli',
+    resolutionSource: 'project',
+    evidence: [{path: '.nvmrc', source: '.nvmrc', value: '24.17.0', exact: true}]
+  }])
+  assert.strictEqual(first.fingerprint, second.fingerprint)
+})
+
+test('rejects conflicting explicit versions for one runtime', () => {
+  assert.throws(() => resolveToolchainPlan({
+    workspaceId: 'workspace-id',
+    detections: [],
+    selectors: [parseToolchainSelector('node@24.17.0'), parseToolchainSelector('node@25.0.0')],
+    selectionSource: 'cli'
+  }), /Conflicting explicit versions for Node\.js/)
+})
+
+test('writes a plan with newline and creates both plan and result directories', () => {
+  withWorkspace(workspace => {
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        HOME: workspace,
+        BOXDOWN_CACHE_HOME: join(workspace, 'cache'),
+        BOXDOWN_DATA_HOME: join(workspace, 'data'),
+        BOXDOWN_RUNTIME_HOME: join(workspace, 'runtime')
+      }
+    })
+    const plan = resolveToolchainPlan({
+      workspaceId: context.workspaceId,
+      detections: [],
+      selectors: [parseToolchainSelector('none')],
+      selectionSource: 'cli',
+      now: new Date('2026-08-02T00:00:00.000Z')
+    })
+
+    writeToolchainPlan(context, plan)
+
+    assert.ok(existsSync(context.toolchainsDir))
+    assert.ok(existsSync(context.toolchainResultDir))
+    assert.notStrictEqual(context.toolchainResultDir, context.toolchainsDir)
+    assert.match(readFileSync(context.toolchainPlanPath, 'utf8'), /\n$/u)
+    assert.deepStrictEqual(readToolchainPlan(context), plan)
+    assert.strictEqual(readToolchainResult(context), undefined)
+  })
+})
+
+test('persists toolchain state with owner-only file permissions', () => {
+  withWorkspace(workspace => {
+    const context = createWorkspaceContext({
+      workspace,
+      env: {HOME: workspace, BOXDOWN_DATA_HOME: join(workspace, 'data')}
+    })
+    const plan = resolveToolchainPlan({
+      workspaceId: context.workspaceId,
+      detections: [],
+      selectors: [parseToolchainSelector('none')],
+      selectionSource: 'cli',
+      now: new Date('2026-08-02T00:00:00.000Z')
+    })
+
+    writeToolchainPlan(context, plan)
+    writeToolchainResult(context, {
+      version: 1,
+      fingerprint: plan.fingerprint,
+      state: 'not-created',
+      updatedAt: plan.updatedAt,
+      runtimes: []
+    })
+
+    assert.strictEqual(statSync(context.toolchainPlanPath).mode & 0o777, 0o600)
+    assert.strictEqual(statSync(context.toolchainResultPath).mode & 0o777, 0o600)
+  })
+})
+
+test('distinguishes a present but unreadable toolchain plan from malformed JSON', () => {
+  withWorkspace(workspace => {
+    const context = createWorkspaceContext({
+      workspace,
+      env: {HOME: workspace, BOXDOWN_DATA_HOME: join(workspace, 'data')}
+    })
+    mkdirSync(context.toolchainPlanPath, {recursive: true})
+
+    assert.throws(() => readToolchainPlan(context), (error: unknown) => {
+      assert.ok(error instanceof Error)
+      assert.match(error.message, /Unable to read Boxdown toolchain plan/)
+      assert.match(error.message, /plan\.json/)
+      return true
+    })
+  })
+})
+
+test('rejects malformed persisted toolchain state with an actionable error', () => {
+  withWorkspace(workspace => {
+    const context = createWorkspaceContext({
+      workspace,
+      env: {HOME: workspace, BOXDOWN_DATA_HOME: join(workspace, 'data')}
+    })
+    mkdirSync(context.toolchainsDir, {recursive: true})
+    writeFileSync(context.toolchainPlanPath, '{"version":1,"workspaceId":"wrong","fingerprint":"x","selected":[{"id":"ruby"}],"updatedAt":"now"}\n')
+
+    assert.throws(() => readToolchainPlan(context), /Invalid Boxdown toolchain plan/)
   })
 })

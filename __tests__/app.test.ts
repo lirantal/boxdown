@@ -36,6 +36,7 @@ import { DEFAULT_TTY_MAX_COLUMNS, interactiveCommandScript, interactiveShellEnvA
 import { buildSshConfigBlock, defaultSshAlias, installSshConfig, removeSshConfigBlock, replaceSshConfigBlock, uninstallSshConfig } from '../src/ssh-config.ts'
 import { createStatusInfo, formatStatusText, inspectSshConfigStatus, parseDockerPsJsonLines, statusIsHealthy } from '../src/status.ts'
 import { ensureHostSshKey } from '../src/ssh-key.ts'
+import { resolveSetupToolchains } from '../src/setup-toolchains.ts'
 
 const assetsDevcontainerDir = fileURLToPath(new URL('../assets/devcontainer', import.meta.url))
 const copiedAuthContainerProfile: ContainerAgentProfile = { profile: 'auth', mode: 'copy' }
@@ -333,6 +334,51 @@ function fakePromptStreams (options: { columns?: number, rawMode?: boolean } = {
     outputText: () => Buffer.concat(outputChunks).toString('utf8')
   }
 }
+
+test('setup toolchain selection preselects detected runtimes and persists the choice', async () => {
+  const workspace = tempDir('setup-toolchains-prompt')
+  const context = createWorkspaceContext({
+    workspace,
+    env: {HOME: workspace, BOXDOWN_DATA_HOME: join(workspace, 'data')}
+  })
+  const {input, output, outputText} = fakePromptStreams()
+  writeFileSync(join(workspace, '.nvmrc'), '24.17.0\n')
+
+  const resultPromise = resolveSetupToolchains({
+    context,
+    selectors: [],
+    input,
+    output,
+    env: {CI: 'false'}
+  })
+
+  input.write('\r')
+  const result = await resultPromise
+
+  assert.deepStrictEqual(result.plan?.selected.map(item => item.id), ['node'])
+  assert.ok(existsSync(context.toolchainPlanPath))
+  assert.match(outputText(), /Node\.js/)
+  assert.match(outputText(), /\u001B\[32m■\u001B\[0m/)
+})
+
+test('non-interactive setup toolchain detection does not write an implicit plan', async () => {
+  const workspace = tempDir('setup-toolchains-non-interactive')
+  const context = createWorkspaceContext({
+    workspace,
+    env: {HOME: workspace, BOXDOWN_DATA_HOME: join(workspace, 'data')}
+  })
+  const input = new PassThrough() as PassThrough & PromptInput
+  const output = new PassThrough() as PassThrough & PromptOutput
+  input.isTTY = false
+  output.isTTY = false
+  writeFileSync(join(workspace, '.nvmrc'), '24.17.0\n')
+
+  const result = await resolveSetupToolchains({context, selectors: [], input, output, env: {CI: 'false'}})
+
+  assert.deepStrictEqual(result.detected.map(item => item.id), ['node'])
+  assert.strictEqual(result.plan, undefined)
+  assert.strictEqual(existsSync(context.toolchainPlanPath), false)
+})
 
 async function waitForPromptOutput (outputText: () => string, pattern: RegExp): Promise<void> {
   const deadline = Date.now() + 1000
@@ -1446,6 +1492,26 @@ describe('interactive install target prompt', () => {
     assert.match(outputText(), /\u001B\[36m└\u001B\[0m/)
     assert.doesNotMatch(outputText(), /Use arrows to move/)
     assert.doesNotMatch(outputText(), /Ctrl-C to cancel/)
+  })
+
+  test('submits raw-mode initial selections when Enter is pressed', async () => {
+    const { input, output } = fakePromptStreams()
+    const resultPromise = promptMultiSelect({
+      title: 'Select workspace toolchains?',
+      choices: [codexPromptChoice],
+      initialValues: ['codex'],
+      skipLabel: 'No toolchains',
+      input,
+      output,
+      env: { CI: 'false' }
+    })
+
+    input.write('\r')
+
+    assert.deepStrictEqual(await resultPromise, {
+      status: 'selected',
+      values: ['codex']
+    })
   })
 
   test('falls back to line-based selection when raw mode is unavailable', async () => {

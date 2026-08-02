@@ -29,6 +29,10 @@ export interface WorkspaceContext {
   workspaceCacheDir: string
   workspaceDataDir: string
   workspaceRuntimeDir: string
+  toolchainsDir: string
+  toolchainPlanPath: string
+  toolchainResultDir: string
+  toolchainResultPath: string
   workspaceSecretEnvDir: string
   generatedConfigPath: string
   hostAgentsDir: string
@@ -194,6 +198,8 @@ export function createWorkspaceContextFromIdentity (
   const workspaceCacheDir = join(cacheRoot, 'workspaces', identity.workspaceId)
   const workspaceDataDir = join(dataRoot, 'workspaces', identity.workspaceId)
   const workspaceRuntimeDir = join(runtimeRoot, 'workspaces', identity.workspaceId)
+  const toolchainsDir = join(workspaceDataDir, 'toolchains')
+  const toolchainResultDir = join(toolchainsDir, 'result')
   const hostGitconfigSnapshotDir = join(workspaceDataDir, 'gitconfig')
 
   return {
@@ -208,6 +214,10 @@ export function createWorkspaceContextFromIdentity (
     workspaceCacheDir,
     workspaceDataDir,
     workspaceRuntimeDir,
+    toolchainsDir,
+    toolchainPlanPath: join(toolchainsDir, 'plan.json'),
+    toolchainResultDir,
+    toolchainResultPath: join(toolchainResultDir, 'result.json'),
     workspaceSecretEnvDir: join(workspaceRuntimeDir, 'secrets'),
     generatedConfigPath: join(workspaceCacheDir, 'devcontainer.json'),
     hostAgentsDir,

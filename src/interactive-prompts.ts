@@ -36,6 +36,7 @@ export interface MultiSelectPromptOptions<T extends string> {
   title: string
   choices: readonly MultiSelectChoice<T>[]
   skipLabel: string
+  initialValues?: readonly T[]
   summaryLabel?: string
   input?: PromptInput
   output?: PromptOutput
@@ -267,11 +268,16 @@ function resultFromValues <T extends string> (values: T[]): MultiSelectPromptRes
 
 function parseLineSelection <T extends string> (
   answer: string,
-  choices: readonly MultiSelectChoice<T>[]
+  choices: readonly MultiSelectChoice<T>[],
+  initialValues: readonly T[] = []
 ): { values: T[] } | { error: string } {
   const trimmed = answer.trim()
 
-  if (trimmed === '' || trimmed === '0' || /^skip$/iu.test(trimmed)) {
+  if (trimmed === '') {
+    return {values: [...initialValues]}
+  }
+
+  if (trimmed === '0' || /^skip$/iu.test(trimmed)) {
     return { values: [] }
   }
 
@@ -389,12 +395,13 @@ async function promptLineSelect <T extends string> (
 }
 
 async function promptLineMultiSelect <T extends string> (
-  options: Required<Pick<MultiSelectPromptOptions<T>, 'title' | 'choices' | 'skipLabel' | 'summaryLabel' | 'input' | 'output'>>
+  options: Required<Pick<MultiSelectPromptOptions<T>, 'title' | 'choices' | 'skipLabel' | 'summaryLabel' | 'input' | 'output'>> & {initialValues: readonly T[]}
 ): Promise<MultiSelectPromptResult<T>> {
   options.output.write(`${formatPromptTitle(options.title)}\n`)
 
   options.choices.forEach((choice, index) => {
-    options.output.write(`${promptRail()}  ${index + 1}) ${choice.label} - ${choice.description}\n`)
+    const current = options.initialValues.includes(choice.value) ? ' (selected)' : ''
+    options.output.write(`${promptRail()}  ${index + 1}) ${choice.label}${current} - ${choice.description}\n`)
   })
 
   options.output.write(`${promptRail()}  0) ${options.skipLabel}\n`)
@@ -406,7 +413,7 @@ async function promptLineMultiSelect <T extends string> (
       return { status: 'cancelled', values: [] }
     }
 
-    const parsed = parseLineSelection(answer, options.choices)
+    const parsed = parseLineSelection(answer, options.choices, options.initialValues)
 
     if ('values' in parsed) {
       const result = resultFromValues(parsed.values)
@@ -521,11 +528,12 @@ function promptRawSelect <T extends string> (
 }
 
 function promptRawMultiSelect <T extends string> (
-  options: Required<Pick<MultiSelectPromptOptions<T>, 'title' | 'choices' | 'skipLabel' | 'summaryLabel' | 'input' | 'output'>>
+  options: Required<Pick<MultiSelectPromptOptions<T>, 'title' | 'choices' | 'skipLabel' | 'summaryLabel' | 'input' | 'output'>> & {initialValues: readonly T[]}
 ): Promise<MultiSelectPromptResult<T>> {
   return new Promise((resolve) => {
-    const selected = new Set<T>()
-    let focusedIndex = options.choices.length
+    const selected = new Set<T>(options.initialValues)
+    let focusedIndex = options.choices.findIndex((choice) => selected.has(choice.value))
+    if (focusedIndex === -1) focusedIndex = options.choices.length
     let settled = false
     let renderedRows = 0
 
@@ -701,6 +709,13 @@ export async function promptMultiSelect <T extends string> (
   const output = options.output ?? process.stdout
   const env = options.env ?? process.env
   const summaryLabel = options.summaryLabel ?? 'Selection'
+  const initialValues = options.initialValues ?? []
+
+  for (const value of initialValues) {
+    if (!options.choices.some((choice) => choice.value === value)) {
+      throw new Error(`Multi-select initial value is not one of its choices: ${value}`)
+    }
+  }
 
   if (!canPromptInteractively(input, output, env)) {
     return { status: 'non-interactive', values: [] }
@@ -713,7 +728,8 @@ export async function promptMultiSelect <T extends string> (
       skipLabel: options.skipLabel,
       summaryLabel,
       input,
-      output
+      output,
+      initialValues
     })
   }
 
@@ -724,7 +740,8 @@ export async function promptMultiSelect <T extends string> (
       skipLabel: options.skipLabel,
       summaryLabel,
       input,
-      output
+      output,
+      initialValues
     })
   } catch {
     return promptLineMultiSelect({
@@ -733,7 +750,8 @@ export async function promptMultiSelect <T extends string> (
       skipLabel: options.skipLabel,
       summaryLabel,
       input,
-      output
+      output,
+      initialValues
     })
   }
 }

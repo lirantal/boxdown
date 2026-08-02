@@ -971,3 +971,16 @@ export function resolveDetectedVersion (detection: DetectedToolchain): DetectedV
 
   return {kind: 'resolved', version: defaultVersion, source: 'boxdown-default'}
 }
+
+export function detectedConstraintAcceptsVersion (
+  detection: DetectedToolchain,
+  version: string
+): boolean | undefined {
+  if (detection.constraint === undefined) return undefined
+
+  const constraint = parseConstraint(detection.id, detection.constraint)
+  const candidate = parseVersion(version, 2)
+  if (constraint === undefined || candidate === undefined) return undefined
+
+  return constraint.accepts(candidate)
+}

@@ -18,6 +18,7 @@ export interface WorkspaceMetadata {
   dockerImageName?: string
   dockerImageLastSeenAt?: string
   legacyImageMigrationNotifiedAt?: string
+  toolchainPlanUpdatedAt?: string
   agentProfile?: AgentProfile
 }
 
@@ -44,6 +45,7 @@ function isWorkspaceMetadata (value: unknown): value is WorkspaceMetadata {
     (candidate.dockerImageName === undefined || typeof candidate.dockerImageName === 'string') &&
     (candidate.dockerImageLastSeenAt === undefined || typeof candidate.dockerImageLastSeenAt === 'string') &&
     (candidate.legacyImageMigrationNotifiedAt === undefined || typeof candidate.legacyImageMigrationNotifiedAt === 'string') &&
+    (candidate.toolchainPlanUpdatedAt === undefined || typeof candidate.toolchainPlanUpdatedAt === 'string') &&
     (candidate.agentProfile === undefined || (typeof candidate.agentProfile === 'string' && isAgentProfile(candidate.agentProfile)))
 }
 
@@ -99,6 +101,7 @@ export function writeWorkspaceMetadata (
     ...(existingMetadata?.dockerImageName === undefined ? {} : { dockerImageName: existingMetadata.dockerImageName }),
     ...(existingMetadata?.dockerImageLastSeenAt === undefined ? {} : { dockerImageLastSeenAt: existingMetadata.dockerImageLastSeenAt }),
     ...(existingMetadata?.legacyImageMigrationNotifiedAt === undefined ? {} : { legacyImageMigrationNotifiedAt: existingMetadata.legacyImageMigrationNotifiedAt }),
+    ...(existingMetadata?.toolchainPlanUpdatedAt === undefined ? {} : { toolchainPlanUpdatedAt: existingMetadata.toolchainPlanUpdatedAt }),
     ...((agentProfile ?? existingMetadata?.agentProfile) === undefined
       ? {}
       : { agentProfile: agentProfile ?? existingMetadata?.agentProfile })
