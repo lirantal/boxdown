@@ -62,6 +62,40 @@ test "$(python -c 'print("ok")')" = "ok"
 test -x "${HOME}/.local/bin/cargo"
 test "$(node -e 'const r = require(process.argv[1]); process.stdout.write(`${r.state}:${r.runtimes.length}`)' "${toolchain_results}/result.json")" = "succeeded:4"
 
+toolchain_dispatcher='/opt/boxdown/devcontainer/utils/toolchains-env-bootstrap.sh'
+test ! -w "${toolchain_dispatcher}"
+test "$(BASH_ENV="${toolchain_dispatcher}" bash -c 'node --version')" = 'v24.17.0'
+BOXDOWN_CONTAINER_TOOLCHAIN_PLAN_PATH="${toolchain_plan}" \
+BOXDOWN_CONTAINER_TOOLCHAIN_RESULTS_DIR="${toolchain_results}" \
+  bash -c 'source /opt/boxdown/devcontainer/hooks/post-start.sh; ! toolchains_need_bootstrap'
+
+strict_workspace="${workspace}/strict-node-deps"
+strict_bin="${workspace}/strict-bin"
+mkdir -p "${strict_workspace}" "${strict_bin}"
+printf '{}\n' > "${strict_workspace}/package.json"
+printf '{}\n' > "${strict_workspace}/package-lock.json"
+printf '#!/usr/bin/env bash\nexit 29\n' > "${strict_bin}/npm"
+chmod 0755 "${strict_bin}/npm"
+if (cd "${strict_workspace}" && BASH_ENV=/dev/null PATH="${strict_bin}:/usr/bin:/bin" BOXDOWN_DEPS_INSTALL_STRICT=1 \
+  bash /opt/boxdown/devcontainer/utils/deps-install.sh); then
+  echo 'strict dependency fixture unexpectedly succeeded' >&2
+  exit 1
+fi
+
+empty_home="${workspace}/empty-home"
+empty_plan="${workspace}/empty-plan.json"
+empty_results="${workspace}/empty-results"
+mkdir -m 0700 "${empty_home}"
+cat > "${empty_plan}" <<'JSON'
+{"version":1,"workspaceId":"empty","fingerprint":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","selected":[],"updatedAt":"2026-08-02T00:00:00.000Z"}
+JSON
+HOME="${empty_home}" \
+BOXDOWN_CONTAINER_TOOLCHAIN_PLAN_PATH="${empty_plan}" \
+BOXDOWN_CONTAINER_TOOLCHAIN_RESULTS_DIR="${empty_results}" \
+BOXDOWN_CONTAINER_WORKSPACE_FOLDER="${workspace}" \
+  bash /opt/boxdown/devcontainer/utils/toolchains-bootstrap.sh
+test "$(/usr/local/bin/node -e 'const r = require(process.argv[1]); process.stdout.write(`${r.state}:${r.runtimes.length}`)' "${empty_results}/result.json")" = 'succeeded:0'
+
 profile_source="${workspace}/agent-profile-source"
 profile_home="${workspace}/agent-profile-home"
 profile_marker="/opt/boxdown/state/agent-profile"

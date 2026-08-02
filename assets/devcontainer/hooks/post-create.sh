@@ -76,14 +76,39 @@ configure_toolchains() {
 }
 
 run_deps_install() {
-  if [[ -f "${BOXDOWN_CONTAINER_TOOLCHAIN_PLAN_PATH:-/opt/boxdown/state/toolchains/plan/plan.json}" ]] &&
-    /usr/local/bin/node - "${BOXDOWN_CONTAINER_TOOLCHAIN_PLAN_PATH:-/opt/boxdown/state/toolchains/plan/plan.json}" <<'NODE'
-const { readFileSync } = require('node:fs')
-const plan = JSON.parse(readFileSync(process.argv[2], 'utf8'))
-const ids = new Set(['node', 'python', 'go', 'rust'])
-process.exit(plan?.version === 1 && /^[a-f0-9]{64}$/.test(plan?.fingerprint ?? '') &&
-  Array.isArray(plan.selected) && plan.selected.length <= 4 &&
-  plan.selected.every((item) => item && ids.has(item.id) && typeof item.version === 'string' && /^[0-9][0-9A-Za-z.+-]*$/.test(item.version)) ? 0 : 1)
+  local plan_path="${BOXDOWN_CONTAINER_TOOLCHAIN_PLAN_PATH:-/opt/boxdown/state/toolchains/plan/plan.json}"
+  local plan_node="${1:-/usr/local/bin/node}"
+  if "${plan_node}" - "${plan_path}" <<'NODE'
+const { lstatSync, readFileSync, statSync } = require('node:fs')
+const { isAbsolute, normalize, parse, sep } = require('node:path')
+const path = process.argv[2]
+const isRecord = value => value !== null && typeof value === 'object' && !Array.isArray(value)
+const exactHex = value => typeof value === 'string' && value.length === 64 && [...value].every(char => '0123456789abcdef'.includes(char))
+const exactVersion = value => typeof value === 'string' && value.length > 0 && value.length <= 128 &&
+  '0123456789'.includes(value[0]) && [...value].every(char => '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz.+-'.includes(char))
+function safePath (target) {
+  if (!isAbsolute(target) || normalize(target) !== target || target.includes('\0')) return false
+  const root = parse(target).root
+  let current = root
+  for (const part of target.slice(root.length).split(sep).filter(Boolean)) {
+    current = current === root ? `${root}${part}` : `${current}${sep}${part}`
+    try { if (lstatSync(current).isSymbolicLink()) return false } catch (error) { if (error?.code !== 'ENOENT') return false }
+  }
+  return true
+}
+let plan
+try {
+  if (!safePath(path) || lstatSync(path).isSymbolicLink() || statSync(path).size > 65536) process.exit(1)
+  plan = JSON.parse(readFileSync(path, 'utf8'))
+} catch {
+  process.exit(1)
+}
+if (!isRecord(plan) || plan.version !== 1 || !exactHex(plan.fingerprint) || !Array.isArray(plan.selected) || plan.selected.length > 4) process.exit(1)
+const ids = new Set()
+for (const item of plan.selected) {
+  if (!isRecord(item) || !['node', 'python', 'go', 'rust'].includes(item.id) || !exactVersion(item.version) || ids.has(item.id)) process.exit(1)
+  ids.add(item.id)
+}
 NODE
   then
     return 0

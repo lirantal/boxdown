@@ -36,23 +36,51 @@ configure_sshd_runtime() {
 toolchains_need_bootstrap() {
   local plan_path="${BOXDOWN_CONTAINER_TOOLCHAIN_PLAN_PATH:-/opt/boxdown/state/toolchains/plan/plan.json}"
   local result_path="${BOXDOWN_CONTAINER_TOOLCHAIN_RESULTS_DIR:-/opt/boxdown/state/toolchain-results}/result.json"
+  local plan_node="${1:-/usr/local/bin/node}"
 
-  [[ -f "${plan_path}" && ! -L "${plan_path}" ]] || return 1
-  [[ -f "${result_path}" && ! -L "${result_path}" ]] || return 0
-  /usr/local/bin/node - "${plan_path}" "${result_path}" <<'NODE'
-const { lstatSync, readFileSync } = require('node:fs')
+  "${plan_node}" - "${plan_path}" "${result_path}" <<'NODE'
+const { lstatSync, readFileSync, statSync } = require('node:fs')
+const { isAbsolute, normalize, parse, sep } = require('node:path')
+const [planPath, resultPath] = process.argv.slice(2)
+const isRecord = value => value !== null && typeof value === 'object' && !Array.isArray(value)
+const exactHex = value => typeof value === 'string' && value.length === 64 && [...value].every(char => '0123456789abcdef'.includes(char))
+const exactVersion = value => typeof value === 'string' && value.length > 0 && value.length <= 128 &&
+  '0123456789'.includes(value[0]) && [...value].every(char => '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz.+-'.includes(char))
+const exactTime = value => {
+  if (typeof value !== 'string' || value.length !== 24) return false
+  try { return new Date(value).toISOString() === value } catch { return false }
+}
+function safePath (target) {
+  if (!isAbsolute(target) || normalize(target) !== target || target.includes('\0')) return false
+  const root = parse(target).root
+  let current = root
+  for (const part of target.slice(root.length).split(sep).filter(Boolean)) {
+    current = current === root ? `${root}${part}` : `${current}${sep}${part}`
+    try { if (lstatSync(current).isSymbolicLink()) return false } catch (error) { if (error?.code !== 'ENOENT') return false }
+  }
+  return true
+}
 try {
-  for (const path of process.argv.slice(2)) if (lstatSync(path).isSymbolicLink()) process.exit(1)
-  const plan = JSON.parse(readFileSync(process.argv[2], 'utf8'))
-  const result = JSON.parse(readFileSync(process.argv[3], 'utf8'))
-  const ids = new Set(['node', 'python', 'go', 'rust'])
-  const validPlan = plan?.version === 1 && /^[a-f0-9]{64}$/.test(plan?.fingerprint ?? '') && Array.isArray(plan.selected) && plan.selected.length <= 4 &&
-    plan.selected.every((item) => item && ids.has(item.id) && typeof item.version === 'string' && /^[0-9][0-9A-Za-z.+-]*$/.test(item.version))
-  const expected = new Map(plan?.selected?.map((item) => [item.id, item.version]))
-  const validResult = result?.version === 1 && result.fingerprint === plan?.fingerprint && result.state === 'succeeded' && Array.isArray(result.runtimes) &&
-    result.runtimes.length === expected.size && result.runtimes.every((item) => item && expected.get(item.id) === item.version && item.state === 'succeeded') &&
-    new Set(result.runtimes.map((item) => item.id)).size === expected.size
-  process.exit(validPlan && validResult ? 1 : 0)
+  if (!safePath(planPath)) process.exit(0)
+  try { lstatSync(planPath) } catch (error) { if (error?.code === 'ENOENT') process.exit(1); throw error }
+  if (!safePath(resultPath)) process.exit(0)
+  if (statSync(planPath).size > 65536) process.exit(0)
+  const plan = JSON.parse(readFileSync(planPath, 'utf8'))
+  if (!isRecord(plan) || plan.version !== 1 || !exactHex(plan.fingerprint) || !Array.isArray(plan.selected) || plan.selected.length > 4) process.exit(0)
+  const expected = new Map()
+  for (const item of plan.selected) {
+    if (!isRecord(item) || !['node', 'python', 'go', 'rust'].includes(item.id) || !exactVersion(item.version) || expected.has(item.id)) process.exit(0)
+    expected.set(item.id, item.version)
+  }
+  try { lstatSync(resultPath) } catch (error) { if (error?.code === 'ENOENT') process.exit(0); throw error }
+  if (statSync(resultPath).size > 65536) process.exit(0)
+  const result = JSON.parse(readFileSync(resultPath, 'utf8'))
+  const seen = new Set()
+  const validResult = isRecord(result) && result.version === 1 && result.fingerprint === plan.fingerprint && result.state === 'succeeded' &&
+    exactTime(result.updatedAt) && Array.isArray(result.runtimes) && result.runtimes.length === expected.size &&
+    result.runtimes.every((item) => isRecord(item) && typeof item.id === 'string' && !seen.has(item.id) && seen.add(item.id) &&
+      exactVersion(item.version) && expected.get(item.id) === item.version && item.state === 'succeeded')
+  process.exit(validResult ? 1 : 0)
 } catch {
   process.exit(0)
 }
