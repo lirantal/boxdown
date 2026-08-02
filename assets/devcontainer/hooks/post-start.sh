@@ -39,7 +39,7 @@ toolchains_need_bootstrap() {
 
   [[ -f "${plan_path}" && ! -L "${plan_path}" ]] || return 1
   [[ -f "${result_path}" && ! -L "${result_path}" ]] || return 0
-  "${BOXDOWN_PLAN_NODE:-node}" - "${plan_path}" "${result_path}" <<'NODE'
+  /usr/local/bin/node - "${plan_path}" "${result_path}" <<'NODE'
 const { lstatSync, readFileSync } = require('node:fs')
 try {
   for (const path of process.argv.slice(2)) if (lstatSync(path).isSymbolicLink()) process.exit(1)

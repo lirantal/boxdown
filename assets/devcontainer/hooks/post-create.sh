@@ -77,7 +77,7 @@ configure_toolchains() {
 
 run_deps_install() {
   if [[ -f "${BOXDOWN_CONTAINER_TOOLCHAIN_PLAN_PATH:-/opt/boxdown/state/toolchains/plan/plan.json}" ]] &&
-    node - "${BOXDOWN_CONTAINER_TOOLCHAIN_PLAN_PATH:-/opt/boxdown/state/toolchains/plan/plan.json}" <<'NODE'
+    /usr/local/bin/node - "${BOXDOWN_CONTAINER_TOOLCHAIN_PLAN_PATH:-/opt/boxdown/state/toolchains/plan/plan.json}" <<'NODE'
 const { readFileSync } = require('node:fs')
 const plan = JSON.parse(readFileSync(process.argv[2], 'utf8'))
 const ids = new Set(['node', 'python', 'go', 'rust'])

@@ -9,6 +9,7 @@ RESULTS_DIR="${BOXDOWN_CONTAINER_TOOLCHAIN_RESULTS_DIR:-/opt/boxdown/state/toolc
 # Default atomic target: /opt/boxdown/state/toolchain-results/result.json
 WORKSPACE_FOLDER="${BOXDOWN_CONTAINER_WORKSPACE_FOLDER:-$PWD}"
 BOXDOWN_TOOLCHAINS_HOME="${HOME}/.local/share/boxdown/toolchains"
+TOOLCHAINS_BASH_ENV="${BOXDOWN_TOOLCHAINS_HOME}/bash-env.sh"
 PLAN_NODE="${BOXDOWN_PLAN_NODE:-/usr/local/bin/node}"
 MISE_BIN='/usr/local/bin/mise'
 
@@ -146,10 +147,10 @@ ensure_ssh_login_path() {
     touch "${file}" || return 1
     grep -Fqx "${path_line}" "${file}" || printf '%s\n' "${path_line}" >> "${file}"
   done
-  if [[ -n "${BASH_ENV:-}" && "${BASH_ENV}" = /* && ! -L "${BASH_ENV}" ]]; then
-    touch "${BASH_ENV}" || return 1
-    grep -Fqx "${path_line}" "${BASH_ENV}" || printf '%s\n' "${path_line}" >> "${BASH_ENV}"
-  fi
+  [[ ! -L "${TOOLCHAINS_BASH_ENV}" ]] || return 1
+  touch "${TOOLCHAINS_BASH_ENV}" || return 1
+  chmod 0600 "${TOOLCHAINS_BASH_ENV}" || return 1
+  grep -Fqx "${path_line}" "${TOOLCHAINS_BASH_ENV}" || printf '%s\n' "${path_line}" >> "${TOOLCHAINS_BASH_ENV}"
 }
 
 remove_deselected_wrappers() {
@@ -215,7 +216,7 @@ run_python_sync() {
 sync_runtime() {
   local id="$1"
   case "${id}" in
-    node) (cd "${WORKSPACE_FOLDER}" && bash "${DEVCONTAINER_DIR}/utils/deps-install.sh") ;;
+    node) (cd "${WORKSPACE_FOLDER}" && BOXDOWN_DEPS_INSTALL_STRICT=1 bash "${DEVCONTAINER_DIR}/utils/deps-install.sh") ;;
     python) run_python_sync ;;
     go) (cd "${WORKSPACE_FOLDER}" && go mod download) ;;
     rust) (cd "${WORKSPACE_FOLDER}" && cargo fetch) ;;
@@ -237,7 +238,11 @@ main() {
     return 0
   fi
   fingerprint="${plan_records%%$'\n'*}"
-  plan_records="${plan_records#*$'\n'}"
+  if [[ "${plan_records}" == *$'\n'* ]]; then
+    plan_records="${plan_records#*$'\n'}"
+  else
+    plan_records=''
+  fi
 
   if [[ ! -d "${WORKSPACE_FOLDER}" || -L "${WORKSPACE_FOLDER}" ]]; then
     warn 'workspace path is unavailable or a symlink; retrying on the next container start.'

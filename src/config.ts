@@ -233,7 +233,7 @@ export function buildGeneratedDevcontainerConfig (
       BOXDOWN_CONTAINER_WORKSPACE_FOLDER: '/workspaces/${localWorkspaceFolderBasename}',
       BOXDOWN_WORKSPACE_BASENAME: '${localWorkspaceFolderBasename}',
       BOXDOWN_SECRET_ENV_DIR: BOXDOWN_CONTAINER_SECRET_ENV_DIR,
-      BASH_ENV: BOXDOWN_CONTAINER_SECRET_ENV_BOOTSTRAP,
+      BASH_ENV: `${BOXDOWN_CONTAINER_DEVCONTAINER_DIR}/utils/toolchains-env-bootstrap.sh`,
       DEVCONTAINER_SSH_PUBLIC_KEY_FILE: BOXDOWN_CONTAINER_SSH_PUBLIC_KEY_PATH,
       BOXDOWN_GIT_SIGNING_ENABLED: signing?.enabled === true ? '1' : '0',
       BOXDOWN_GIT_SIGNING_KEY_PATH: '/opt/boxdown/state/git-signing/signing-key.pub',

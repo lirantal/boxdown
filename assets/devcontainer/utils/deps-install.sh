@@ -6,7 +6,9 @@ main() {
   local pm
   pm=$(detect_package_manager)
   progress "Installing workspace dependencies with ${pm}"
-  install_dependencies "$pm" || true
+  if ! install_dependencies "$pm"; then
+    [[ "${BOXDOWN_DEPS_INSTALL_STRICT:-0}" == "1" ]] && return 1
+  fi
 }
 
 progress() {
