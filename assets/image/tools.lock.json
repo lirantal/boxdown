@@ -22,5 +22,17 @@
     "deferredPlatforms": [
       "arm64"
     ]
+  },
+  "mise": {
+    "artifacts": {
+      "amd64": {
+        "url": "https://github.com/jdx/mise/releases/download/v2026.7.13/mise-v2026.7.13-linux-x64",
+        "sha256": "47878bc295922c5f7ba4b7054cc372ce6ae730a1f12b0753c1cda2f04376eee2"
+      },
+      "arm64": {
+        "url": "https://github.com/jdx/mise/releases/download/v2026.7.13/mise-v2026.7.13-linux-arm64",
+        "sha256": "f115d1f911b8eed1bdc9d889d94ff6fdaf892131d573b5678914b2bcf14b2965"
+      }
+    }
   }
 }

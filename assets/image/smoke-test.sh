@@ -2,7 +2,7 @@
 
 set -euo pipefail
 
-for command in node git gh rg sshd codex claude snyk op; do
+for command in node git gh rg sshd codex claude snyk op mise; do
   command -v "${command}" >/dev/null
 done
 
@@ -18,3 +18,4 @@ codex --version
 claude --version
 snyk --version
 op --version
+mise --version

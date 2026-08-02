@@ -20,6 +20,7 @@ const imageNpmLockPath = fileURLToPath(new URL('../assets/image/npm/package-lock
 const nativeToolLockPath = fileURLToPath(new URL('../assets/image/tools.lock.json', import.meta.url))
 const imageSizeBudgetPath = fileURLToPath(new URL('../assets/image/image-size-budget.json', import.meta.url))
 const dockerfilePath = fileURLToPath(new URL('../assets/image/Dockerfile', import.meta.url))
+const imageSmokePath = fileURLToPath(new URL('../assets/image/smoke-test.sh', import.meta.url))
 const imageLifecycleSmokePath = fileURLToPath(new URL('../assets/image/lifecycle-smoke-test.sh', import.meta.url))
 const releaseWorkflowPath = fileURLToPath(new URL('../.github/workflows/release.yml', import.meta.url))
 const ciWorkflowPath = fileURLToPath(new URL('../.github/workflows/ci.yml', import.meta.url))
@@ -36,6 +37,7 @@ interface NativeToolLock {
   schemaVersion: number
   onepassword: { artifacts: Record<string, Artifact> }
   apm: { artifacts: Record<string, Artifact>, deferredPlatforms: string[] }
+  mise: { artifacts: Record<string, Artifact> }
 }
 
 function isExactVersion(version: string): boolean {
@@ -101,6 +103,28 @@ test('locks 1Password for both platforms and APM for AMD64 only', () => {
   assert.deepEqual(lock.apm.deferredPlatforms, ['arm64'])
 })
 
+test('locks verified mise artifacts for both release image architectures', () => {
+  const lock = JSON.parse(readFileSync(nativeToolLockPath, 'utf8')) as NativeToolLock
+
+  assert.deepEqual(Object.keys(lock.mise.artifacts).sort(), ['amd64', 'arm64'])
+  assert.match(lock.mise.artifacts.amd64.url, /mise-v2026\.7\.13-linux-x64$/)
+  assert.match(lock.mise.artifacts.arm64.url, /mise-v2026\.7\.13-linux-arm64$/)
+  for (const arch of ['amd64', 'arm64']) assertVersionedArtifact(lock.mise.artifacts[arch])
+})
+
+test('keeps required mise values ahead of deferred APM values in the installer transport', () => {
+  const installer = readFileSync(fileURLToPath(new URL('../assets/image/install-native-tools.sh', import.meta.url)), 'utf8')
+
+  assert.match(
+    installer,
+    /onepassword\.url,\s+onepassword\.sha256,\s+mise\.url,\s+mise\.sha256,\s+apmUrl,\s+apmSha256/
+  )
+  assert.match(
+    installer,
+    /read -r onepassword_url onepassword_sha256 mise_url mise_sha256 apm_url apm_sha256/
+  )
+})
+
 test('sets a 10 percent compressed image growth budget', () => {
   const budget = JSON.parse(readFileSync(imageSizeBudgetPath, 'utf8')) as {
     schemaVersion?: number
@@ -109,6 +133,8 @@ test('sets a 10 percent compressed image growth budget', () => {
     measurement?: {
       source?: string
       method?: string
+      baselineCompressedBytes?: number
+      miseCompressedBytes?: number
       platforms?: Record<string, number>
     }
   }
@@ -120,10 +146,20 @@ test('sets a 10 percent compressed image growth budget', () => {
   assert.equal(budget.allowedGrowthPercent, 10)
   assert.equal(budget.measurement?.source, 'current accepted Docker build')
   assert.match(budget.measurement?.method ?? '', /compressed layer bytes/i)
-  assert.deepEqual(
-    budget.compressedBytes,
-    Math.max(...Object.values(budget.measurement?.platforms ?? {}))
+  assert.deepEqual(Object.keys(budget.measurement?.platforms ?? {}), ['linux/amd64'])
+  const measuredBytes = Math.max(...Object.values(budget.measurement?.platforms ?? {}))
+  const baselineBytes = budget.measurement?.baselineCompressedBytes
+  const miseBytes = budget.measurement?.miseCompressedBytes
+
+  assert.equal(typeof baselineBytes, 'number')
+  assert.equal(typeof miseBytes, 'number')
+  assert.equal(miseBytes, measuredBytes - baselineBytes!)
+  const allowedBytes = baselineBytes! + Math.ceil(miseBytes! * (1 + budget.allowedGrowthPercent! / 100))
+  assert.equal(
+    Math.floor(budget.compressedBytes! * (1 + budget.allowedGrowthPercent! / 100)),
+    allowedBytes
   )
+  assert.equal(measuredBytes <= allowedBytes, true)
 })
 
 test('uses the pinned Node image and has no mutable installer or lazy tools', () => {
@@ -136,6 +172,24 @@ test('uses the pinned Node image and has no mutable installer or lazy tools', ()
   assert.doesNotMatch(dockerfile, /coding-agent-clis\/(?:codex|claude)\.stamp/)
   assert.doesNotMatch(dockerfile, /\b(latest|stable)\b/i)
   assert.doesNotMatch(dockerfile, /python3|pipx|\buv\b|opencode|antigravity/)
+})
+
+test('installs checked native tools before the final node user switch', () => {
+  const dockerfile = readFileSync(dockerfilePath, 'utf8')
+  const installerRun = /RUN chmod 0755[\s\S]*?&& \/opt\/boxdown\/image-tools\/install-native-tools\.sh \\\s+"\$TARGETARCH" \\\s+\/opt\/boxdown\/image-tools\/tools\.lock\.json/
+  const installerMatch = dockerfile.match(installerRun)
+
+  assert.notEqual(installerMatch, null)
+  assert.ok(installerMatch.index < dockerfile.lastIndexOf('USER node'))
+
+  const missingInstallerInvocation = dockerfile.replace(installerRun, 'RUN true')
+  assert.doesNotMatch(missingInstallerInvocation, installerRun)
+})
+
+test('smoke-tests the packaged mise binary', () => {
+  const smokeTest = readFileSync(imageSmokePath, 'utf8')
+
+  assert.match(smokeTest, /mise --version/)
 })
 
 test('creates the Claude credential mount parent for the node user', () => {

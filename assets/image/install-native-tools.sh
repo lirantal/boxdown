@@ -51,6 +51,7 @@ function artifact(tool, arch) {
 if (lock.schemaVersion !== 1) throw new Error('unsupported native tool lock schema')
 
 const onepassword = artifact('onepassword', architecture)
+const mise = artifact('mise', architecture)
 let apmUrl = ''
 let apmSha256 = ''
 
@@ -69,15 +70,21 @@ if (architecture === 'amd64') {
 process.stdout.write([
   onepassword.url,
   onepassword.sha256,
+  mise.url,
+  mise.sha256,
   apmUrl,
   apmSha256
 ].join('\t'))
 NODE
 )"
 
-IFS=$'\t' read -r onepassword_url onepassword_sha256 apm_url apm_sha256 <<<"${lock_values}"
+IFS=$'\t' read -r onepassword_url onepassword_sha256 mise_url mise_sha256 apm_url apm_sha256 <<<"${lock_values}"
 if [ -z "${onepassword_url}" ] || [ -z "${onepassword_sha256}" ]; then
   echo "native tool lock is missing required values" >&2
+  exit 2
+fi
+if [ -z "${mise_url}" ] || [ -z "${mise_sha256}" ]; then
+  echo "native tool lock is missing the mise artifact" >&2
   exit 2
 fi
 if [ "${architecture}" = "amd64" ] && { [ -z "${apm_url}" ] || [ -z "${apm_sha256}" ]; }; then
@@ -102,6 +109,10 @@ download_and_verify "${onepassword_url}" "${onepassword_sha256}" "${onepassword_
 unzip -Z1 "${onepassword_archive}" | grep -Fxq op
 unzip -p "${onepassword_archive}" op >"${temporary_directory}/op"
 install -m 0755 "${temporary_directory}/op" /usr/local/bin/op
+
+download_and_verify "${mise_url}" "${mise_sha256}" "${temporary_directory}/mise"
+install -m 0755 "${temporary_directory}/mise" /usr/local/bin/mise
+/usr/local/bin/mise --version
 
 if [ "${architecture}" = "amd64" ]; then
   apm_archive="${temporary_directory}/apm.tar.gz"
