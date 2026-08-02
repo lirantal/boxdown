@@ -4,7 +4,7 @@ import { once } from 'node:events'
 import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readlinkSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { createConnection, createServer } from 'node:net'
 import { tmpdir } from 'node:os'
-import { delimiter, join } from 'node:path'
+import { delimiter, join, relative } from 'node:path'
 import { PassThrough } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import { describe, test } from 'node:test'
@@ -15,7 +15,7 @@ import { codingAgentBinary, codingAgentFromCommand, type CodingAgentCli } from '
 import { AGENT_PROFILES, agentProfileMarker, isAgentProfile, parseAgentProfileMarker, resolveAgentProfile, type AgentProfile, type ContainerAgentProfile } from '../src/agent-profile.ts'
 import { color, formatPromptEnd, formatPromptTitle, promptRail, selectedMark } from '../src/cli-style.ts'
 import { buildGeneratedDevcontainerConfig, publishContainerPortFromConfig, readGeneratedAgentProfile, sourcePathIsInside, writeGeneratedDevcontainerConfig } from '../src/config.ts'
-import { BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_AGENTS_DIR, BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CLAUDE_CREDENTIALS_PATH, BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CODEX_AUTH_PATH, BOXDOWN_CONTAINER_AGENTS_DIR, BOXDOWN_CONTAINER_CLAUDE_CONFIG_PATH, BOXDOWN_CONTAINER_CLAUDE_CREDENTIALS_PATH, BOXDOWN_CONTAINER_CLAUDE_DIR, BOXDOWN_CONTAINER_CODEX_AUTH_PATH, BOXDOWN_CONTAINER_CODEX_DIR, BOXDOWN_CONTAINER_GITCONFIG_PATH, BOXDOWN_CONTAINER_HOST_GITCONFIG_DIR, BOXDOWN_CONTAINER_SECRET_ENV_BOOTSTRAP, BOXDOWN_CONTAINER_SECRET_ENV_DIR, DEVCONTAINER_CLI_VERSION } from '../src/constants.ts'
+import { BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_AGENTS_DIR, BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CLAUDE_CREDENTIALS_PATH, BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CODEX_AUTH_PATH, BOXDOWN_CONTAINER_AGENTS_DIR, BOXDOWN_CONTAINER_CLAUDE_CONFIG_PATH, BOXDOWN_CONTAINER_CLAUDE_CREDENTIALS_PATH, BOXDOWN_CONTAINER_CLAUDE_DIR, BOXDOWN_CONTAINER_CODEX_AUTH_PATH, BOXDOWN_CONTAINER_CODEX_DIR, BOXDOWN_CONTAINER_GITCONFIG_PATH, BOXDOWN_CONTAINER_HOST_GITCONFIG_DIR, BOXDOWN_CONTAINER_SECRET_ENV_BOOTSTRAP, BOXDOWN_CONTAINER_SECRET_ENV_DIR, BOXDOWN_CONTAINER_TOOLCHAIN_PLAN_PATH, BOXDOWN_CONTAINER_TOOLCHAIN_RESULTS_DIR, BOXDOWN_CONTAINER_TOOLCHAINS_DIR, DEVCONTAINER_CLI_VERSION } from '../src/constants.ts'
 import { codingAgentDevcontainerExecArgs, inspectContainerAgentProfile, isPublishedBoxdownImage, parseDockerInspectImage, sshdProxyDockerArgs, sshTunnelArgs, startDevcontainer } from '../src/devcontainer.ts'
 import { resolveDevcontainerCli } from '../src/devcontainer-cli.ts'
 import { doctorHasFailures, formatDoctorText, runDoctorChecks } from '../src/doctor.ts'
@@ -37,6 +37,8 @@ import { buildSshConfigBlock, defaultSshAlias, installSshConfig, removeSshConfig
 import { createStatusInfo, formatStatusText, inspectSshConfigStatus, parseDockerPsJsonLines, statusIsHealthy } from '../src/status.ts'
 import { ensureHostSshKey } from '../src/ssh-key.ts'
 import { resolveSetupToolchains } from '../src/setup-toolchains.ts'
+import { parseToolchainSelector, readToolchainPlan, resolveToolchainPlan, writeToolchainPlan } from '../src/toolchains/plan.ts'
+import type { ToolchainPlan } from '../src/toolchains/types.ts'
 
 const assetsDevcontainerDir = fileURLToPath(new URL('../assets/devcontainer', import.meta.url))
 const copiedAuthContainerProfile: ContainerAgentProfile = { profile: 'auth', mode: 'copy' }
@@ -45,6 +47,15 @@ const liveFullContainerProfile: ContainerAgentProfile = { profile: 'full', mode:
 
 function tempDir (name: string): string {
   return mkdtempSync(join(tmpdir(), `boxdown-${name}-`))
+}
+
+function toolchainPlanFor (context: ReturnType<typeof createWorkspaceContext>, selector = 'node'): ToolchainPlan {
+  return resolveToolchainPlan({
+    workspaceId: context.workspaceId,
+    detections: [],
+    selectors: [parseToolchainSelector(selector)],
+    selectionSource: 'cli'
+  })
 }
 
 function readGitConfig (configPath: string, key: string): string | undefined {
@@ -380,6 +391,176 @@ test('non-interactive setup toolchain detection does not write an implicit plan'
   assert.strictEqual(existsSync(context.toolchainPlanPath), false)
 })
 
+test('mounts a supplied toolchain plan read-only and result state read-write', () => {
+  const workspace = tempDir('toolchain-config-mounts')
+  const context = createWorkspaceContext({
+    workspace,
+    env: {HOME: workspace, BOXDOWN_DATA_HOME: join(workspace, 'data')},
+    assetsDevcontainerDir
+  })
+  const plan = toolchainPlanFor(context)
+
+  writeToolchainPlan(context, plan)
+
+  assert.ok(!buildGeneratedDevcontainerConfig(context).mounts?.some((mount) => mount.includes(BOXDOWN_CONTAINER_TOOLCHAINS_DIR)))
+
+  const config = buildGeneratedDevcontainerConfig(context, undefined, undefined, plan)
+  const planMount = `type=bind,source=${context.toolchainsDir},target=${BOXDOWN_CONTAINER_TOOLCHAINS_DIR}/plan,readonly`
+  assert.ok(config.mounts?.includes(planMount))
+  assert.ok(config.mounts?.includes(`type=bind,source=${context.toolchainResultDir},target=${BOXDOWN_CONTAINER_TOOLCHAIN_RESULTS_DIR}`))
+  assert.strictEqual(
+    join(`${BOXDOWN_CONTAINER_TOOLCHAINS_DIR}/plan`, relative(context.toolchainsDir, context.toolchainPlanPath)),
+    BOXDOWN_CONTAINER_TOOLCHAIN_PLAN_PATH
+  )
+})
+
+test('does not mount toolchain state for a legacy workspace or a none plan', () => {
+  const workspace = tempDir('toolchain-config-no-mounts')
+  const context = createWorkspaceContext({
+    workspace,
+    env: {HOME: workspace, BOXDOWN_DATA_HOME: join(workspace, 'data')},
+    assetsDevcontainerDir
+  })
+
+  assert.ok(!buildGeneratedDevcontainerConfig(context).mounts?.some((mount) => mount.includes(BOXDOWN_CONTAINER_TOOLCHAINS_DIR)))
+
+  const nonePlan = toolchainPlanFor(context, 'none')
+  writeToolchainPlan(context, nonePlan)
+  assert.ok(!buildGeneratedDevcontainerConfig(context, undefined, undefined, nonePlan).mounts?.some((mount) => mount.includes(BOXDOWN_CONTAINER_TOOLCHAINS_DIR)))
+})
+
+test('setup resolves explicit toolchain selectors before invoking the workspace setup', async () => {
+  const workspace = tempDir('setup-toolchain-cli')
+  const env = {
+    CI: '1',
+    BOXDOWN_CACHE_HOME: tempDir('setup-toolchain-cli-cache'),
+    BOXDOWN_DATA_HOME: tempDir('setup-toolchain-cli-data')
+  }
+  const context = createWorkspaceContext({workspace, env, assetsDevcontainerDir})
+  let setupCalled = false
+
+  const code = await withProcessEnv(env, async () => runCli([
+    'setup', '--workspace', workspace, '--toolchain', 'node@24.17.0'
+  ], {
+    env,
+    waitForContainerRuntime: async () => ({state: 'ready', mode: 'buildx', warnings: []}),
+    runDoctorChecks: async () => [],
+    setupWorkspace: async (receivedContext) => {
+      setupCalled = true
+      assert.strictEqual(receivedContext.toolchainPlanPath, context.toolchainPlanPath)
+      assert.deepStrictEqual(readToolchainPlan(receivedContext)?.selected.map((item) => [item.id, item.version]), [['node', '24.17.0']])
+    }
+  }))
+
+  assert.strictEqual(code, 0)
+  assert.strictEqual(setupCalled, true)
+})
+
+test('direct start preserves a stored plan and only writes explicit selectors', async () => {
+  const workspace = tempDir('start-toolchain-plan')
+  const env = {
+    CI: '1',
+    BOXDOWN_CACHE_HOME: tempDir('start-toolchain-plan-cache'),
+    BOXDOWN_DATA_HOME: tempDir('start-toolchain-plan-data')
+  }
+  const context = createWorkspaceContext({workspace, env, assetsDevcontainerDir})
+  const storedPlan = toolchainPlanFor(context)
+  writeToolchainPlan(context, storedPlan)
+  const startOptions = {
+    prepareContainerLifecycle: async () => {},
+    startDevcontainer: async () => 'toolchain-container',
+    printPortHint: async () => {},
+    openShell: async () => 0
+  }
+
+  const reusedCode = await withProcessEnv(env, async () => runCli(['start', '--workspace', workspace], {
+    env,
+    ...startOptions
+  }))
+  assert.strictEqual(reusedCode, 0)
+  assert.deepStrictEqual(readToolchainPlan(context), storedPlan)
+
+  const explicitCode = await withProcessEnv(env, async () => runCli([
+    'start', '--workspace', workspace, '--toolchain', 'go@1.27.0'
+  ], {
+    env,
+    ...startOptions
+  }))
+  assert.strictEqual(explicitCode, 0)
+  assert.deepStrictEqual(readToolchainPlan(context)?.selected.map((item) => [item.id, item.version]), [['go', '1.27.0']])
+})
+
+test('direct start rejects an unconfigured workspace without starting a container', async () => {
+  const workspace = tempDir('start-toolchain-unconfigured')
+  const env = {
+    CI: '1',
+    BOXDOWN_CACHE_HOME: tempDir('start-toolchain-unconfigured-cache'),
+    BOXDOWN_DATA_HOME: tempDir('start-toolchain-unconfigured-data')
+  }
+  let lifecycleCalled = false
+
+  const code = await withProcessEnv(env, async () => runCli(['start', '--workspace', workspace], {
+    env,
+    prepareContainerLifecycle: async () => { lifecycleCalled = true },
+    startDevcontainer: async () => 'unexpected-container',
+    printPortHint: async () => {},
+    openShell: async () => 0
+  }))
+
+  assert.strictEqual(code, 1)
+  assert.strictEqual(lifecycleCalled, false)
+})
+
+test('rejects incompatible setup toolchain selectors before preflight', async () => {
+  for (const toolchains of [
+    ['none', 'node'],
+    ['node@24.17.0', 'node@25.0.0']
+  ]) {
+    const workspace = tempDir(`setup-toolchain-invalid-${toolchains.join('-')}`)
+    const env = {
+      CI: '1',
+      BOXDOWN_CACHE_HOME: tempDir(`setup-toolchain-invalid-${toolchains.join('-')}-cache`),
+      BOXDOWN_DATA_HOME: tempDir(`setup-toolchain-invalid-${toolchains.join('-')}-data`)
+    }
+    let preflightCalled = false
+
+    const code = await withProcessEnv(env, async () => runCli([
+      'setup', '--workspace', workspace, ...toolchains.flatMap((toolchain) => ['--toolchain', toolchain])
+    ], {
+      env,
+      waitForContainerRuntime: async () => {
+        preflightCalled = true
+        return {state: 'ready', mode: 'buildx', warnings: []}
+      },
+      runDoctorChecks: async () => [],
+      setupWorkspace: async () => {}
+    }))
+
+    assert.strictEqual(code, 1, toolchains.join(', '))
+    assert.strictEqual(preflightCalled, false, toolchains.join(', '))
+  }
+})
+
+test('non-interactive setup without selectors leaves an unconfigured workspace untouched', async () => {
+  const workspace = tempDir('setup-toolchain-noninteractive')
+  const env = {
+    CI: '1',
+    BOXDOWN_CACHE_HOME: tempDir('setup-toolchain-noninteractive-cache'),
+    BOXDOWN_DATA_HOME: tempDir('setup-toolchain-noninteractive-data')
+  }
+  const context = createWorkspaceContext({workspace, env, assetsDevcontainerDir})
+
+  const code = await withProcessEnv(env, async () => runCli(['setup', '--workspace', workspace], {
+    env,
+    waitForContainerRuntime: async () => ({state: 'ready', mode: 'buildx', warnings: []}),
+    runDoctorChecks: async () => [],
+    setupWorkspace: async () => {}
+  }))
+
+  assert.strictEqual(code, 0)
+  assert.strictEqual(existsSync(context.toolchainPlanPath), false)
+})
+
 async function waitForPromptOutput (outputText: () => string, pattern: RegExp): Promise<void> {
   const deadline = Date.now() + 1000
 
@@ -498,6 +679,22 @@ describe('CLI parsing', () => {
       json: false,
       verbose: false
     })
+  })
+
+  test('parses repeatable toolchain selectors only for setup and start', () => {
+    assert.deepStrictEqual(
+      parseCliArgs(['setup', '--toolchain', 'node', '--toolchain', 'go@1.27.0']).toolchains,
+      ['node', 'go@1.27.0']
+    )
+    assert.deepStrictEqual(parseCliArgs(['start', '--toolchain', 'none']).toolchains, ['none'])
+    assert.throws(
+      () => parseCliArgs(['status', '--toolchain', 'node']),
+      /--toolchain is only supported with setup and start/
+    )
+    assert.throws(
+      () => parseCliArgs(['setup', '--toolchain', 'node@latest']),
+      /Unsupported toolchain selector: node@latest/
+    )
   })
 
   test('parses each agent profile on every container-creating command', () => {
@@ -875,6 +1072,7 @@ describe('CLI parsing', () => {
     assert.throws(() => parseCliArgs(['setup', '--agent-profile']), /--agent-profile requires a value/)
     assert.throws(() => parseCliArgs(['setup', '--agent-profile', 'other']), /Unsupported agent profile: other/)
     assert.throws(() => parseCliArgs(['setup', '--agent-profile', 'none', '--agent-profile', 'full']), /--agent-profile can only be provided once/)
+    assert.throws(() => parseCliArgs(['codex', '--toolchain', 'node']), /--toolchain is only supported with setup and start/)
 
     for (const command of [
       'status', 'list', 'stop', 'down', 'purge', 'doctor', 'ssh', 'ssh uninstall'
@@ -890,8 +1088,8 @@ describe('CLI parsing', () => {
     const usageLines = USAGE.split(/\r?\n/)
 
     assert.match(USAGE, /Commands:/)
-    assert.match(USAGE, /boxdown setup \[--workspace <path>\] \[--alias <name>\] \[--recreate\] \[--agent-profile <tier>\] \[--target <name>\]\.\.\. \[--verbose\]/)
-    assert.match(USAGE, /boxdown start \[--workspace <path>\] \[--recreate\] \[--agent-profile <tier>\] \[--verbose\]/)
+    assert.match(USAGE, /boxdown setup \[--workspace <path>\] \[--alias <name>\] \[--recreate\] \[--agent-profile <tier>\] \[--toolchain <selector>\]\.\.\. \[--target <name>\]\.\.\. \[--verbose\]/)
+    assert.match(USAGE, /boxdown start \[--workspace <path>\] \[--recreate\] \[--agent-profile <tier>\] \[--toolchain <selector>\]\.\.\. \[--verbose\]/)
     assert.match(USAGE, /boxdown codex \[--workspace <path>\] \[--recreate\] \[--agent-profile <tier>\] \[--verbose\] \[-- <codex args\.\.\.>\]/)
     assert.match(USAGE, /boxdown claude \[--workspace <path>\] \[--recreate\] \[--agent-profile <tier>\] \[--verbose\] \[-- <claude args\.\.\.>\]/)
     assert.match(USAGE, /boxdown opencode \[--workspace <path>\] \[--recreate\] \[--agent-profile <tier>\] \[--verbose\] \[-- <opencode args\.\.\.>\]/)
@@ -7506,6 +7704,88 @@ describe('progress output', () => {
           }
         )
       })
+    })
+  })
+
+  test('requires recreation when a stored toolchain plan is missing from an existing container intent', async () => {
+    const workspace = tempDir('toolchain-legacy-container-workspace')
+
+    await withFakeDocker([{ workspace, id: 'legacy-toolchain-container', agentProfileMarker: 'auth' }], async (_logPath, dockerEnv) => {
+      const env = {
+        ...dockerEnv,
+        BOXDOWN_CACHE_HOME: tempDir('toolchain-legacy-container-cache'),
+        BOXDOWN_DATA_HOME: tempDir('toolchain-legacy-container-data')
+      }
+      const context = createWorkspaceContext({workspace, env, assetsDevcontainerDir})
+      writeToolchainPlan(context, toolchainPlanFor(context))
+      mkdirSync(context.sshKeyDir, {recursive: true})
+      writeFileSync(context.sshKeyPath, 'test private key\n')
+      writeFileSync(context.sshPublicKeyPath, 'test public key\n')
+      writeGeneratedDevcontainerConfig(context, undefined, 'auth', null)
+
+      await withProcessEnv(env, async () => assert.rejects(
+        startDevcontainer(context, {reuseRunning: true, progress: createProgress({mode: 'none'})}),
+        /Toolchain plan is not active in this devcontainer\.\nRun `boxdown start --recreate`\./
+      ))
+    })
+  })
+
+  test('requires recreation when the stored toolchain mount has the wrong source, target, or access mode', async () => {
+    const workspace = tempDir('toolchain-invalid-mount-container-workspace')
+
+    for (const mount of [
+      `type=bind,source=/tmp/not-boxdown,target=${BOXDOWN_CONTAINER_TOOLCHAINS_DIR}/plan,readonly`,
+      `type=bind,source=/tmp/toolchains,target=${BOXDOWN_CONTAINER_TOOLCHAINS_DIR}/plan/nested,readonly`,
+      `type=bind,source=/tmp/toolchains,target=${BOXDOWN_CONTAINER_TOOLCHAINS_DIR}/plan`
+    ]) {
+      await withFakeDocker([{workspace, id: 'invalid-toolchain-container', agentProfileMarker: 'auth'}], async (_logPath, dockerEnv) => {
+        const env = {
+          ...dockerEnv,
+          BOXDOWN_CACHE_HOME: tempDir('toolchain-invalid-mount-container-cache'),
+          BOXDOWN_DATA_HOME: tempDir('toolchain-invalid-mount-container-data')
+        }
+        const context = createWorkspaceContext({workspace, env, assetsDevcontainerDir})
+        writeToolchainPlan(context, toolchainPlanFor(context))
+        mkdirSync(context.sshKeyDir, {recursive: true})
+        writeFileSync(context.sshKeyPath, 'test private key\n')
+        writeFileSync(context.sshPublicKeyPath, 'test public key\n')
+        mkdirSync(context.workspaceCacheDir, {recursive: true})
+        writeFileSync(context.generatedConfigPath, JSON.stringify({
+          mounts: [mount.replace('/tmp/toolchains', context.toolchainsDir)]
+        }))
+
+        await withProcessEnv(env, async () => assert.rejects(
+          startDevcontainer(context, {reuseRunning: true, progress: createProgress({mode: 'none'})}),
+          /Toolchain plan is not active in this devcontainer\.\nRun `boxdown start --recreate`\./
+        ))
+      })
+    }
+  })
+
+  test('allows a plan edit when the existing container already has toolchain mounts', async () => {
+    const workspace = tempDir('toolchain-mounted-container-workspace')
+
+    await withFakeDocker([{workspace, id: 'mounted-toolchain-container', agentProfileMarker: 'auth'}], async (_logPath, dockerEnv) => {
+      const env = {
+        ...dockerEnv,
+        BOXDOWN_CACHE_HOME: tempDir('toolchain-mounted-container-cache'),
+        BOXDOWN_DATA_HOME: tempDir('toolchain-mounted-container-data')
+      }
+      const context = createWorkspaceContext({workspace, env, assetsDevcontainerDir})
+      const initialPlan = toolchainPlanFor(context)
+      writeToolchainPlan(context, initialPlan)
+      mkdirSync(context.sshKeyDir, {recursive: true})
+      writeFileSync(context.sshKeyPath, 'test private key\n')
+      writeFileSync(context.sshPublicKeyPath, 'test public key\n')
+      writeGeneratedDevcontainerConfig(context, undefined, 'auth', initialPlan)
+      writeToolchainPlan(context, toolchainPlanFor(context, 'go@1.27.0'))
+
+      const containerId = await withProcessEnv(env, async () => startDevcontainer(context, {
+        reuseRunning: true,
+        progress: createProgress({mode: 'none'})
+      }))
+
+      assert.strictEqual(containerId, 'mounted-toolchain-container')
     })
   })
 })

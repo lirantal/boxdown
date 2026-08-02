@@ -20,7 +20,9 @@ import {
   BOXDOWN_CONTAINER_SECRET_ENV_BOOTSTRAP,
   BOXDOWN_CONTAINER_SECRET_ENV_DIR,
   BOXDOWN_CONTAINER_SSH_DIR,
-  BOXDOWN_CONTAINER_SSH_PUBLIC_KEY_PATH
+  BOXDOWN_CONTAINER_SSH_PUBLIC_KEY_PATH,
+  BOXDOWN_CONTAINER_TOOLCHAIN_RESULTS_DIR,
+  BOXDOWN_CONTAINER_TOOLCHAINS_DIR
 } from './constants.ts'
 import { DEFAULT_AGENT_PROFILE, isAgentProfile, type AgentProfile } from './agent-profile.ts'
 import {
@@ -33,6 +35,8 @@ import { parseJsonc } from './jsonc.ts'
 import type { WorkspaceContext } from './paths.ts'
 import type { GitSigningPlan } from './git-signing.ts'
 import { shellQuote } from './shell.ts'
+import { readToolchainPlan } from './toolchains/plan.ts'
+import type { ToolchainPlan } from './toolchains/types.ts'
 
 export interface DevcontainerConfig {
   name?: string
@@ -150,7 +154,12 @@ function agentProfileSources (context: WorkspaceContext, profile: AgentProfile):
   return sources
 }
 
-export function buildGeneratedDevcontainerConfig (context: WorkspaceContext, signing?: GitSigningPlan, agentProfile: AgentProfile = DEFAULT_AGENT_PROFILE): DevcontainerConfig {
+export function buildGeneratedDevcontainerConfig (
+  context: WorkspaceContext,
+  signing?: GitSigningPlan,
+  agentProfile: AgentProfile = DEFAULT_AGENT_PROFILE,
+  toolchainPlan: ToolchainPlan | null = null
+): DevcontainerConfig {
   const baseConfig = readBaseDevcontainerConfig(context.assetsDevcontainerDir)
   const mounts = Array.isArray(baseConfig.mounts)
     ? baseConfig.mounts
@@ -168,6 +177,13 @@ export function buildGeneratedDevcontainerConfig (context: WorkspaceContext, sig
   if (signing?.enabled === true && signing.agentSocketSource !== undefined) {
     boxdownMounts.push(`type=bind,source=${signing.agentSocketSource},target=/run/boxdown/ssh-agent.sock`)
     boxdownMounts.push(`type=bind,source=${context.gitSigningStateDir},target=/opt/boxdown/state/git-signing,readonly`)
+  }
+
+  if (toolchainPlan !== null && toolchainPlan.selected.length > 0) {
+    boxdownMounts.push(
+      `type=bind,source=${context.toolchainsDir},target=${BOXDOWN_CONTAINER_TOOLCHAINS_DIR}/plan,readonly`,
+      `type=bind,source=${context.toolchainResultDir},target=${BOXDOWN_CONTAINER_TOOLCHAIN_RESULTS_DIR}`
+    )
   }
 
   const availableAgentProfileSources = agentProfileSources(context, agentProfile)
@@ -241,11 +257,59 @@ export function buildGeneratedDevcontainerConfig (context: WorkspaceContext, sig
   }
 }
 
-export function writeGeneratedDevcontainerConfig (context: WorkspaceContext, signing?: GitSigningPlan, agentProfile?: AgentProfile): DevcontainerConfig {
-  const config = buildGeneratedDevcontainerConfig(context, signing, agentProfile)
+export function writeGeneratedDevcontainerConfig (
+  context: WorkspaceContext,
+  signing?: GitSigningPlan,
+  agentProfile?: AgentProfile,
+  toolchainPlan: ToolchainPlan | null = readToolchainPlan(context) ?? null
+): DevcontainerConfig {
+  const config = buildGeneratedDevcontainerConfig(context, signing, agentProfile, toolchainPlan)
   mkdirSync(context.workspaceCacheDir, { recursive: true })
   writeFileSync(context.generatedConfigPath, `${JSON.stringify(config, null, 2)}\n`)
   return config
+}
+
+function isExpectedToolchainPlanMount (mount: unknown, context: WorkspaceContext): boolean {
+  if (typeof mount !== 'string' || mount.includes('"') || mount.includes('\r') || mount.includes('\n')) {
+    return false
+  }
+
+  const fields = new Map<string, string>()
+  let readOnly = false
+  for (const field of mount.split(',')) {
+    if (field === 'readonly') {
+      if (readOnly) return false
+      readOnly = true
+      continue
+    }
+
+    const separator = field.indexOf('=')
+    if (separator <= 0) return false
+    const key = field.slice(0, separator)
+    const value = field.slice(separator + 1)
+    if (fields.has(key)) return false
+    fields.set(key, value)
+  }
+
+  return fields.size === 3 &&
+    fields.get('type') === 'bind' &&
+    fields.get('source') === context.toolchainsDir &&
+    fields.get('target') === `${BOXDOWN_CONTAINER_TOOLCHAINS_DIR}/plan` &&
+    readOnly
+}
+
+export function generatedConfigHasToolchainPlanMount (config: unknown, context: WorkspaceContext): boolean {
+  if (typeof config !== 'object' || config === null) return false
+  const mounts = (config as {mounts?: unknown}).mounts
+  return Array.isArray(mounts) && mounts.some((mount) => isExpectedToolchainPlanMount(mount, context))
+}
+
+export function readGeneratedToolchainPlanMount (context: WorkspaceContext): boolean {
+  try {
+    return generatedConfigHasToolchainPlanMount(parseJsonc<unknown>(readFileSync(context.generatedConfigPath, 'utf8')), context)
+  } catch {
+    return false
+  }
 }
 
 export function agentProfileFromDevcontainerConfig (config: unknown): AgentProfile | undefined {

@@ -16,9 +16,12 @@ import { createProgress, resolveProgressMode, type ProgressReporter, type Progre
 import { runBuffered } from './process.ts'
 import { createPurgePlan, formatPurgePlanDetails, formatPurgePlanText, purgeWorkspace, removeWorkspaceRuntimeState, type PurgePlan } from './purge.ts'
 import { resolveSetupAgentProfile } from './setup-agent-profile.ts'
+import { resolveSetupToolchains } from './setup-toolchains.ts'
 import { defaultSshAlias, installSshConfig, uninstallSshConfig, validateSshAlias } from './ssh-config.ts'
 import { dedupeSshInstallTargets, installSshInstallTarget, isSshConfigInstallTarget, SSH_INSTALL_TARGETS, sshInstallTargetFlagHintsText, supportedSshInstallTargetsText, uninstallSshInstallTarget, type SshConfigInstallTarget } from './ssh-install-targets.ts'
 import { createStatusInfo, formatStatusText, statusIsHealthy } from './status.ts'
+import { parseToolchainSelector, readToolchainPlan, resolveToolchainPlan } from './toolchains/plan.ts'
+import type { ToolchainSelector } from './toolchains/types.ts'
 import type { CliColor } from './cli-style.ts'
 
 export type BoxdownCommand =
@@ -48,6 +51,7 @@ export interface ParsedCli {
   workspaces?: string[]
   alias?: string
   targets?: SshConfigInstallTarget[]
+  toolchains?: string[]
   tunnelPorts?: TunnelPortForward[]
   recreate: boolean
   json: boolean
@@ -75,8 +79,8 @@ export interface RunCliOptions {
 }
 
 export const USAGE = `Usage:
-  boxdown setup [--workspace <path>] [--alias <name>] [--recreate] [--agent-profile <tier>] [--target <name>]... [--verbose]
-  boxdown start [--workspace <path>] [--recreate] [--agent-profile <tier>] [--verbose]
+  boxdown setup [--workspace <path>] [--alias <name>] [--recreate] [--agent-profile <tier>] [--toolchain <selector>]... [--target <name>]... [--verbose]
+  boxdown start [--workspace <path>] [--recreate] [--agent-profile <tier>] [--toolchain <selector>]... [--verbose]
   boxdown codex [--workspace <path>] [--recreate] [--agent-profile <tier>] [--verbose] [-- <codex args...>]
   boxdown claude [--workspace <path>] [--recreate] [--agent-profile <tier>] [--verbose] [-- <claude args...>]
   boxdown opencode [--workspace <path>] [--recreate] [--agent-profile <tier>] [--verbose] [-- <opencode args...>]
@@ -140,6 +144,10 @@ Options:
   --alias <name>      SSH host alias. Defaults to <repo-name>-devcontainer.
   --target <name>     Optional SSH integration target. Repeatable. Supported by
                       setup, ssh install, and ssh uninstall: codex, claude.
+  --toolchain <selector>
+                      Select a workspace toolchain. Repeatable. Supported by
+                      setup and start: auto, none, node, python, go, rust, or
+                      a runtime with an explicit version such as go@1.27.0.
   --port <port>       Tunnel a local port to the same remote port, or use
                       <local:remote>. Repeatable. Supported by tunnel.
   --recreate          Remove the existing devcontainer before starting.
@@ -185,6 +193,7 @@ export function parseCliArgs (argv: string[]): ParsedCli {
   let alias: string | undefined
   let agentProfile: AgentProfile | undefined
   const targets: SshConfigInstallTarget[] = []
+  const toolchains: string[] = []
   const tunnelPorts: TunnelPortForward[] = []
   let recreate = false
   let json = false
@@ -225,6 +234,12 @@ export function parseCliArgs (argv: string[]): ParsedCli {
       throw new Error('--target is only supported with setup, ssh install, and ssh uninstall')
     }
 
+    if (toolchains.length > 0 && command !== 'setup' && command !== 'start') {
+      throw new Error('--toolchain is only supported with setup and start')
+    }
+
+    for (const toolchain of toolchains) parseToolchainSelector(toolchain)
+
     if (tunnelPorts.length > 0 && command !== 'tunnel') {
       throw new Error('--port is only supported with tunnel')
     }
@@ -244,6 +259,7 @@ export function parseCliArgs (argv: string[]): ParsedCli {
       ...workspaceFields(command),
       alias,
       ...(parsedTargets.length === 0 ? {} : { targets: parsedTargets }),
+      ...(toolchains.length === 0 ? {} : { toolchains: [...toolchains] }),
       ...(tunnelPorts.length === 0 ? {} : { tunnelPorts }),
       ...(agentProfile === undefined ? {} : { agentProfile }),
       recreate,
@@ -268,6 +284,10 @@ export function parseCliArgs (argv: string[]): ParsedCli {
 
     if (targets.length > 0) {
       throw new Error('--target is only supported with setup, ssh install, and ssh uninstall')
+    }
+
+    if (toolchains.length > 0) {
+      throw new Error('--toolchain is only supported with setup and start')
     }
 
     if (tunnelPorts.length > 0) {
@@ -327,6 +347,15 @@ export function parseCliArgs (argv: string[]): ParsedCli {
       }
 
       targets.push(value)
+      continue
+    }
+
+    if (arg === '--toolchain') {
+      const value = args.shift()
+      if (value === undefined) {
+        throw new Error('--toolchain requires a value')
+      }
+      toolchains.push(value)
       continue
     }
 
@@ -525,6 +554,20 @@ export function parseTunnelPortList (value: string): TunnelPortForward[] {
   }
 
   return tokens.map((token) => parseTunnelPort(token))
+}
+
+function validateCliToolchainSelectors (
+  context: WorkspaceContext,
+  toolchains: readonly string[]
+): ToolchainSelector[] {
+  const selectors = toolchains.map(parseToolchainSelector)
+  resolveToolchainPlan({
+    workspaceId: context.workspaceId,
+    detections: [],
+    selectors,
+    selectionSource: 'cli'
+  })
+  return selectors
 }
 
 interface ResolvedDownWorkspaces {
@@ -1354,6 +1397,16 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
     const aliasSource = parsed.alias === undefined ? 'default' : 'provided'
     const recordedMetadata = readWorkspaceMetadata(context)
     const agentProfile = resolveAgentProfile(parsed.agentProfile, recordedMetadata?.agentProfile)
+    const explicitToolchainSelectors = parsed.toolchains === undefined
+      ? undefined
+      : validateCliToolchainSelectors(context, parsed.toolchains)
+    const storedToolchainPlan = parsed.command === 'start' && explicitToolchainSelectors === undefined
+      ? readToolchainPlan(context)
+      : undefined
+
+    if (parsed.command === 'start' && explicitToolchainSelectors === undefined && storedToolchainPlan === undefined) {
+      throw new Error('No workspace toolchain plan is configured. Run `boxdown setup` or pass `--toolchain <selector>` to start.')
+    }
 
     if (parsed.command === 'ssh-install') {
       const resolvedTargets = await resolveSshInstallTargets(parsed, options)
@@ -1427,6 +1480,13 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
 
     if (parsed.command === 'setup') {
       await runSetupPreflight(context, alias, parsed, options)
+      await resolveSetupToolchains({
+        context,
+        selectors: explicitToolchainSelectors ?? [],
+        input: options.promptInput,
+        output: options.promptOutput,
+        env: options.env
+      })
       const resolvedTargets = await resolveSshInstallTargets(parsed, options)
 
       if (resolvedTargets.cancelled) {
@@ -1632,6 +1692,16 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
     const start = options.startDevcontainer ?? startDevcontainer
     const printPort = options.printPortHint ?? printPortHint
     const shell = options.openShell ?? openShell
+
+    if (explicitToolchainSelectors !== undefined) {
+      await resolveSetupToolchains({
+        context,
+        selectors: explicitToolchainSelectors,
+        input: options.promptInput,
+        output: options.promptOutput,
+        env: options.env
+      })
+    }
 
     return runLoggedLifecycle(context, 'start', argv, async (logger) => {
       const progress = createCliProgress(parsed, 'stdout', { env: options.env })

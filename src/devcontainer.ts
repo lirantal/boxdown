@@ -1,7 +1,7 @@
 import {
   BOXDOWN_CONTAINER_DEVCONTAINER_DIR
 } from './constants.ts'
-import { buildGeneratedDevcontainerConfig, publishContainerPortFromConfig, readGeneratedAgentProfile, writeGeneratedDevcontainerConfig } from './config.ts'
+import { buildGeneratedDevcontainerConfig, publishContainerPortFromConfig, readGeneratedAgentProfile, readGeneratedToolchainPlanMount, writeGeneratedDevcontainerConfig } from './config.ts'
 import { codingAgentBinary, type CodingAgentCli } from './coding-agents.ts'
 import { resolveDevcontainerCli } from './devcontainer-cli.ts'
 import { configureWorkspaceGithubGitAuth } from './github-git-auth.ts'
@@ -15,6 +15,7 @@ import { interactiveCommandScript, interactiveShellEnvArgs, interactiveShellScri
 import { ensureHostSshKey } from './ssh-key.ts'
 import { containerProfileMatches, type ContainerSummary, parseDockerPsJsonLines } from './status.ts'
 import { DEFAULT_AGENT_PROFILE, parseAgentProfileMarker, type AgentProfile, type ContainerAgentProfile } from './agent-profile.ts'
+import { readToolchainPlan } from './toolchains/plan.ts'
 
 export interface StartOptions {
   agentProfile?: AgentProfile
@@ -310,6 +311,10 @@ function agentProfileMismatchMessage (agentProfile: AgentProfile): string {
   return `Agent profile ${agentProfile} is not active in this devcontainer.\nRun \`boxdown start --recreate --agent-profile ${agentProfile}\`.`
 }
 
+function toolchainPlanMismatchMessage (): string {
+  return 'Toolchain plan is not active in this devcontainer.\nRun `boxdown start --recreate`.'
+}
+
 export async function assertContainerAgentProfile (
   containerId: string,
   agentProfile: AgentProfile,
@@ -325,6 +330,7 @@ export async function assertContainerAgentProfile (
 
 export async function startDevcontainer (context: WorkspaceContext, options: StartOptions = {}): Promise<string> {
   const agentProfile = options.agentProfile ?? DEFAULT_AGENT_PROFILE
+  const toolchainPlan = readToolchainPlan(context)
   const progress = options.progress
   const proxyMode = options.proxyMode ?? false
   const hasSshIdentityStep = progress?.hasStep('ssh-identity') === true
@@ -357,6 +363,10 @@ export async function startDevcontainer (context: WorkspaceContext, options: Sta
     : await findWorkspaceContainer(context, { logger: options.logger })
   const priorGeneratedAgentProfile = readGeneratedAgentProfile(context)
   if (existingContainer !== undefined) {
+    if (toolchainPlan !== undefined && toolchainPlan.selected.length > 0 && !readGeneratedToolchainPlanMount(context)) {
+      throw new Error(toolchainPlanMismatchMessage())
+    }
+
     const runningAgentProfile = existingContainer.state?.toLowerCase() === 'running'
       ? await inspectContainerAgentProfile(existingContainer.id, { logger: options.logger })
       : undefined
@@ -389,7 +399,7 @@ export async function startDevcontainer (context: WorkspaceContext, options: Sta
             }
           })
     })
-    writeGeneratedDevcontainerConfig(context, signingPlan, agentProfile)
+    writeGeneratedDevcontainerConfig(context, signingPlan, agentProfile, toolchainPlan ?? null)
     if (hasConfigStep) {
       progress?.completeStep('devcontainer-config')
     }
