@@ -56,7 +56,9 @@ export async function resolveSetupToolchains (options: {
       label: TOOLCHAIN_DEFAULTS[detection.id].label,
       description: descriptionFor(detection)
     })),
-    initialValues: detected.map((detection) => detection.id),
+    initialValues: detected
+      .filter((detection) => resolveDetectedVersion(detection).kind === 'resolved')
+      .map((detection) => detection.id),
     skipLabel: 'No toolchains',
     summaryLabel: 'Toolchains',
     input,

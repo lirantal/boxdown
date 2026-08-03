@@ -96,6 +96,18 @@ function resolvedFromRuntimeSelector (
     }
   }
 
+  if (detected?.kind === 'incompatible-default') {
+    throw new Error(
+      `Cannot automatically resolve ${TOOLCHAIN_DEFAULTS[id].label}: Boxdown default ${detected.defaultVersion} is incompatible with project constraint ${detected.constraint}. Pass --toolchain ${id}@<version>.`
+    )
+  }
+
+  if (detected?.kind === 'unchecked') {
+    throw new Error(
+      `Cannot automatically resolve ${TOOLCHAIN_DEFAULTS[id].label} because its project declaration needs review. Pass --toolchain ${id}@<version>.`
+    )
+  }
+
   return {
     id,
     version: TOOLCHAIN_DEFAULTS[id].version,

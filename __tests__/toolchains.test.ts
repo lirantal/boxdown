@@ -698,6 +698,28 @@ test('auto selects only resolvable detections and fingerprints plans determinist
   assert.strictEqual(first.fingerprint, second.fingerprint)
 })
 
+test('bare runtime selectors do not replace incompatible or unresolved declarations with defaults', () => {
+  for (const detection of [
+    {
+      id: 'python' as const,
+      constraint: '<3.12',
+      evidence: [{path: 'pyproject.toml', source: 'requires-python', value: '<3.12', exact: false}]
+    },
+    {
+      id: 'python' as const,
+      evidence: [{path: 'pyproject.toml', source: 'requires-python', value: '>=3.11 || <3.9', exact: false}],
+      diagnostics: [{path: 'pyproject.toml', source: 'requires-python', message: 'Unsupported Python constraint'}]
+    }
+  ]) {
+    assert.throws(() => resolveToolchainPlan({
+      workspaceId: 'workspace-id',
+      detections: [detection],
+      selectors: [parseToolchainSelector('python')],
+      selectionSource: 'cli'
+    }), /Cannot automatically resolve Python.*python@<version>/)
+  }
+})
+
 test('rejects conflicting explicit versions for one runtime', () => {
   assert.throws(() => resolveToolchainPlan({
     workspaceId: 'workspace-id',

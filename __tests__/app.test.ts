@@ -372,6 +372,33 @@ test('setup toolchain selection preselects detected runtimes and persists the ch
   assert.match(outputText(), /\u001B\[32m■\u001B\[0m/)
 })
 
+test('setup toolchain selection leaves incompatible and unresolved detections unchecked', async () => {
+  const workspace = tempDir('setup-toolchains-unchecked-detections')
+  const context = createWorkspaceContext({
+    workspace,
+    env: {HOME: workspace, BOXDOWN_DATA_HOME: join(workspace, 'data')}
+  })
+  const {input, output, outputText} = fakePromptStreams()
+  writeFileSync(join(workspace, '.nvmrc'), '24.17.0\n')
+  writeFileSync(join(workspace, 'pyproject.toml'), '[project]\nrequires-python = "<3.12"\n')
+  writeFileSync(join(workspace, 'go.mod'), 'module example.com/app\n\ngo bananas\n')
+
+  const resultPromise = resolveSetupToolchains({
+    context,
+    selectors: [],
+    input,
+    output,
+    env: {CI: 'false'}
+  })
+
+  input.write('\r')
+  const result = await resultPromise
+
+  assert.deepStrictEqual(result.plan?.selected.map(item => item.id), ['node'])
+  assert.match(outputText(), /Boxdown default 3\.14\.6 is incompatible with <3\.12/)
+  assert.match(outputText(), /version needs review before automatic selection/)
+})
+
 test('non-interactive setup toolchain detection does not write an implicit plan', async () => {
   const workspace = tempDir('setup-toolchains-non-interactive')
   const context = createWorkspaceContext({
@@ -524,6 +551,27 @@ test('direct start rejects an unconfigured workspace without starting a containe
     startDevcontainer: async () => 'unexpected-container',
     printPortHint: async () => {},
     openShell: async () => 0
+  }))
+
+  assert.strictEqual(code, 1)
+  assert.strictEqual(lifecycleCalled, false)
+})
+
+test('direct coding-agent launch rejects an unconfigured workspace before container lifecycle', async () => {
+  const workspace = tempDir('coding-agent-toolchain-unconfigured')
+  const env = {
+    CI: '1',
+    BOXDOWN_CACHE_HOME: tempDir('coding-agent-toolchain-unconfigured-cache'),
+    BOXDOWN_DATA_HOME: tempDir('coding-agent-toolchain-unconfigured-data')
+  }
+  let lifecycleCalled = false
+
+  const code = await withProcessEnv(env, async () => runCli(['codex', '--workspace', workspace], {
+    env,
+    prepareContainerLifecycle: async () => { lifecycleCalled = true },
+    startDevcontainer: async () => 'unexpected-container',
+    ensureContainerCodingAgentCli: async () => {},
+    openCodingAgentCli: async () => 0
   }))
 
   assert.strictEqual(code, 1)
@@ -2157,6 +2205,8 @@ describe('CLI execution', () => {
       }
     }))
 
+    await waitForPromptOutput(outputText, /Select workspace toolchains\?/)
+    input.write('\r')
     await waitForPromptOutput(
       outputText,
       /How much host agent data should Boxdown use in the container\?/
@@ -2191,6 +2241,8 @@ describe('CLI execution', () => {
       }
     }))
 
+    await waitForPromptOutput(outputText, /Select workspace toolchains\?/)
+    input.write('\r')
     await waitForPromptOutput(outputText, /Add this project to an AI coding app/)
     input.write('\u001B[A\u001B[A \r')
     await waitForPromptOutput(outputText, /How much host agent data should Boxdown use/)
@@ -2233,6 +2285,8 @@ describe('CLI execution', () => {
         }
       }))
 
+      await waitForPromptOutput(outputText, /Select workspace toolchains\?/)
+      input.write('\r')
       await waitForPromptOutput(outputText, /Add this project to an AI coding app/)
       input.write('\r')
 
@@ -2267,12 +2321,14 @@ describe('CLI execution', () => {
       }
     }))
 
+    await waitForPromptOutput(outputText, /Select workspace toolchains\?/)
+    input.write('\r')
     await waitForPromptOutput(outputText, /Add this project to an AI coding app/)
     input.write('\u0003')
 
     assert.strictEqual(await runPromise, 1)
     assert.strictEqual(setupCalls, 0)
-    assert.strictEqual(existsSync(context.workspaceDataDir), false)
+    assert.deepStrictEqual(readToolchainPlan(context)?.selected, [])
     assert.strictEqual(existsSync(context.generatedConfigPath), false)
     assert.doesNotMatch(outputText(), /How much host agent data should Boxdown use/)
   })
@@ -2301,6 +2357,8 @@ describe('CLI execution', () => {
       }
     }))
 
+    await waitForPromptOutput(outputText, /Select workspace toolchains\?/)
+    input.write('\r')
     await waitForPromptOutput(outputText, /How much host agent data should Boxdown use/)
     input.write('\r')
 
@@ -2335,6 +2393,8 @@ describe('CLI execution', () => {
       }
     }))
 
+    await waitForPromptOutput(outputText, /Select workspace toolchains\?/)
+    input.write('\r')
     await waitForPromptOutput(outputText, /How much host agent data should Boxdown use/)
     input.write('\u0003')
 
@@ -2451,6 +2511,7 @@ describe('CLI execution', () => {
     const calls: string[] = []
 
     writeWorkspaceMetadata(context, 'agent-profile-devcontainer', undefined, 'full')
+    writeToolchainPlan(context, toolchainPlanFor(context, 'none'))
 
     const code = await withProcessEnv(env, async () => runCli([
       'start', '--workspace', workspace, '--agent-profile', 'none'
@@ -2508,6 +2569,9 @@ describe('CLI execution', () => {
 
       if (entry.recorded !== undefined) {
         writeWorkspaceMetadata(context, 'recorded-profile-devcontainer', undefined, entry.recorded)
+      }
+      if (['start', 'shell', 'codex', 'claude', 'cc', 'opencode', 'antigravity'].includes(entry.argv[0] ?? '')) {
+        writeToolchainPlan(context, toolchainPlanFor(context, 'none'))
       }
 
       const argv = [
@@ -2608,6 +2672,10 @@ describe('CLI execution', () => {
       const cacheHome = tempDir(`lifecycle-gate-${entry.name.replaceAll(' ', '-')}-cache`)
       const env = { CI: '1', BOXDOWN_DATA_HOME: dataHome, BOXDOWN_CACHE_HOME: cacheHome }
       const calls: string[] = []
+      const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+      if (['start', 'shell', 'codex', 'claude', 'cc', 'opencode', 'antigravity'].includes(entry.argv[0] ?? '')) {
+        writeToolchainPlan(context, toolchainPlanFor(context, 'none'))
+      }
 
       const expectedError = `blocked at lifecycle gate: ${entry.name}`
       await assert.rejects(withProcessEnv(env, async () => runCli([
@@ -2629,7 +2697,6 @@ describe('CLI execution', () => {
         return true
       })
 
-      const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
       assert.deepStrictEqual(calls, ['gate'], entry.name)
       assert.strictEqual(existsSync(workspaceMetadataPath(context)), false, entry.name)
       assert.strictEqual(existsSync(context.generatedConfigPath), false, entry.name)
@@ -2656,8 +2723,10 @@ describe('CLI execution', () => {
         BOXDOWN_DATA_HOME: tempDir('direct-reuse-' + entry.argv[0] + '-data')
       }
       const calls: string[] = []
+      const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+      writeToolchainPlan(context, toolchainPlanFor(context, 'none'))
 
-      const code = await runCli([...entry.argv, '--workspace', workspace], {
+      const code = await withProcessEnv(env, async () => runCli([...entry.argv, '--workspace', workspace], {
         env,
         prepareContainerLifecycle: async () => { calls.push('lifecycle') },
         startDevcontainer: async (_context, startOptions) => {
@@ -2682,7 +2751,7 @@ describe('CLI execution', () => {
                 return 0
               }
             })
-      })
+      }))
 
       assert.strictEqual(code, 0)
       assert.deepStrictEqual(
@@ -2708,8 +2777,10 @@ describe('CLI execution', () => {
         BOXDOWN_DATA_HOME: tempDir('direct-recreate-' + entry.argv[0] + '-data')
       }
       const calls: string[] = []
+      const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+      writeToolchainPlan(context, toolchainPlanFor(context, 'none'))
 
-      const code = await runCli([...entry.argv, '--workspace', workspace], {
+      const code = await withProcessEnv(env, async () => runCli([...entry.argv, '--workspace', workspace], {
         env,
         prepareContainerLifecycle: async () => { calls.push('lifecycle') },
         startDevcontainer: async (_context, startOptions) => {
@@ -2734,7 +2805,7 @@ describe('CLI execution', () => {
                 return 0
               }
             })
-      })
+      }))
 
       assert.strictEqual(code, 0)
       assert.deepStrictEqual(

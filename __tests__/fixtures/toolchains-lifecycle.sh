@@ -57,7 +57,8 @@ FAKE_MISE
 make_bootstrap() {
   local target="$1" mise="$2"
   mkdir -p "$(dirname "${target}")"
-  sed -e "s#/usr/local/bin/node#${NODE_BIN}#g" -e "s#/usr/local/bin/mise#${mise}#g" \
+  sed -e "s#/usr/local/bin/node#${NODE_BIN}#g" \
+    -e "s#MISE_NO_CONFIG=1 /usr/local/bin/mise#MISE_NO_CONFIG=1 ${mise}#g" \
     "${ORIGINAL_BOOTSTRAP}" > "${target}"
   cp "${DEVCONTAINER_DIR}/utils/deps-install.sh" "$(dirname "${target}")/deps-install.sh"
   chmod 0755 "${target}"
@@ -304,13 +305,6 @@ export MISE_STATE_DIR='${home}/.local/share/boxdown/toolchains/state'
 exec /tmp/not-mise --no-config exec 'node@${node_version}' -- 'corepack' "\$@"
 USER_WRAPPER
   chmod 0755 "${home}/.local/bin/corepack"
-  local command temporary
-  for command in node npm npx; do
-    temporary="${home}/.local/bin/.${command}.literal-mise"
-    sed "s#${mise}#/usr/local/bin/mise#g" "${home}/.local/bin/${command}" > "${temporary}"
-    mv -f "${temporary}" "${home}/.local/bin/${command}"
-  done
-
   write_plan "${plan}" '[{"id":"node","version":"1.2.3"}]'
   MISE_FAIL_INSTALL=1 run_bootstrap "${bootstrap}" "${home}" "${plan}" "${results}" "${workspace}" "${log}"
   [[ ! -e "${home}/.local/bin/node" && ! -e "${home}/.local/bin/npm" && ! -e "${home}/.local/bin/npx" ]] ||

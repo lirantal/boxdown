@@ -1400,12 +1400,15 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
     const explicitToolchainSelectors = parsed.toolchains === undefined
       ? undefined
       : validateCliToolchainSelectors(context, parsed.toolchains)
-    const storedToolchainPlan = parsed.command === 'start' && explicitToolchainSelectors === undefined
+    const requiresStoredToolchainPlan = parsed.command === 'start' || parsed.command === 'coding-agent'
+    const storedToolchainPlan = requiresStoredToolchainPlan && explicitToolchainSelectors === undefined
       ? readToolchainPlan(context)
       : undefined
 
-    if (parsed.command === 'start' && explicitToolchainSelectors === undefined && storedToolchainPlan === undefined) {
-      throw new Error('No workspace toolchain plan is configured. Run `boxdown setup` or pass `--toolchain <selector>` to start.')
+    if (requiresStoredToolchainPlan && explicitToolchainSelectors === undefined && storedToolchainPlan === undefined) {
+      throw new Error(parsed.command === 'coding-agent'
+        ? 'No workspace toolchain plan is configured. Run `boxdown setup` before launching a coding agent.'
+        : 'No workspace toolchain plan is configured. Run `boxdown setup` or pass `--toolchain <selector>` to start.')
     }
 
     if (parsed.command === 'ssh-install') {
