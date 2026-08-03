@@ -291,14 +291,30 @@ test_owned_wrappers() {
   write_plan "${plan}" "[{\"id\":\"node\",\"version\":\"$(${NODE_BIN} --version | sed 's/^v//')\"}]"
   run_bootstrap "${bootstrap}" "${home}" "${plan}" "${results}" "${workspace}" "${log}"
   grep -Fqx '# boxdown-toolchain-wrapper-v1' "${home}/.local/bin/node" || fail 'successful runtime did not create an owned node wrapper'
-  printf '#!/usr/bin/env bash\nprintf user-corepack\n' > "${home}/.local/bin/corepack"
+  cat > "${home}/.local/bin/corepack" <<'USER_WRAPPER'
+#!/usr/bin/env bash
+# boxdown-toolchain-wrapper-v1
+export MISE_NO_CONFIG=1
+export MISE_DATA_DIR='user-data'
+export MISE_CACHE_DIR='user-cache'
+export MISE_CONFIG_DIR='user-config'
+export MISE_STATE_DIR='user-state'
+exec /tmp/not-mise --no-config exec 'node@24.17.0' -- 'corepack' "$@"
+USER_WRAPPER
   chmod 0755 "${home}/.local/bin/corepack"
+  local command temporary
+  for command in node npm npx; do
+    temporary="${home}/.local/bin/.${command}.literal-mise"
+    sed "s#${mise}#/usr/local/bin/mise#g" "${home}/.local/bin/${command}" > "${temporary}"
+    mv -f "${temporary}" "${home}/.local/bin/${command}"
+  done
 
   write_plan "${plan}" '[{"id":"node","version":"1.2.3"}]'
   MISE_FAIL_INSTALL=1 run_bootstrap "${bootstrap}" "${home}" "${plan}" "${results}" "${workspace}" "${log}"
   [[ ! -e "${home}/.local/bin/node" && ! -e "${home}/.local/bin/npm" && ! -e "${home}/.local/bin/npx" ]] ||
     fail 'failed runtime install retained stale Boxdown-owned wrappers'
-  assert_file_equals "${home}/.local/bin/corepack" $'#!/usr/bin/env bash\nprintf user-corepack'
+  [[ -e "${home}/.local/bin/corepack" ]] ||
+    fail 'failed runtime install removed a marker-bearing user wrapper with a non-mise executable'
   assert_json "${results}/result.json" 'value.state === "failed" && value.runtimes[0].message === "mise install failed"'
 }
 

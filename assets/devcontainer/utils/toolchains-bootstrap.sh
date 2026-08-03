@@ -162,7 +162,29 @@ is_owned_wrapper() {
 is_owned_runtime_wrapper() {
   local target="$1" runtime="$2" command="$3"
   is_owned_wrapper "${target}" || return 1
-  grep -Eq "^exec [^[:space:]]+ --no-config exec '${runtime}@[0-9A-Za-z.+-]+' -- '${command}' \"\\\$@\"$" "${target}"
+  awk \
+    -v marker="${WRAPPER_MARKER}" \
+    -v data_dir="${MISE_DATA_DIR}" \
+    -v cache_dir="${MISE_CACHE_DIR}" \
+    -v config_dir="${MISE_CONFIG_DIR}" \
+    -v state_dir="${MISE_STATE_DIR}" \
+    -v runtime="${runtime}" \
+    -v command="${command}" '
+      BEGIN { valid = 1 }
+      NR == 1 { valid = valid && $0 == "#!/usr/bin/env bash"; next }
+      NR == 2 { valid = valid && $0 == marker; next }
+      NR == 3 { valid = valid && $0 == "export MISE_NO_CONFIG=1"; next }
+      NR == 4 { valid = valid && $0 == "export MISE_DATA_DIR='\''" data_dir "'\''"; next }
+      NR == 5 { valid = valid && $0 == "export MISE_CACHE_DIR='\''" cache_dir "'\''"; next }
+      NR == 6 { valid = valid && $0 == "export MISE_CONFIG_DIR='\''" config_dir "'\''"; next }
+      NR == 7 { valid = valid && $0 == "export MISE_STATE_DIR='\''" state_dir "'\''"; next }
+      NR == 8 {
+        valid = valid && $0 ~ ("^exec /usr/local/bin/mise --no-config exec '\''" runtime "@[0-9A-Za-z.+-]+'\'' -- '\''" command "'\'' \\\"\\$@\\\"$")
+        next
+      }
+      { valid = 0 }
+      END { exit !(valid && NR == 8) }
+    ' "${target}"
 }
 
 write_wrapper() {
