@@ -140,10 +140,35 @@ test_post_create_dispatch() {
   DEVCONTAINER_DIR="${dev}" BOXDOWN_CONTAINER_TOOLCHAIN_PLAN_PATH="${plan}" \
     bash -c 'source "$1"; run_deps_install "$2"' _ "${POST_CREATE}" "${NODE_BIN}"
   [[ ! -e "${marker}" ]] || fail 'empty valid plan ran legacy dependencies'
-  write_plan "${plan}" '[{"id":"python","version":"3.14.6"}]'
+  write_plan "${plan}" '[{"id":"python","version":"3.14.6","selectionSource":"cli","resolutionSource":"override","evidence":[]}]'
   DEVCONTAINER_DIR="${dev}" BOXDOWN_CONTAINER_TOOLCHAIN_PLAN_PATH="${plan}" \
     bash -c 'source "$1"; run_deps_install "$2"' _ "${POST_CREATE}" "${NODE_BIN}"
   [[ ! -e "${marker}" ]] || fail 'non-Node valid plan ran legacy dependencies'
+  printf '{"version":1,"fingerprint":"%s","selected":[]}\n' "${FINGERPRINT}" > "${plan}"
+  local warning
+  warning="$(DEVCONTAINER_DIR="${dev}" BOXDOWN_CONTAINER_TOOLCHAIN_PLAN_PATH="${plan}" \
+    bash -c 'source "$1"; run_deps_install "$2"' _ "${POST_CREATE}" "${NODE_BIN}" 2>&1)"
+  [[ ! -e "${marker}" ]] || fail 'present reduced-schema plan ran legacy dependencies'
+  [[ "${warning}" == *'present toolchain plan is invalid; skipping legacy dependency installation'* ]] ||
+    fail 'present reduced-schema plan did not emit the safety warning'
+  printf '{invalid json\n' > "${plan}"
+  warning="$(DEVCONTAINER_DIR="${dev}" BOXDOWN_CONTAINER_TOOLCHAIN_PLAN_PATH="${plan}" \
+    bash -c 'source "$1"; run_deps_install "$2"' _ "${POST_CREATE}" "${NODE_BIN}" 2>&1)"
+  [[ ! -e "${marker}" ]] || fail 'present invalid plan ran legacy dependencies'
+  [[ "${warning}" == *'present toolchain plan is invalid; skipping legacy dependency installation'* ]] ||
+    fail 'present invalid plan did not emit the safety warning'
+  rm -f "${plan}"
+  mkfifo "${plan}"
+  (printf '{"version":1,"workspaceId":"fixture","fingerprint":"%s","selected":[],"updatedAt":"%s"}\n' \
+    "${FINGERPRINT}" "${VALID_TIME}" > "${plan}") &
+  local writer=$!
+  warning="$(DEVCONTAINER_DIR="${dev}" BOXDOWN_CONTAINER_TOOLCHAIN_PLAN_PATH="${plan}" \
+    bash -c 'source "$1"; run_deps_install "$2"' _ "${POST_CREATE}" "${NODE_BIN}" 2>&1)"
+  kill "${writer}" >/dev/null 2>&1 || true
+  wait "${writer}" 2>/dev/null || true
+  [[ ! -e "${marker}" ]] || fail 'present FIFO plan ran legacy dependencies'
+  [[ "${warning}" == *'present toolchain plan is invalid; skipping legacy dependency installation'* ]] ||
+    fail 'present FIFO plan did not emit the safety warning'
   rm -f "${plan}"
   BOXDOWN_CONTAINER_TOOLCHAIN_PLAN_PATH="${plan}" \
     bash -c 'source "$1"; DEVCONTAINER_DIR="$3"; run_deps_install "$2"' _ "${POST_CREATE}" "${NODE_BIN}" "${dev}"

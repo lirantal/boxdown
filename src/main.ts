@@ -16,7 +16,7 @@ import { createProgress, resolveProgressMode, type ProgressReporter, type Progre
 import { runBuffered } from './process.ts'
 import { createPurgePlan, formatPurgePlanDetails, formatPurgePlanText, purgeWorkspace, removeWorkspaceRuntimeState, type PurgePlan } from './purge.ts'
 import { resolveSetupAgentProfile } from './setup-agent-profile.ts'
-import { resolveSetupToolchains } from './setup-toolchains.ts'
+import { formatDetectedToolchainsSummary, resolveSetupToolchains } from './setup-toolchains.ts'
 import { defaultSshAlias, installSshConfig, uninstallSshConfig, validateSshAlias } from './ssh-config.ts'
 import { dedupeSshInstallTargets, installSshInstallTarget, isSshConfigInstallTarget, SSH_INSTALL_TARGETS, sshInstallTargetFlagHintsText, supportedSshInstallTargetsText, uninstallSshInstallTarget, type SshConfigInstallTarget } from './ssh-install-targets.ts'
 import { createStatusInfo, formatStatusText, statusIsHealthy } from './status.ts'
@@ -1261,7 +1261,7 @@ export async function prepareContainerLifecycle (
 ): Promise<void> {
   await runContainerRuntimePreflight(context, progress, options, logger)
   const writeMetadata = options.writeWorkspaceMetadata ?? writeWorkspaceMetadata
-  writeMetadata(context, alias, undefined, agentProfile)
+  writeMetadata(context, alias, undefined, agentProfile, readToolchainPlan(context)?.updatedAt)
 }
 
 async function runSetupPreflight (
@@ -1483,13 +1483,16 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
 
     if (parsed.command === 'setup') {
       await runSetupPreflight(context, alias, parsed, options)
-      await resolveSetupToolchains({
+      const setupToolchains = await resolveSetupToolchains({
         context,
         selectors: explicitToolchainSelectors ?? [],
         input: options.promptInput,
         output: options.promptOutput,
         env: options.env
       })
+      if (setupToolchains.skippedNonInteractive === true) {
+        process.stdout.write(formatDetectedToolchainsSummary(setupToolchains.detected))
+      }
       const resolvedTargets = await resolveSshInstallTargets(parsed, options)
 
       if (resolvedTargets.cancelled) {
@@ -1511,7 +1514,7 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
         return 1
       }
 
-      writeWorkspaceMetadata(context, alias, undefined, setupAgentProfile.profile)
+      writeWorkspaceMetadata(context, alias, undefined, setupAgentProfile.profile, setupToolchains.plan?.updatedAt)
       const progress = createCliProgress(parsed, 'stdout', { env: options.env })
       await runLoggedLifecycle(context, 'setup', argv, async (logger) => {
         await withProgressSection(progress, 'Boxdown setup', [

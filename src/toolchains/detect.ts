@@ -34,6 +34,21 @@ interface TomlSection {
   malformed: boolean
 }
 
+function quotedTomlString (value: string): string | undefined {
+  const quote = value[0]
+  if (quote !== '"' && quote !== "'") return undefined
+
+  for (let index = 1; index < value.length; index += 1) {
+    if (value[index] === '\\' && quote === '"') return undefined
+    if (value[index] !== quote) continue
+
+    const suffix = value.slice(index + 1).trim()
+    return suffix.length === 0 || suffix.startsWith('#') ? value.slice(1, index) : undefined
+  }
+
+  return undefined
+}
+
 const PACKAGE_RUNTIME_PATHS = ['volta', 'volta.node', 'engines', 'engines.node'] as const
 
 function skipJsonWhitespace (input: string, index: number): number {
@@ -742,13 +757,13 @@ function detectPython (workspaceFolder: string): DetectedToolchain | undefined {
       }
 
       const rawValue = match[1] ?? ''
-      const quoted = /^(?:"([^"]*)"|'([^']*)')$/.exec(rawValue)
+      const quoted = quotedTomlString(rawValue)
 
-      if (quoted === null) {
+      if (quoted === undefined) {
         addEvidence(detection, 'pyproject.toml', 'requires-python', rawValue, false)
         addDiagnostic(detection, 'pyproject.toml', 'requires-python', 'Malformed requires-python value')
       } else {
-        addConstraint(detection, 'pyproject.toml', 'requires-python', quoted[1] ?? quoted[2] ?? '')
+        addConstraint(detection, 'pyproject.toml', 'requires-python', quoted)
       }
     }
   }
@@ -849,13 +864,13 @@ function detectRust (workspaceFolder: string): DetectedToolchain | undefined {
         }
 
         const rawValue = match[1] ?? ''
-        const quoted = /^"([^"]*)"$/.exec(rawValue)
+        const quoted = quotedTomlString(rawValue)
 
-        if (quoted === null) {
+        if (quoted === undefined) {
           addEvidence(detection, 'rust-toolchain.toml', 'toolchain.channel', rawValue, false)
           addDiagnostic(detection, 'rust-toolchain.toml', 'toolchain.channel', 'Malformed toolchain channel value')
         } else {
-          addExactVersion(detection, 'rust-toolchain.toml', 'toolchain.channel', quoted[1] ?? '')
+          addExactVersion(detection, 'rust-toolchain.toml', 'toolchain.channel', quoted)
         }
       }
     }
@@ -905,13 +920,13 @@ function detectRust (workspaceFolder: string): DetectedToolchain | undefined {
       }
 
       const rawValue = match[1] ?? ''
-      const quoted = /^"([^"]*)"$/.exec(rawValue)
+      const quoted = quotedTomlString(rawValue)
 
-      if (quoted === null) {
+      if (quoted === undefined) {
         addEvidence(detection, 'Cargo.toml', 'package.rust-version', rawValue, false)
         addDiagnostic(detection, 'Cargo.toml', 'package.rust-version', 'Malformed package.rust-version value')
       } else {
-        addConstraint(detection, 'Cargo.toml', 'package.rust-version', quoted[1] ?? '', `>=${quoted[1] ?? ''}`)
+        addConstraint(detection, 'Cargo.toml', 'package.rust-version', quoted, `>=${quoted}`)
       }
     }
   }

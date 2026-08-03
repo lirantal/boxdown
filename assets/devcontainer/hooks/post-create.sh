@@ -78,14 +78,25 @@ configure_toolchains() {
 run_deps_install() {
   local plan_path="${BOXDOWN_CONTAINER_TOOLCHAIN_PLAN_PATH:-/opt/boxdown/state/toolchains/plan/plan.json}"
   local plan_node="${1:-/usr/local/bin/node}"
+  if [[ ! -e "${plan_path}" && ! -L "${plan_path}" ]]; then
+    bash "${DEVCONTAINER_DIR}/utils/deps-install.sh"
+    return 0
+  fi
+
   if "${plan_node}" - "${plan_path}" <<'NODE'
-const { lstatSync, readFileSync, statSync } = require('node:fs')
+const { lstatSync, readFileSync } = require('node:fs')
 const { isAbsolute, normalize, parse, sep } = require('node:path')
 const path = process.argv[2]
 const isRecord = value => value !== null && typeof value === 'object' && !Array.isArray(value)
 const exactHex = value => typeof value === 'string' && value.length === 64 && [...value].every(char => '0123456789abcdef'.includes(char))
 const exactVersion = value => typeof value === 'string' && value.length > 0 && value.length <= 128 &&
   '0123456789'.includes(value[0]) && [...value].every(char => '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz.+-'.includes(char))
+const exactTime = value => {
+  if (typeof value !== 'string' || value.length !== 24) return false
+  try { return new Date(value).toISOString() === value } catch { return false }
+}
+const evidenceIsValid = value => isRecord(value) && typeof value.path === 'string' && typeof value.source === 'string' &&
+  typeof value.value === 'string' && typeof value.exact === 'boolean'
 function safePath (target) {
   if (!isAbsolute(target) || normalize(target) !== target || target.includes('\0')) return false
   const root = parse(target).root
@@ -98,22 +109,28 @@ function safePath (target) {
 }
 let plan
 try {
-  if (!safePath(path) || lstatSync(path).isSymbolicLink() || statSync(path).size > 65536) process.exit(1)
+  const leaf = lstatSync(path)
+  if (!safePath(path) || !leaf.isFile() || leaf.size > 65536) process.exit(1)
   plan = JSON.parse(readFileSync(path, 'utf8'))
 } catch {
   process.exit(1)
 }
-if (!isRecord(plan) || plan.version !== 1 || !exactHex(plan.fingerprint) || !Array.isArray(plan.selected) || plan.selected.length > 4) process.exit(1)
+if (!isRecord(plan) || plan.version !== 1 || typeof plan.workspaceId !== 'string' || plan.workspaceId.length === 0 ||
+  !exactHex(plan.fingerprint) || !Array.isArray(plan.selected) || plan.selected.length > 4 || !exactTime(plan.updatedAt)) process.exit(1)
 const ids = new Set()
 for (const item of plan.selected) {
-  if (!isRecord(item) || !['node', 'python', 'go', 'rust'].includes(item.id) || !exactVersion(item.version) || ids.has(item.id)) process.exit(1)
+  if (!isRecord(item) || !['node', 'python', 'go', 'rust'].includes(item.id) || !exactVersion(item.version) || ids.has(item.id) ||
+    !['interactive', 'cli', 'persisted'].includes(item.selectionSource) ||
+    !['override', 'project', 'boxdown-default'].includes(item.resolutionSource) ||
+    !Array.isArray(item.evidence) || !item.evidence.every(evidenceIsValid) ||
+    (item.compatibilityNote !== undefined && typeof item.compatibilityNote !== 'string')) process.exit(1)
   ids.add(item.id)
 }
 NODE
   then
     return 0
   fi
-  bash "${DEVCONTAINER_DIR}/utils/deps-install.sh"
+  echo "post-create: warning: present toolchain plan is invalid; skipping legacy dependency installation." >&2
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then

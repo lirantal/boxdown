@@ -37,6 +37,7 @@ import { buildSshConfigBlock, defaultSshAlias, installSshConfig, removeSshConfig
 import { createStatusInfo, formatStatusText, inspectSshConfigStatus, parseDockerPsJsonLines, statusIsHealthy } from '../src/status.ts'
 import { ensureHostSshKey } from '../src/ssh-key.ts'
 import { resolveSetupToolchains } from '../src/setup-toolchains.ts'
+import { detectToolchains } from '../src/toolchains/detect.ts'
 import { parseToolchainSelector, readToolchainPlan, resolveToolchainPlan, writeToolchainPlan } from '../src/toolchains/plan.ts'
 import type { ToolchainPlan } from '../src/toolchains/types.ts'
 
@@ -500,6 +501,7 @@ test('setup resolves explicit toolchain selectors before invoking the workspace 
 
   assert.strictEqual(code, 0)
   assert.strictEqual(setupCalled, true)
+  assert.strictEqual(readWorkspaceMetadata(context)?.toolchainPlanUpdatedAt, readToolchainPlan(context)?.updatedAt)
 })
 
 test('direct start preserves a stored plan and only writes explicit selectors', async () => {
@@ -616,16 +618,30 @@ test('non-interactive setup without selectors leaves an unconfigured workspace u
     BOXDOWN_DATA_HOME: tempDir('setup-toolchain-noninteractive-data')
   }
   const context = createWorkspaceContext({workspace, env, assetsDevcontainerDir})
+  const stdout: string[] = []
+  const originalStdoutWrite = process.stdout.write
+  writeFileSync(join(workspace, '.nvmrc'), '24.17.0\n')
 
-  const code = await withProcessEnv(env, async () => runCli(['setup', '--workspace', workspace], {
-    env,
-    waitForContainerRuntime: async () => ({state: 'ready', mode: 'buildx', warnings: []}),
-    runDoctorChecks: async () => [],
-    setupWorkspace: async () => {}
-  }))
+  process.stdout.write = ((chunk: string | Uint8Array) => {
+    stdout.push(Buffer.isBuffer(chunk) ? chunk.toString('utf8') : chunk)
+    return true
+  }) as typeof process.stdout.write
+
+  let code: number
+  try {
+    code = await withProcessEnv(env, async () => runCli(['setup', '--workspace', workspace], {
+      env,
+      waitForContainerRuntime: async () => ({state: 'ready', mode: 'buildx', warnings: []}),
+      runDoctorChecks: async () => [],
+      setupWorkspace: async () => {}
+    }))
+  } finally {
+    process.stdout.write = originalStdoutWrite
+  }
 
   assert.strictEqual(code, 0)
   assert.strictEqual(existsSync(context.toolchainPlanPath), false)
+  assert.match(stdout.join(''), /Detected toolchains: Node\.js 24\.17\.0 \(\.nvmrc\)\n/u)
 })
 
 async function waitForPromptOutput (outputText: () => string, pattern: RegExp): Promise<void> {
@@ -2933,6 +2949,25 @@ describe('CLI execution', () => {
     assert.strictEqual(readWorkspaceMetadata(context)?.agentProfile, 'auth')
   })
 
+  test('container lifecycle preserves provenance when metadata is created after a plan', async () => {
+    const workspace = tempDir('lifecycle-toolchain-provenance-workspace')
+    const env = {
+      BOXDOWN_CACHE_HOME: tempDir('lifecycle-toolchain-provenance-cache'),
+      BOXDOWN_DATA_HOME: tempDir('lifecycle-toolchain-provenance-data')
+    }
+    const context = createWorkspaceContext({workspace, env, assetsDevcontainerDir})
+    const progress = createProgress({mode: 'none'})
+    const plan = toolchainPlanFor(context, 'none')
+    writeToolchainPlan(context, plan)
+
+    await prepareContainerLifecycle(context, 'lifecycle-toolchain-provenance-devcontainer', progress, {
+      env,
+      waitForContainerRuntime: async () => ({state: 'ready', mode: 'buildx', warnings: []})
+    })
+
+    assert.strictEqual(readWorkspaceMetadata(context)?.toolchainPlanUpdatedAt, plan.updatedAt)
+  })
+
   test('verbose readiness emits a final outcome for Buildx and fallback success', async () => {
     const context = createWorkspaceContext({
       workspace: tempDir('verbose-runtime-ready-workspace'),
@@ -5081,6 +5116,30 @@ describe('host tool path', () => {
 })
 
 describe('workspace metadata', () => {
+  test('refreshes toolchain plan provenance from the persisted plan timestamp', () => {
+    const workspace = tempDir('metadata-toolchain-plan-workspace')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('metadata-toolchain-plan-cache'),
+        BOXDOWN_DATA_HOME: tempDir('metadata-toolchain-plan-data')
+      },
+      assetsDevcontainerDir
+    })
+    writeWorkspaceMetadata(context, 'toolchain-plan-devcontainer')
+    const plan = resolveToolchainPlan({
+      workspaceId: context.workspaceId,
+      detections: [],
+      selectors: [parseToolchainSelector('none')],
+      selectionSource: 'cli',
+      now: new Date('2026-08-02T12:34:56.000Z')
+    })
+
+    writeToolchainPlan(context, plan)
+
+    assert.strictEqual(readWorkspaceMetadata(context)?.toolchainPlanUpdatedAt, plan.updatedAt)
+  })
+
   test('migrates legacy agent profile metadata and preserves a selected profile', () => {
     const workspace = tempDir('metadata-profile-workspace')
     const data = tempDir('metadata-profile-data')
@@ -5332,6 +5391,31 @@ describe('status output', () => {
       },
       containerState: 'active'
     })
+  })
+
+  test('reports an explicit override note when Python project evidence is unsupported', () => {
+    const workspace = tempDir('status-toolchain-unchecked-override-workspace')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('status-toolchain-unchecked-override-cache'),
+        BOXDOWN_DATA_HOME: tempDir('status-toolchain-unchecked-override-data')
+      },
+      assetsDevcontainerDir
+    })
+    writeFileSync(join(workspace, 'pyproject.toml'), '[project]\nrequires-python = ">=3.11 || <3.9"\n')
+    const detection = detectToolchains(workspace).find(item => item.id === 'python')
+    const plan = resolveToolchainPlan({
+      workspaceId: context.workspaceId,
+      detections: detection === undefined ? [] : [detection],
+      selectors: [parseToolchainSelector('python@3.14.6')],
+      selectionSource: 'cli'
+    })
+
+    writeToolchainPlan(context, plan)
+    const text = formatStatusText(createStatusInfo(context, 'demo-devcontainer', undefined, existsSync))
+
+    assert.match(text, /Explicit Python 3\.14\.6 override compatibility could not be verified against pyproject\.toml requires-python >=3\.11 \|\| <3\.9: Unsupported python version constraint\./u)
   })
 
   test('distinguishes unselected, disabled, stale, failed, and unreadable toolchain state', () => {

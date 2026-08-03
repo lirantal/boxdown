@@ -5,6 +5,7 @@ import { basename, dirname, join } from 'node:path'
 import { TOOLCHAIN_DEFAULTS } from './defaults.ts'
 import { detectedConstraintAcceptsVersion, resolveDetectedVersion } from './detect.ts'
 import { TOOLCHAIN_IDS, type DetectedToolchain, type ResolvedToolchain, type ToolchainId, type ToolchainPlan, type ToolchainResult, type ToolchainSelector, type ToolchainSelectionSource, type ToolchainSyncState } from './types.ts'
+import { recordToolchainPlanUpdatedAt } from '../metadata.ts'
 import type { WorkspaceContext } from '../paths.ts'
 
 const toolchainIds = new Set<string>(TOOLCHAIN_IDS)
@@ -32,6 +33,19 @@ function comparisonOrder (left: ToolchainId, right: ToolchainId): number {
 }
 
 function compatibilityNote (id: ToolchainId, version: string, detection: DetectedToolchain | undefined): string | undefined {
+  if (detection !== undefined && resolveDetectedVersion(detection).kind === 'unchecked') {
+    const diagnostic = detection.diagnostics?.[0]
+    const evidence = diagnostic === undefined
+      ? detection.evidence[0]
+      : detection.evidence.find((item) => item.path === diagnostic.path && item.source === diagnostic.source)
+    const source = evidence === undefined
+      ? diagnostic === undefined ? `${TOOLCHAIN_DEFAULTS[id].label} project evidence` : `${diagnostic.path} ${diagnostic.source}`
+      : `${evidence.path} ${evidence.source} ${evidence.value}`
+    const reason = diagnostic?.message ?? 'Project evidence needs review'
+
+    return `Explicit ${TOOLCHAIN_DEFAULTS[id].label} ${version} override compatibility could not be verified against ${source}: ${reason}.`
+  }
+
   const exactEvidence = detection?.evidence.find((item) => item.exact && item.value !== version)
 
   if (exactEvidence !== undefined) {
@@ -314,6 +328,7 @@ export function writeToolchainPlan (context: WorkspaceContext, plan: ToolchainPl
   mkdirSync(context.toolchainsDir, {recursive: true})
   mkdirSync(context.toolchainResultDir, {recursive: true})
   writeJsonFileAtomically(context.toolchainPlanPath, plan)
+  recordToolchainPlanUpdatedAt(context, plan.updatedAt)
 }
 
 export function writeToolchainResult (context: WorkspaceContext, result: ToolchainResult): void {

@@ -5,6 +5,25 @@ import { resolveToolchainPlan, writeToolchainPlan } from './toolchains/plan.ts'
 import type { DetectedToolchain, ToolchainPlan, ToolchainSelector } from './toolchains/types.ts'
 import type { WorkspaceContext } from './paths.ts'
 
+export function formatDetectedToolchainsSummary (detected: readonly DetectedToolchain[]): string {
+  const entries = detected.map((detection) => {
+    const resolution = resolveDetectedVersion(detection)
+    const paths = [...new Set([
+      ...detection.evidence.map((item) => item.path),
+      ...(detection.diagnostics ?? []).map((item) => item.path)
+    ])]
+    const source = paths.length === 0 ? 'project evidence' : paths.join(', ')
+
+    if (resolution.kind === 'resolved') {
+      return `${TOOLCHAIN_DEFAULTS[detection.id].label} ${resolution.version} (${source})`
+    }
+
+    return `${TOOLCHAIN_DEFAULTS[detection.id].label} needs review (${source})`
+  })
+
+  return `Detected toolchains: ${entries.length === 0 ? 'none' : entries.join('; ')}\n`
+}
+
 function descriptionFor (detection: DetectedToolchain): string {
   const resolution = resolveDetectedVersion(detection)
   const evidence = detection.evidence[0]
@@ -28,7 +47,7 @@ export async function resolveSetupToolchains (options: {
   input?: PromptInput
   output?: PromptOutput
   env?: NodeJS.ProcessEnv
-}): Promise<{plan?: ToolchainPlan, detected: DetectedToolchain[]}> {
+}): Promise<{plan?: ToolchainPlan, detected: DetectedToolchain[], skippedNonInteractive?: boolean}> {
   const detected = detectToolchains(options.context.workspaceFolder)
 
   if (options.selectors.length > 0) {
@@ -46,7 +65,7 @@ export async function resolveSetupToolchains (options: {
   const output = options.output ?? process.stdout
   const env = options.env ?? process.env
   if (!canPromptInteractively(input, output, env)) {
-    return {detected}
+    return {detected, skippedNonInteractive: true}
   }
 
   const prompt = await promptMultiSelect({

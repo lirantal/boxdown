@@ -264,6 +264,36 @@ test('returns diagnostics for structurally malformed known marker declarations',
   })
 })
 
+test('accepts relevant quoted TOML assignments followed by inline comments', () => {
+  withWorkspace(workspace => {
+    writeFileSync(join(workspace, 'pyproject.toml'), '[project]\nrequires-python = ">=3.11" # supported Python\n')
+    writeFileSync(join(workspace, 'rust-toolchain.toml'), "[toolchain]\nchannel = '1.97.1' # pinned Rust\n")
+    writeFileSync(join(workspace, 'Cargo.toml'), '[package]\nrust-version = "1.97" # minimum Rust\n')
+
+    const detections = detectToolchains(workspace)
+    assert.strictEqual(detections.find(item => item.id === 'python')?.constraint, '>=3.11')
+    const rust = detections.find(item => item.id === 'rust')
+    assert.strictEqual(rust?.exactVersion, '1.97.1')
+    assert.strictEqual(rust?.constraint, '>=1.97')
+    assert.strictEqual(rust?.diagnostics, undefined)
+  })
+})
+
+test('rejects trailing non-comment syntax after relevant quoted TOML assignments', () => {
+  withWorkspace(workspace => {
+    writeFileSync(join(workspace, 'pyproject.toml'), '[project]\nrequires-python = ">=3.11" unsafe\n')
+    writeFileSync(join(workspace, 'rust-toolchain.toml'), '[toolchain]\nchannel = "1.97.1" + unsafe\n')
+    writeFileSync(join(workspace, 'Cargo.toml'), '[package]\nrust-version = "1.97" ; unsafe\n')
+
+    for (const id of ['python', 'rust'] as const) {
+      const detection = detectToolchains(workspace).find(item => item.id === id)
+      assert.strictEqual(detection?.exactVersion, undefined, id)
+      assert.strictEqual(detection?.constraint, undefined, id)
+      assert.match(detection?.diagnostics?.map(item => item.message).join('\n') ?? '', /malformed/i, id)
+    }
+  })
+})
+
 test('keeps duplicate and conflicting exact pins unresolved', () => {
   for (const [first, second, message] of [
     ['24.17.0', '24.17.0', /repeated/i],
@@ -662,6 +692,28 @@ test('an explicit version notes an incompatible project constraint override', ()
     plan.selected[0]?.compatibilityNote,
     'Explicit Python 3.14.6 override conflicts with pyproject.toml requires-python <3.12.'
   )
+})
+
+test('an explicit version notes when malformed or unsupported project evidence cannot be verified', () => {
+  for (const value of ['3.14', '>=3.11 || <3.9']) {
+    withWorkspace(workspace => {
+      writeFileSync(join(workspace, 'pyproject.toml'), `[project]\nrequires-python = ${value === '3.14' ? value : `"${value}"`}\n`)
+      const detection = detectToolchains(workspace).find(item => item.id === 'python')
+      const plan = resolveToolchainPlan({
+        workspaceId: 'workspace-id',
+        detections: detection === undefined ? [] : [detection],
+        selectors: [parseToolchainSelector('python@3.14.6')],
+        selectionSource: 'cli',
+        now: new Date('2026-08-02T00:00:00.000Z')
+      })
+
+      assert.match(
+        plan.selected[0]?.compatibilityNote ?? '',
+        /^Explicit Python 3\.14\.6 override compatibility could not be verified against pyproject\.toml requires-python .+\.$/u,
+        value
+      )
+    })
+  }
 })
 
 test('none cannot be combined with another selector', () => {

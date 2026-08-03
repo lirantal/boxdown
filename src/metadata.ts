@@ -77,7 +77,8 @@ export function writeWorkspaceMetadata (
   context: WorkspaceContext,
   sshAlias: string,
   now = new Date(),
-  agentProfile?: AgentProfile
+  agentProfile?: AgentProfile,
+  toolchainPlanUpdatedAt?: string
 ): WorkspaceMetadata {
   const metadataPath = workspaceMetadataPath(context)
   const timestamp = now.toISOString()
@@ -101,7 +102,9 @@ export function writeWorkspaceMetadata (
     ...(existingMetadata?.dockerImageName === undefined ? {} : { dockerImageName: existingMetadata.dockerImageName }),
     ...(existingMetadata?.dockerImageLastSeenAt === undefined ? {} : { dockerImageLastSeenAt: existingMetadata.dockerImageLastSeenAt }),
     ...(existingMetadata?.legacyImageMigrationNotifiedAt === undefined ? {} : { legacyImageMigrationNotifiedAt: existingMetadata.legacyImageMigrationNotifiedAt }),
-    ...(existingMetadata?.toolchainPlanUpdatedAt === undefined ? {} : { toolchainPlanUpdatedAt: existingMetadata.toolchainPlanUpdatedAt }),
+    ...((toolchainPlanUpdatedAt ?? existingMetadata?.toolchainPlanUpdatedAt) === undefined
+      ? {}
+      : { toolchainPlanUpdatedAt: toolchainPlanUpdatedAt ?? existingMetadata?.toolchainPlanUpdatedAt }),
     ...((agentProfile ?? existingMetadata?.agentProfile) === undefined
       ? {}
       : { agentProfile: agentProfile ?? existingMetadata?.agentProfile })
@@ -128,6 +131,23 @@ export function recordWorkspaceDockerImage (
     dockerImageId: image.id,
     ...(image.name === undefined ? {} : { dockerImageName: image.name }),
     dockerImageLastSeenAt: now.toISOString()
+  }
+
+  mkdirSync(context.workspaceDataDir, { recursive: true })
+  writeFileSync(workspaceMetadataPath(context), `${JSON.stringify(nextMetadata, null, 2)}\n`)
+  return nextMetadata
+}
+
+export function recordToolchainPlanUpdatedAt (context: WorkspaceContext, updatedAt: string): WorkspaceMetadata | undefined {
+  const metadata = readWorkspaceMetadata(context)
+
+  if (metadata === undefined) {
+    return undefined
+  }
+
+  const nextMetadata: WorkspaceMetadata = {
+    ...metadata,
+    toolchainPlanUpdatedAt: updatedAt
   }
 
   mkdirSync(context.workspaceDataDir, { recursive: true })
