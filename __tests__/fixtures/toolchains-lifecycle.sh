@@ -266,12 +266,14 @@ test_owned_wrappers() {
   local dir="${TEST_ROOT}/wrappers" home="${TEST_ROOT}/wrappers/home" workspace="${TEST_ROOT}/wrappers/workspace"
   local plan="${TEST_ROOT}/wrappers/plan.json" results="${TEST_ROOT}/wrappers/results" log="${TEST_ROOT}/wrappers/mise.log"
   local mise="${TEST_ROOT}/wrappers/bin/mise" bootstrap="${TEST_ROOT}/wrappers/devcontainer/utils/toolchains-bootstrap.sh"
+  local node_version
+  node_version="$(${NODE_BIN} --version | sed 's/^v//')"
   mkdir -p "${home}/.local/bin" "${workspace}"
   make_fake_mise "${mise}"
   make_bootstrap "${bootstrap}" "${mise}"
   printf '#!/usr/bin/env bash\nprintf user-node\n' > "${home}/.local/bin/node"
   chmod 0755 "${home}/.local/bin/node"
-  write_plan "${plan}" "[{\"id\":\"node\",\"version\":\"$(${NODE_BIN} --version | sed 's/^v//')\"}]"
+  write_plan "${plan}" "[{\"id\":\"node\",\"version\":\"${node_version}\"}]"
   : > "${log}"
   run_bootstrap "${bootstrap}" "${home}" "${plan}" "${results}" "${workspace}" "${log}"
   assert_file_equals "${home}/.local/bin/node" $'#!/usr/bin/env bash\nprintf user-node'
@@ -288,18 +290,18 @@ test_owned_wrappers() {
   [[ ! -e "${home}/.local/bin/python" ]] || fail 'stale cleanup retained owned wrapper'
 
   rm -f "${home}/.local/bin/node" "${home}/.local/bin/npm" "${home}/.local/bin/npx" "${home}/.local/bin/corepack"
-  write_plan "${plan}" "[{\"id\":\"node\",\"version\":\"$(${NODE_BIN} --version | sed 's/^v//')\"}]"
+  write_plan "${plan}" "[{\"id\":\"node\",\"version\":\"${node_version}\"}]"
   run_bootstrap "${bootstrap}" "${home}" "${plan}" "${results}" "${workspace}" "${log}"
   grep -Fqx '# boxdown-toolchain-wrapper-v1' "${home}/.local/bin/node" || fail 'successful runtime did not create an owned node wrapper'
-  cat > "${home}/.local/bin/corepack" <<'USER_WRAPPER'
+  cat > "${home}/.local/bin/corepack" <<USER_WRAPPER
 #!/usr/bin/env bash
 # boxdown-toolchain-wrapper-v1
 export MISE_NO_CONFIG=1
-export MISE_DATA_DIR='user-data'
-export MISE_CACHE_DIR='user-cache'
-export MISE_CONFIG_DIR='user-config'
-export MISE_STATE_DIR='user-state'
-exec /tmp/not-mise --no-config exec 'node@24.17.0' -- 'corepack' "$@"
+export MISE_DATA_DIR='${home}/.local/share/boxdown/toolchains/data'
+export MISE_CACHE_DIR='${home}/.local/share/boxdown/toolchains/cache'
+export MISE_CONFIG_DIR='${home}/.local/share/boxdown/toolchains/config'
+export MISE_STATE_DIR='${home}/.local/share/boxdown/toolchains/state'
+exec /tmp/not-mise --no-config exec 'node@${node_version}' -- 'corepack' "\$@"
 USER_WRAPPER
   chmod 0755 "${home}/.local/bin/corepack"
   local command temporary
