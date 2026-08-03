@@ -62,6 +62,28 @@ entries with best-effort Docker state.
 Metadata may also record the last inspected Docker image ID for the workspace so
 `boxdown purge` can remove that exact image even after the container is gone.
 
+## Workspace Toolchain State
+
+When a workspace has a confirmed toolchain selection, Boxdown keeps its plan
+and result below persistent workspace data:
+
+```text
+~/.local/share/boxdown/workspaces/<workspace-hash>/toolchains/plan.json
+~/.local/share/boxdown/workspaces/<workspace-hash>/toolchains/result.json
+```
+
+The plan is Boxdown-owned input: it records the schema version, selection,
+resolved versions, evidence, resolution sources, and a fingerprint. The result
+is Boxdown-owned output: it records the plan fingerprint, aggregate and
+per-runtime synchronization states, and timestamps. Neither file is created in
+the target repository.
+
+For a workspace with a plan, generated configuration mounts the plan directory
+read-only at `/opt/boxdown/state/toolchains` and a separate result directory
+read-write at `/opt/boxdown/state/toolchain-results`. The split lets the
+container observe the user-confirmed plan while writing only bounded lifecycle
+results. Legacy workspaces with no plan receive neither mount.
+
 ## Runtime Secret State
 
 `ANTHROPIC_API_KEY`, `SNYK_TOKEN`, and the optional 1Password service-account
@@ -179,7 +201,8 @@ Boxdown starts from `assets/devcontainer/devcontainer.json` and rewrites:
 - `postStartCommand`, to call mounted container assets.
 - `mounts`, to add the read-only asset mount, public-key mount, host Git config
   snapshot mount, runtime secret mount, and `auth` read-only staging mounts or
-  `full` live, read-write host mounts.
+  `full` live, read-write host mounts. A confirmed toolchain plan additionally
+  adds its read-only plan mount and separate read-write result mount.
 - `containerEnv`, to point SSH bootstrap at the mounted public key and actual
   container workspace, and record the non-secret selected profile as
   `BOXDOWN_AGENT_PROFILE`.
@@ -190,4 +213,5 @@ The target repository is still the Dev Container workspace via
 Mounts are create-time container settings. Run `boxdown start --recreate` after
 changing a profile selection or full-profile mount configuration. Recreate also
 seeds a fresh container-local `auth` copy; live `full` host profile content does
-not need synchronization.
+not need synchronization. A legacy workspace needs the same recreation the
+first time it gains a toolchain plan, because those two mounts must be created.

@@ -59,6 +59,20 @@ Open an interactive shell inside the container when you need one:
 npx boxdown start
 ```
 
+Choose workspace toolchains during setup. Boxdown detects supported root-level
+Node.js, Python, Go, and Rust declarations, then lets you confirm or override
+the versions it provisions inside the container:
+
+```sh
+npx boxdown setup --toolchain auto
+npx boxdown start --toolchain node@24.17.0 --toolchain python
+```
+
+Interactive setup shows an editable selection. In scripts, selectors are
+explicit: omitted `--toolchain` values report detections but select nothing.
+See [Workspace toolchains](./docs/features/toolchains.md) for marker precedence,
+release-pinned defaults, status, retry, and legacy-workspace recreation.
+
 Boxdown ships and invokes its own `@devcontainers/cli` dependency. It does not require a host/global Dev Containers CLI install.
 
 ## Boxdown Demo
@@ -381,6 +395,7 @@ Shared options:
 --port <port>       # tunnel port for `boxdown tunnel`; repeatable
 --recreate          # recreate the devcontainer before starting
 --agent-profile <tier> # host agent data: none, auth (copied; default), or full (live read-write mounts)
+--toolchain <selector> # with setup/start; repeatable: auto, none, <runtime>, or <runtime>@<version>
 --json              # JSON output for status and list
 --format json       # JSON output for status and list; equivalent to --json
 --details           # detailed human output for list

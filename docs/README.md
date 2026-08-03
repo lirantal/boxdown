@@ -24,6 +24,7 @@ repository.
 - [Lifecycle commands](./features/lifecycle.md)
 - [SSH config and proxy workflow](./features/ssh-config-and-proxy.md)
 - [GitHub auth refresh](./features/github-auth-refresh.md)
+- [Workspace toolchains](./features/toolchains.md)
 - [Generated config and state](./features/generated-config-and-state.md)
 
 ## Design Snapshot

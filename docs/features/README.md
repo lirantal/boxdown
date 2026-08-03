@@ -8,6 +8,7 @@ flows behind them.
 - [Lifecycle commands](./lifecycle.md)
 - [SSH config and proxy workflow](./ssh-config-and-proxy.md)
 - [GitHub auth refresh](./github-auth-refresh.md)
+- [Workspace toolchains](./toolchains.md)
 - [Generated config and state](./generated-config-and-state.md)
 - [Commit signing](./commit-signing.md)
 

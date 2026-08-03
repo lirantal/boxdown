@@ -40,6 +40,13 @@ test('detects a Volta Node pin ahead of engines and lockfile evidence', () => {
   })
 })
 
+test('documents every exact Boxdown toolchain default', () => {
+  const docs = readFileSync(join(process.cwd(), 'docs/features/toolchains.md'), 'utf8')
+  for (const [id, entry] of Object.entries(TOOLCHAIN_DEFAULTS)) {
+    assert.ok(docs.includes(`| ${id} | ${entry.version} |`))
+  }
+})
+
 test('uses a compatible default only when the constraint accepts it', () => {
   const compatible = resolveDetectedVersion({
     id: 'python',

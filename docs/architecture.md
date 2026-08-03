@@ -43,6 +43,29 @@ Per-workspace state is keyed by a hash of the resolved workspace path. This
 prevents collisions between repositories with the same basename in different
 folders.
 
+## Workspace Toolchains
+
+Toolchain detection is a pure, root-only resolver. It reads only documented
+marker files for Node.js, Python, Go, and Rust, validates their narrow formats,
+and resolves a release-pinned version before any container lifecycle work. The
+resolver returns a Boxdown-owned plan with evidence, selection source,
+resolution source, compatibility notes, and a stable fingerprint. It does not
+execute repository configuration or write to the repository.
+
+The generated configuration is the external-state boundary: a confirmed plan
+is mounted read-only and its lifecycle result directory is mounted read-write.
+Container hooks consume only the mounted resolved plan, keeping runtime
+installations, `mise` state, activation wrappers, and completion fingerprints
+inside the container user's local state. A release-pinned `mise` runs with
+configuration loading disabled, so repository `mise.toml`, `.tool-versions`,
+hooks, tasks, and environment files cannot influence provisioning.
+
+The plan/result fingerprint lets post-start retry failed provisioning or
+dependency synchronization without treating a failed toolchain as a failed
+container. Status consumes only these Boxdown-owned records. Adding the first
+plan to a legacy container requires recreation because mounts are a container
+create-time property.
+
 ## External App Integrations
 
 External app configuration is optional. `boxdown setup` and `boxdown ssh
