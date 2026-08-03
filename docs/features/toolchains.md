@@ -18,26 +18,29 @@ floating version lookup.
 | go | 1.26.5 | Boxdown release default |
 | rust | 1.97.1 | Boxdown release default |
 
-An exact project declaration wins over the default. For a compatible constraint,
-Boxdown uses the release-pinned default only when it satisfies the constraint.
-If the constraint excludes that default, interactive setup shows an actionable,
-unchecked selection rather than silently choosing another version.
+One valid exact project declaration resolves the runtime instead of the default.
+For a compatible constraint, Boxdown uses the release-pinned default only when
+it satisfies the constraint. A constraint that excludes that default, or a
+declaration with diagnostics, remains visible but unchecked in interactive
+setup; Boxdown never silently chooses another version.
 
 ## Detection Sources
 
-Detection is root-only. Within a runtime, the first exact declaration below has
-precedence; constraint sources are used only when no exact declaration applies.
+Detection is root-only. The exact-version and constraint sources below are all
+checked; they are not a first-wins precedence list.
 
-| Runtime | Exact-version sources, in precedence order | Constraint or fallback source |
+| Runtime | Exact-version sources | Constraint source |
 | --- | --- | --- |
 | Node.js | `volta.node` in `package.json`; `.nvmrc`; `.node-version`; `.tool-versions` | `engines.node` in `package.json` |
 | Python | `.python-version`; `.tool-versions` | `requires-python` in `pyproject.toml` |
 | Go | `toolchain` in `go.mod`; `.go-version`; `.tool-versions` | `go` directive in `go.mod` |
 | Rust | `rust-toolchain.toml`; `rust-toolchain`; `.tool-versions` | `package.rust-version` in `Cargo.toml` |
 
-Malformed, contradictory, or unsupported declarations are reported as
-actionable diagnostics; they are never approximated. Ruby and PHP are not
-detected or provisioned in this release.
+Repeated or conflicting exact declarations, repeated or conflicting
+constraints, malformed declarations, and unsupported constraints are rejected
+with actionable diagnostics; they are never approximated or resolved by taking
+the first declaration. Ruby and PHP are not detected or provisioned in this
+release.
 
 ## Select Toolchains
 
@@ -45,18 +48,21 @@ detected or provisioned in this release.
 
 ```sh
 boxdown setup --toolchain auto
-boxdown setup --toolchain node --toolchain python
+boxdown setup --toolchain node@24.17.0 --toolchain python@3.14.6
 boxdown setup --toolchain node@24 --toolchain go@1.27
 boxdown setup --toolchain none
 ```
 
 - Omit selectors in an interactive `boxdown setup` to review an editable
-  multi-select. Detected runtimes begin selected, but setup requires you to
-  confirm the final selection. Choosing `No toolchains` writes an explicit empty
-  plan.
+  multi-select. Only compatible, fully resolved detections begin selected;
+  incompatible or unchecked detections remain visible but unchecked. Setup
+  requires you to confirm the final selection. Choosing `No toolchains` writes
+  an explicit empty plan.
 - `auto` explicitly approves every high-confidence detection.
-- `<runtime>` selects a supported runtime and resolves its project declaration
-  or the Boxdown default.
+- `<runtime>` selects a supported runtime only when its project declaration can
+  be resolved safely; with no declaration it uses the Boxdown default. An
+  incompatible constraint or unchecked declaration requires an explicit
+  `<runtime>@<version>` selector.
 - `<runtime>@<version>` is an explicit version override. It takes precedence
   over a repository declaration; setup and status show a compatibility note
   when it differs.
@@ -100,11 +106,17 @@ project commands, `go get`, Cargo builds, or repository-defined mise actions.
 any override note, the last synchronization result, and whether recreation is
 needed. The states are:
 
-- `active`: a selected plan has a matching result for the current container.
-- `disabled`: an explicit empty plan exists.
+- `active`: a non-empty selected plan exists and either no container exists yet,
+  or a container exists, the generated configuration records both toolchain
+  mounts, and the result fingerprint matches the plan.
+- `disabled`: an explicit empty plan exists, unless an existing container lacks
+  either toolchain mount in the generated configuration.
 - `not-selected`: no plan exists.
-- `recreate-required`: a plan exists but the container does not have the
-  required mounts or a matching result.
+- `recreate-required`: a container exists but the generated configuration lacks
+  either required mount, or a non-empty plan's result is missing or has a
+  different fingerprint. A failed result with the matching fingerprint remains
+  `active`; its synchronization state is reported separately and retried on a
+  later start.
 
 Provisioning or dependency synchronization failures are recorded with the
 runtime and operation, warn without making the container unusable, and retry on
@@ -117,11 +129,11 @@ only after recreation:
 ```sh
 boxdown setup --recreate --toolchain auto
 # or
-boxdown start --recreate --toolchain node --toolchain python
+boxdown start --recreate --toolchain node@24.17.0 --toolchain python@3.14.6
 ```
 
-Changing a plan after those mounts exist does not require recreation. Existing
-legacy workspaces with no plan remain valid and retain their current behavior.
+Existing legacy workspaces with no plan remain valid and retain their current
+behavior.
 
 ## Stored State
 
@@ -130,11 +142,12 @@ repository:
 
 ```text
 ~/.local/share/boxdown/workspaces/<workspace-hash>/toolchains/plan.json
-~/.local/share/boxdown/workspaces/<workspace-hash>/toolchains/result.json
+~/.local/share/boxdown/workspaces/<workspace-hash>/toolchains/result/result.json
 ```
 
-The generated Dev Container configuration mounts the plan directory read-only
-and the result directory read-write. The plan records selected runtimes,
-versions, evidence, sources, and a fingerprint; the result records the last
-bounded provisioning outcome. See [Generated config and state](./generated-config-and-state.md)
-for the full state-boundary details.
+The generated Dev Container configuration makes the plan file available
+read-only at `/opt/boxdown/state/toolchains/plan/plan.json` and the result file
+available read-write at `/opt/boxdown/state/toolchain-results/result.json`. The
+plan records selected runtimes, versions, evidence, sources, and a fingerprint;
+the result records the last bounded provisioning outcome. See [Generated config
+and state](./generated-config-and-state.md) for the full state-boundary details.

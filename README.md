@@ -65,7 +65,7 @@ the versions it provisions inside the container:
 
 ```sh
 npx boxdown setup --toolchain auto
-npx boxdown start --toolchain node@24.17.0 --toolchain python
+npx boxdown start --toolchain node@24.17.0 --toolchain python@3.14.6
 ```
 
 Interactive setup shows an editable selection. In scripts, selectors are

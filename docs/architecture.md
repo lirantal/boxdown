@@ -53,12 +53,14 @@ resolution source, compatibility notes, and a stable fingerprint. It does not
 execute repository configuration or write to the repository.
 
 The generated configuration is the external-state boundary: a confirmed plan
-is mounted read-only and its lifecycle result directory is mounted read-write.
-Container hooks consume only the mounted resolved plan, keeping runtime
-installations, `mise` state, activation wrappers, and completion fingerprints
-inside the container user's local state. A release-pinned `mise` runs with
-configuration loading disabled, so repository `mise.toml`, `.tool-versions`,
-hooks, tasks, and environment files cannot influence provisioning.
+file is mounted read-only at `/opt/boxdown/state/toolchains/plan/plan.json` and
+its separate lifecycle result file is mounted read-write at
+`/opt/boxdown/state/toolchain-results/result.json`. Container hooks consume
+only the mounted resolved plan, keeping runtime installations, `mise` state,
+activation wrappers, and completion fingerprints inside the container user's
+local state. A release-pinned `mise` runs with configuration loading disabled,
+so repository `mise.toml`, `.tool-versions`, hooks, tasks, and environment
+files cannot influence provisioning.
 
 The plan/result fingerprint lets post-start retry failed provisioning or
 dependency synchronization without treating a failed toolchain as a failed

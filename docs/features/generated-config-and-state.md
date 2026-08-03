@@ -69,7 +69,7 @@ and result below persistent workspace data:
 
 ```text
 ~/.local/share/boxdown/workspaces/<workspace-hash>/toolchains/plan.json
-~/.local/share/boxdown/workspaces/<workspace-hash>/toolchains/result.json
+~/.local/share/boxdown/workspaces/<workspace-hash>/toolchains/result/result.json
 ```
 
 The plan is Boxdown-owned input: it records the schema version, selection,
@@ -78,9 +78,10 @@ is Boxdown-owned output: it records the plan fingerprint, aggregate and
 per-runtime synchronization states, and timestamps. Neither file is created in
 the target repository.
 
-For a workspace with a plan, generated configuration mounts the plan directory
-read-only at `/opt/boxdown/state/toolchains` and a separate result directory
-read-write at `/opt/boxdown/state/toolchain-results`. The split lets the
+For a workspace with a plan, generated configuration makes the plan file
+available read-only at `/opt/boxdown/state/toolchains/plan/plan.json` and
+makes the separate result file available read-write at
+`/opt/boxdown/state/toolchain-results/result.json`. The split lets the
 container observe the user-confirmed plan while writing only bounded lifecycle
 results. Legacy workspaces with no plan receive neither mount.
 
