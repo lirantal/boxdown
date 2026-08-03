@@ -16,7 +16,7 @@ import { createProgress, resolveProgressMode, type ProgressReporter, type Progre
 import { runBuffered } from './process.ts'
 import { createPurgePlan, formatPurgePlanDetails, formatPurgePlanText, purgeWorkspace, removeWorkspaceRuntimeState, type PurgePlan } from './purge.ts'
 import { resolveSetupAgentProfile } from './setup-agent-profile.ts'
-import { formatDetectedToolchainsSummary, resolveSetupToolchains } from './setup-toolchains.ts'
+import { formatDetectedToolchainsSummary, formatSelectedToolchainsSummary, resolveSetupToolchains } from './setup-toolchains.ts'
 import { defaultSshAlias, installSshConfig, uninstallSshConfig, validateSshAlias } from './ssh-config.ts'
 import { dedupeSshInstallTargets, installSshInstallTarget, isSshConfigInstallTarget, SSH_INSTALL_TARGETS, sshInstallTargetFlagHintsText, supportedSshInstallTargetsText, uninstallSshInstallTarget, type SshConfigInstallTarget } from './ssh-install-targets.ts'
 import { createStatusInfo, formatStatusText, statusIsHealthy } from './status.ts'
@@ -1492,6 +1492,8 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
       })
       if (setupToolchains.skippedNonInteractive === true) {
         process.stdout.write(formatDetectedToolchainsSummary(setupToolchains.detected))
+      } else if (explicitToolchainSelectors !== undefined && setupToolchains.plan !== undefined) {
+        process.stdout.write(formatSelectedToolchainsSummary(setupToolchains.plan))
       }
       const resolvedTargets = await resolveSshInstallTargets(parsed, options)
 

@@ -1,5 +1,5 @@
 import { lstatSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { isAbsolute, relative, resolve, sep } from 'node:path'
 
 import { parseJsonc, stripJsonComments } from '../jsonc.ts'
 import { TOOLCHAIN_DEFAULTS } from './defaults.ts'
@@ -33,6 +33,8 @@ interface TomlSection {
   arrayTable: boolean
   malformed: boolean
 }
+
+const MAX_ROOT_FILE_BYTES = 1024 * 1024
 
 function quotedTomlString (value: string): string | undefined {
   const quote = value[0]
@@ -204,10 +206,26 @@ function findDuplicatePackageRuntimePaths (input: string): string[] {
 }
 
 function readRootFile (workspaceFolder: string, file: string, detection?: DetectionBuilder): string | undefined {
-  const path = join(workspaceFolder, file)
+  const workspaceRoot = resolve(workspaceFolder)
+  const path = resolve(workspaceRoot, file)
+  const pathFromRoot = relative(workspaceRoot, path)
+
+  if (
+    pathFromRoot.length === 0 ||
+    pathFromRoot === '..' ||
+    pathFromRoot.startsWith(`..${sep}`) ||
+    isAbsolute(pathFromRoot)
+  ) {
+    if (detection !== undefined) {
+      addDiagnostic(detection, file, file, `Unable to read ${file}: path is outside the workspace root`)
+    }
+    return undefined
+  }
+
+  let entry
 
   try {
-    lstatSync(path)
+    entry = lstatSync(path)
   } catch (error) {
     if (typeof error === 'object' && error !== null && 'code' in error && error.code === 'ENOENT') {
       return undefined
@@ -217,6 +235,13 @@ function readRootFile (workspaceFolder: string, file: string, detection?: Detect
       addDiagnostic(detection, file, file, `Unable to read ${file}`)
     }
 
+    return undefined
+  }
+
+  if (!entry.isFile() || entry.isSymbolicLink() || entry.size > MAX_ROOT_FILE_BYTES) {
+    if (detection !== undefined) {
+      addDiagnostic(detection, file, file, `Unable to read ${file}: expected a bounded regular non-symlink file`)
+    }
     return undefined
   }
 

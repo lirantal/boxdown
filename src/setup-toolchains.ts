@@ -2,7 +2,7 @@ import { canPromptInteractively, promptMultiSelect, type PromptInput, type Promp
 import { TOOLCHAIN_DEFAULTS } from './toolchains/defaults.ts'
 import { detectToolchains, resolveDetectedVersion } from './toolchains/detect.ts'
 import { resolveToolchainPlan, writeToolchainPlan } from './toolchains/plan.ts'
-import type { DetectedToolchain, ToolchainPlan, ToolchainSelector } from './toolchains/types.ts'
+import { TOOLCHAIN_IDS, type DetectedToolchain, type ResolvedToolchain, type ToolchainPlan, type ToolchainSelector } from './toolchains/types.ts'
 import type { WorkspaceContext } from './paths.ts'
 
 export function formatDetectedToolchainsSummary (detected: readonly DetectedToolchain[]): string {
@@ -22,6 +22,29 @@ export function formatDetectedToolchainsSummary (detected: readonly DetectedTool
   })
 
   return `Detected toolchains: ${entries.length === 0 ? 'none' : entries.join('; ')}\n`
+}
+
+function selectedToolchainSource (toolchain: ResolvedToolchain): string {
+  const selectionSource = toolchain.selectionSource === 'cli'
+    ? 'CLI'
+    : toolchain.selectionSource
+
+  if (toolchain.resolutionSource === 'override') return `${selectionSource} override`
+  if (toolchain.resolutionSource === 'project') return `${selectionSource} project`
+  return `${selectionSource} Boxdown default`
+}
+
+export function formatSelectedToolchainsSummary (plan: ToolchainPlan): string {
+  if (plan.selected.length === 0) return 'Selected toolchains: none\n'
+
+  const selected = [...plan.selected]
+    .sort((left, right) => TOOLCHAIN_IDS.indexOf(left.id) - TOOLCHAIN_IDS.indexOf(right.id))
+  const lines = selected.flatMap((toolchain) => [
+    `  ${TOOLCHAIN_DEFAULTS[toolchain.id].label} ${toolchain.version} (${selectedToolchainSource(toolchain)})`,
+    ...(toolchain.compatibilityNote === undefined ? [] : [`    ${toolchain.compatibilityNote}`])
+  ])
+
+  return `Selected toolchains:\n${lines.join('\n')}\n`
 }
 
 function descriptionFor (detection: DetectedToolchain): string {

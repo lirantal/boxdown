@@ -39,7 +39,7 @@ toolchains_need_bootstrap() {
   local plan_node="${1:-/usr/local/bin/node}"
 
   "${plan_node}" - "${plan_path}" "${result_path}" <<'NODE'
-const { lstatSync, readFileSync, statSync } = require('node:fs')
+const { lstatSync, readFileSync } = require('node:fs')
 const { isAbsolute, normalize, parse, sep } = require('node:path')
 const [planPath, resultPath] = process.argv.slice(2)
 const isRecord = value => value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -62,9 +62,10 @@ function safePath (target) {
 }
 try {
   if (!safePath(planPath)) process.exit(0)
-  try { lstatSync(planPath) } catch (error) { if (error?.code === 'ENOENT') process.exit(1); throw error }
+  let planLeaf
+  try { planLeaf = lstatSync(planPath) } catch (error) { if (error?.code === 'ENOENT') process.exit(1); throw error }
+  if (!planLeaf.isFile() || planLeaf.size > 65536) process.exit(0)
   if (!safePath(resultPath)) process.exit(0)
-  if (statSync(planPath).size > 65536) process.exit(0)
   const plan = JSON.parse(readFileSync(planPath, 'utf8'))
   if (!isRecord(plan) || plan.version !== 1 || !exactHex(plan.fingerprint) || !Array.isArray(plan.selected) || plan.selected.length > 4) process.exit(0)
   const expected = new Map()
@@ -72,8 +73,9 @@ try {
     if (!isRecord(item) || !['node', 'python', 'go', 'rust'].includes(item.id) || !exactVersion(item.version) || expected.has(item.id)) process.exit(0)
     expected.set(item.id, item.version)
   }
-  try { lstatSync(resultPath) } catch (error) { if (error?.code === 'ENOENT') process.exit(0); throw error }
-  if (statSync(resultPath).size > 65536) process.exit(0)
+  let resultLeaf
+  try { resultLeaf = lstatSync(resultPath) } catch (error) { if (error?.code === 'ENOENT') process.exit(0); throw error }
+  if (!resultLeaf.isFile() || resultLeaf.size > 65536) process.exit(0)
   const result = JSON.parse(readFileSync(resultPath, 'utf8'))
   const seen = new Set()
   const validResult = isRecord(result) && result.version === 1 && result.fingerprint === plan.fingerprint && result.state === 'succeeded' &&

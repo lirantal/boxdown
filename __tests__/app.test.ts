@@ -485,23 +485,43 @@ test('setup resolves explicit toolchain selectors before invoking the workspace 
   }
   const context = createWorkspaceContext({workspace, env, assetsDevcontainerDir})
   let setupCalled = false
+  const stdout: string[] = []
+  const originalStdoutWrite = process.stdout.write
+  writeFileSync(join(workspace, 'pyproject.toml'), '[project]\nrequires-python = "<3.12"\n')
+  writeFileSync(join(workspace, 'go.mod'), 'module example.com/app\n\ngo bananas\n')
 
-  const code = await withProcessEnv(env, async () => runCli([
-    'setup', '--workspace', workspace, '--toolchain', 'node@24.17.0'
-  ], {
-    env,
-    waitForContainerRuntime: async () => ({state: 'ready', mode: 'buildx', warnings: []}),
-    runDoctorChecks: async () => [],
-    setupWorkspace: async (receivedContext) => {
-      setupCalled = true
-      assert.strictEqual(receivedContext.toolchainPlanPath, context.toolchainPlanPath)
-      assert.deepStrictEqual(readToolchainPlan(receivedContext)?.selected.map((item) => [item.id, item.version]), [['node', '24.17.0']])
-    }
-  }))
+  process.stdout.write = ((chunk: string | Uint8Array) => {
+    stdout.push(Buffer.isBuffer(chunk) ? chunk.toString('utf8') : chunk)
+    return true
+  }) as typeof process.stdout.write
+
+  let code: number
+  try {
+    code = await withProcessEnv(env, async () => runCli([
+      'setup', '--workspace', workspace,
+      '--toolchain', 'python@3.14.6',
+      '--toolchain', 'go@1.27.0'
+    ], {
+      env,
+      waitForContainerRuntime: async () => ({state: 'ready', mode: 'buildx', warnings: []}),
+      runDoctorChecks: async () => [],
+      setupWorkspace: async (receivedContext) => {
+        setupCalled = true
+        assert.strictEqual(receivedContext.toolchainPlanPath, context.toolchainPlanPath)
+        assert.deepStrictEqual(readToolchainPlan(receivedContext)?.selected.map((item) => [item.id, item.version]), [
+          ['python', '3.14.6'],
+          ['go', '1.27.0']
+        ])
+      }
+    }))
+  } finally {
+    process.stdout.write = originalStdoutWrite
+  }
 
   assert.strictEqual(code, 0)
   assert.strictEqual(setupCalled, true)
   assert.strictEqual(readWorkspaceMetadata(context)?.toolchainPlanUpdatedAt, readToolchainPlan(context)?.updatedAt)
+  assert.match(stdout.join(''), /Selected toolchains:\n {2}Python 3\.14\.6 \(CLI override\)\n {4}Explicit Python 3\.14\.6 override conflicts with pyproject\.toml requires-python <3\.12\.\n {2}Go 1\.27\.0 \(CLI override\)\n {4}Explicit Go 1\.27\.0 override compatibility could not be verified against go\.mod go bananas: Malformed Go version directive\.\n/u)
 })
 
 test('direct start preserves a stored plan and only writes explicit selectors', async () => {

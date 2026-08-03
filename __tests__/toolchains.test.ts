@@ -1,4 +1,5 @@
 import assert from 'node:assert'
+import { execFileSync, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -416,6 +417,52 @@ test('diagnoses invalid package.json containers and unreadable marker paths', ()
       kind: 'unchecked',
       defaultVersion: '24.17.0'
     })
+  })
+
+  withWorkspace(workspace => {
+    writeFileSync(join(workspace, 'outside-package.json'), JSON.stringify({volta: {node: '24.17.0'}}))
+    symlinkSync('outside-package.json', join(workspace, 'package.json'))
+
+    const node = detectToolchains(workspace)[0]
+    assert.strictEqual(node?.exactVersion, undefined)
+    assert.match(node?.diagnostics?.[0]?.message ?? '', /unable to read/i)
+  })
+
+  withWorkspace(workspace => {
+    writeFileSync(join(workspace, 'package.json'), ' '.repeat(1024 * 1024 + 1))
+
+    const node = detectToolchains(workspace)[0]
+    assert.strictEqual(node?.exactVersion, undefined)
+    assert.match(node?.diagnostics?.[0]?.message ?? '', /unable to read/i)
+  })
+})
+
+test('diagnoses a FIFO marker without blocking on a read', () => {
+  withWorkspace(workspace => {
+    const marker = join(workspace, 'package.json')
+    execFileSync('mkfifo', [marker])
+
+    const script = [
+      "import { detectToolchains } from './src/toolchains/detect.ts'",
+      'process.stdout.write(JSON.stringify(detectToolchains(process.argv[1])))'
+    ].join(';')
+    const result = spawnSync(process.execPath, ['--import', 'tsx', '--input-type=module', '-e', script, workspace], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+      timeout: 3000
+    })
+
+    assert.strictEqual(result.error, undefined, result.error?.message)
+    assert.strictEqual(result.status, 0, result.stderr)
+    const detections = JSON.parse(result.stdout) as ReturnType<typeof detectToolchains>
+    assert.strictEqual(detections[0]?.exactVersion, undefined)
+    assert.match(detections[0]?.diagnostics?.[0]?.message ?? '', /unable to read/i)
+  })
+})
+
+test('keeps absent root markers absent', () => {
+  withWorkspace(workspace => {
+    assert.deepStrictEqual(detectToolchains(workspace), [])
   })
 })
 

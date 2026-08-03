@@ -102,6 +102,29 @@ validator_status() {
   printf '%s' "${status}"
 }
 
+validator_status_quickly() {
+  local plan="$1" result="$2" status_file="${TEST_ROOT}/validator-status"
+  rm -f "${status_file}"
+  (
+    validator_status "${plan}" "${result}" > "${status_file}"
+  ) &
+  local validator=$!
+
+  local attempts
+  for attempts in {1..100}; do
+    if ! kill -0 "${validator}" 2>/dev/null; then
+      wait "${validator}"
+      cat "${status_file}"
+      return 0
+    fi
+    sleep 0.01
+  done
+
+  kill "${validator}" >/dev/null 2>&1 || true
+  wait "${validator}" 2>/dev/null || true
+  fail 'post-start validator blocked on a special file'
+}
+
 test_post_start_validator() {
   local dir="${TEST_ROOT}/validator" plan="${TEST_ROOT}/validator/plan.json" result="${TEST_ROOT}/validator/results/result.json"
   mkdir -p "$(dirname "${result}")"
@@ -129,6 +152,16 @@ test_post_start_validator() {
   [[ "$(validator_status "${plan}" "${result}")" == 0 ]] || fail 'injected plan version skipped retry'
   : > "${plan}"
   [[ "$(validator_status "${plan}" "${result}")" == 0 ]] || fail 'empty plan skipped retry'
+
+  rm -f "${plan}"
+  mkfifo "${plan}"
+  [[ "$(validator_status_quickly "${plan}" "${result}")" == 0 ]] || fail 'FIFO plan skipped retry'
+
+  rm -f "${plan}"
+  write_plan "${plan}" '[{"id":"node","version":"24.17.0"}]'
+  rm -f "${result}"
+  mkfifo "${result}"
+  [[ "$(validator_status_quickly "${plan}" "${result}")" == 0 ]] || fail 'FIFO result skipped retry'
 }
 
 test_post_create_dispatch() {
