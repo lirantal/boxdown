@@ -1,5 +1,11 @@
 # boxdown
 
+## 4.2.0
+
+### Minor Changes
+
+- [`5c2a9d5`](https://github.com/lirantal/boxdown/commit/5c2a9d555c8806a50c1a6b8f3bce6d3652e8a0a0) Thanks [@lirantal](https://github.com/lirantal)! - Detect, confirm, and provision Node.js, Python, Go, and Rust workspace toolchains.
+
 ## 4.1.0
 
 ### Minor Changes
