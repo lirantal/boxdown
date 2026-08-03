@@ -9,6 +9,7 @@ main() {
   if ! install_dependencies "$pm"; then
     [[ "${BOXDOWN_DEPS_INSTALL_STRICT:-0}" == "1" ]] && return 1
   fi
+  return 0
 }
 
 progress() {

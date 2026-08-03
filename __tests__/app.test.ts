@@ -15,7 +15,7 @@ import { codingAgentBinary, codingAgentFromCommand, type CodingAgentCli } from '
 import { AGENT_PROFILES, agentProfileMarker, isAgentProfile, parseAgentProfileMarker, resolveAgentProfile, type AgentProfile, type ContainerAgentProfile } from '../src/agent-profile.ts'
 import { color, formatPromptEnd, formatPromptTitle, promptRail, selectedMark } from '../src/cli-style.ts'
 import { buildGeneratedDevcontainerConfig, publishContainerPortFromConfig, readGeneratedAgentProfile, sourcePathIsInside, writeGeneratedDevcontainerConfig } from '../src/config.ts'
-import { BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_AGENTS_DIR, BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CLAUDE_CREDENTIALS_PATH, BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CODEX_AUTH_PATH, BOXDOWN_CONTAINER_AGENTS_DIR, BOXDOWN_CONTAINER_CLAUDE_CONFIG_PATH, BOXDOWN_CONTAINER_CLAUDE_CREDENTIALS_PATH, BOXDOWN_CONTAINER_CLAUDE_DIR, BOXDOWN_CONTAINER_CODEX_AUTH_PATH, BOXDOWN_CONTAINER_CODEX_DIR, BOXDOWN_CONTAINER_GITCONFIG_PATH, BOXDOWN_CONTAINER_HOST_GITCONFIG_DIR, BOXDOWN_CONTAINER_SECRET_ENV_BOOTSTRAP, BOXDOWN_CONTAINER_SECRET_ENV_DIR, BOXDOWN_CONTAINER_TOOLCHAIN_PLAN_PATH, BOXDOWN_CONTAINER_TOOLCHAIN_RESULTS_DIR, BOXDOWN_CONTAINER_TOOLCHAINS_DIR, DEVCONTAINER_CLI_VERSION } from '../src/constants.ts'
+import { BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_AGENTS_DIR, BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CLAUDE_CREDENTIALS_PATH, BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CODEX_AUTH_PATH, BOXDOWN_CONTAINER_AGENTS_DIR, BOXDOWN_CONTAINER_CLAUDE_CONFIG_PATH, BOXDOWN_CONTAINER_CLAUDE_CREDENTIALS_PATH, BOXDOWN_CONTAINER_CLAUDE_DIR, BOXDOWN_CONTAINER_CODEX_AUTH_PATH, BOXDOWN_CONTAINER_CODEX_DIR, BOXDOWN_CONTAINER_DEVCONTAINER_DIR, BOXDOWN_CONTAINER_GITCONFIG_PATH, BOXDOWN_CONTAINER_HOST_GITCONFIG_DIR, BOXDOWN_CONTAINER_SECRET_ENV_BOOTSTRAP, BOXDOWN_CONTAINER_SECRET_ENV_DIR, BOXDOWN_CONTAINER_TOOLCHAIN_PLAN_PATH, BOXDOWN_CONTAINER_TOOLCHAIN_RESULTS_DIR, BOXDOWN_CONTAINER_TOOLCHAINS_DIR, DEVCONTAINER_CLI_VERSION } from '../src/constants.ts'
 import { codingAgentDevcontainerExecArgs, inspectContainerAgentProfile, isPublishedBoxdownImage, parseDockerInspectImage, sshdProxyDockerArgs, sshTunnelArgs, startDevcontainer } from '../src/devcontainer.ts'
 import { resolveDevcontainerCli } from '../src/devcontainer-cli.ts'
 import { doctorHasFailures, formatDoctorText, runDoctorChecks } from '../src/doctor.ts'
@@ -414,7 +414,7 @@ test('mounts a supplied toolchain plan read-only and result state read-write', (
   )
 })
 
-test('does not mount toolchain state for a legacy workspace or a none plan', () => {
+test('does not mount toolchain state for a legacy workspace but mounts an explicit none plan', () => {
   const workspace = tempDir('toolchain-config-no-mounts')
   const context = createWorkspaceContext({
     workspace,
@@ -426,7 +426,13 @@ test('does not mount toolchain state for a legacy workspace or a none plan', () 
 
   const nonePlan = toolchainPlanFor(context, 'none')
   writeToolchainPlan(context, nonePlan)
-  assert.ok(!buildGeneratedDevcontainerConfig(context, undefined, undefined, nonePlan).mounts?.some((mount) => mount.includes(BOXDOWN_CONTAINER_TOOLCHAINS_DIR)))
+  const config = buildGeneratedDevcontainerConfig(context, undefined, undefined, nonePlan)
+  assert.ok(config.mounts?.includes(
+    `type=bind,source=${context.toolchainsDir},target=${BOXDOWN_CONTAINER_TOOLCHAINS_DIR}/plan,readonly`
+  ))
+  assert.ok(config.mounts?.includes(
+    `type=bind,source=${context.toolchainResultDir},target=${BOXDOWN_CONTAINER_TOOLCHAIN_RESULTS_DIR}`
+  ))
 })
 
 test('toolchain bootstrap disables mise config and records retryable failures', () => {
@@ -5278,6 +5284,15 @@ describe('status output', () => {
     const disabled = createStatusInfo(context, 'demo-devcontainer', undefined, existsSync)
     assert.strictEqual(disabled.toolchains.containerState, 'disabled')
     assert.match(formatStatusText(disabled), /Toolchains: disabled/)
+    assert.strictEqual(
+      createStatusInfo(context, 'demo-devcontainer', container, existsSync).toolchains.containerState,
+      'recreate-required'
+    )
+    writeGeneratedDevcontainerConfig(context, undefined, undefined, disabledPlan)
+    assert.strictEqual(
+      createStatusInfo(context, 'demo-devcontainer', container, existsSync).toolchains.containerState,
+      'disabled'
+    )
 
     const selectedPlan = toolchainPlanFor(context, 'go@1.27.0')
     writeToolchainPlan(context, selectedPlan)
@@ -7874,6 +7889,29 @@ describe('progress output', () => {
     })
   })
 
+  test('requires recreation when an explicit none plan is missing from an existing container intent', async () => {
+    const workspace = tempDir('toolchain-none-legacy-container-workspace')
+
+    await withFakeDocker([{ workspace, id: 'legacy-none-toolchain-container', agentProfileMarker: 'auth' }], async (_logPath, dockerEnv) => {
+      const env = {
+        ...dockerEnv,
+        BOXDOWN_CACHE_HOME: tempDir('toolchain-none-legacy-container-cache'),
+        BOXDOWN_DATA_HOME: tempDir('toolchain-none-legacy-container-data')
+      }
+      const context = createWorkspaceContext({workspace, env, assetsDevcontainerDir})
+      writeToolchainPlan(context, toolchainPlanFor(context, 'none'))
+      mkdirSync(context.sshKeyDir, {recursive: true})
+      writeFileSync(context.sshKeyPath, 'test private key\n')
+      writeFileSync(context.sshPublicKeyPath, 'test public key\n')
+      writeGeneratedDevcontainerConfig(context, undefined, 'auth', null)
+
+      await withProcessEnv(env, async () => assert.rejects(
+        startDevcontainer(context, {reuseRunning: true, progress: createProgress({mode: 'none'})}),
+        /Toolchain plan is not active in this devcontainer\.\nRun `boxdown start --recreate`\./
+      ))
+    })
+  })
+
   test('requires recreation when the stored toolchain mount has the wrong source, target, or access mode', async () => {
     const workspace = tempDir('toolchain-invalid-mount-container-workspace')
 
@@ -8518,7 +8556,13 @@ describe('devcontainer config generation', () => {
     assert.ok(context.workspaceSecretEnvDir.startsWith(context.runtimeRoot))
     assert.ok(!context.workspaceSecretEnvDir.startsWith(context.workspaceDataDir))
     assert.ok(config.mounts?.includes(`type=bind,source=${context.workspaceSecretEnvDir},target=${BOXDOWN_CONTAINER_SECRET_ENV_DIR},readonly`))
-    assert.strictEqual(config.containerEnv?.BASH_ENV, BOXDOWN_CONTAINER_SECRET_ENV_BOOTSTRAP)
+    const dispatcherPath = `${BOXDOWN_CONTAINER_DEVCONTAINER_DIR}/utils/toolchains-env-bootstrap.sh`
+    const dispatcher = readFileSync(join(assetsDevcontainerDir, 'utils', 'toolchains-env-bootstrap.sh'), 'utf8')
+    assert.strictEqual(config.containerEnv?.BASH_ENV, dispatcherPath)
+    assert.ok(config.mounts?.includes(
+      `type=bind,source=${context.assetsDevcontainerDir},target=${BOXDOWN_CONTAINER_DEVCONTAINER_DIR},readonly`
+    ))
+    assert.ok(dispatcher.includes(`source ${BOXDOWN_CONTAINER_SECRET_ENV_BOOTSTRAP}`))
     assert.strictEqual(config.containerEnv?.NODE_ENV, 'development')
     assert.doesNotMatch(serialized, /--env-file|\.env\.development|ANTHROPIC_API_KEY|SNYK_TOKEN|OP_SERVICE_ACCOUNT_TOKEN/)
   })

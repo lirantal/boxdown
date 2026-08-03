@@ -645,13 +645,17 @@ function toolchainContainerState (
   container: ContainerSummary | undefined
 ): ToolchainStatus['containerState'] {
   if (plan === undefined) return 'not-selected'
-  if (plan.selected.length === 0) return 'disabled'
 
   if (container !== undefined && (
     !readGeneratedToolchainPlanMount(context) ||
-    !readGeneratedToolchainResultMount(context) ||
-    result?.fingerprint !== plan.fingerprint
+    !readGeneratedToolchainResultMount(context)
   )) {
+    return 'recreate-required'
+  }
+
+  if (plan.selected.length === 0) return 'disabled'
+
+  if (container !== undefined && result?.fingerprint !== plan.fingerprint) {
     return 'recreate-required'
   }
 

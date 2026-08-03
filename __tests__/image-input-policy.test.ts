@@ -246,6 +246,16 @@ test('runs a remapped non-root lifecycle smoke test against the actual profile m
   )
 })
 
+test('runs selected toolchain wrappers through a real proxy SSH command session', () => {
+  const lifecycleSmoke = readFileSync(imageLifecycleSmokePath, 'utf8')
+
+  assert.match(lifecycleSmoke, /--ssh-proxy-host/)
+  assert.match(lifecycleSmoke, /ProxyCommand=/)
+  assert.match(lifecycleSmoke, /node --version/)
+  assert.match(lifecycleSmoke, /command -v node/)
+  assert.match(lifecycleSmoke, /ANTHROPIC_API_KEY/)
+})
+
 test('checks the quoted mount policy fixture with Docker Go CSV parsing', () => {
   const ciWorkflow = readFileSync(ciWorkflowPath, 'utf8')
   const releaseWorkflow = readFileSync(releaseWorkflowPath, 'utf8')

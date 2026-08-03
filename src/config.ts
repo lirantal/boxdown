@@ -17,7 +17,6 @@ import {
   BOXDOWN_CONTAINER_DEVCONTAINER_DIR,
   BOXDOWN_CONTAINER_GITCONFIG_PATH,
   BOXDOWN_CONTAINER_HOST_GITCONFIG_DIR,
-  BOXDOWN_CONTAINER_SECRET_ENV_BOOTSTRAP,
   BOXDOWN_CONTAINER_SECRET_ENV_DIR,
   BOXDOWN_CONTAINER_SSH_DIR,
   BOXDOWN_CONTAINER_SSH_PUBLIC_KEY_PATH,
@@ -179,7 +178,7 @@ export function buildGeneratedDevcontainerConfig (
     boxdownMounts.push(`type=bind,source=${context.gitSigningStateDir},target=/opt/boxdown/state/git-signing,readonly`)
   }
 
-  if (toolchainPlan !== null && toolchainPlan.selected.length > 0) {
+  if (toolchainPlan !== null) {
     boxdownMounts.push(
       `type=bind,source=${context.toolchainsDir},target=${BOXDOWN_CONTAINER_TOOLCHAINS_DIR}/plan,readonly`,
       `type=bind,source=${context.toolchainResultDir},target=${BOXDOWN_CONTAINER_TOOLCHAIN_RESULTS_DIR}`

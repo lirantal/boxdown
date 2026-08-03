@@ -212,8 +212,40 @@ append_path_line() {
   grep -Fqx "${path_line}" "${file}" || printf '%s\n' "${path_line}" >> "${file}"
 }
 
+prepend_ssh_bootstrap_lines() {
+  local file="$1" temporary
+  local dispatcher_line='source /opt/boxdown/devcontainer/utils/toolchains-env-bootstrap.sh'
+  local path_line='export PATH="$HOME/.local/bin:$PATH"'
+  local legacy_secret_line='source /opt/boxdown/devcontainer/utils/secret-env-bootstrap.sh'
+  target_is_missing_or_regular "${file}" || return 1
+  temporary="$(mktemp "$(dirname "${file}")/.bashrc.boxdown.XXXXXX")" || return 1
+  chmod 0600 "${temporary}" || {
+    rm -f "${temporary}"
+    return 1
+  }
+  if [[ -e "${file}" ]] && ! regular_file_is_safe "${file}"; then
+    rm -f "${temporary}"
+    return 1
+  fi
+  {
+    printf '%s\n' "${dispatcher_line}"
+    printf '%s\n' "${path_line}"
+    if [[ -e "${file}" ]]; then
+      grep -Fvx -e "${dispatcher_line}" -e "${path_line}" -e "${legacy_secret_line}" "${file}" || true
+    fi
+  } > "${temporary}" || {
+    rm -f "${temporary}"
+    return 1
+  }
+  target_is_missing_or_regular "${file}" || {
+    rm -f "${temporary}"
+    return 1
+  }
+  mv -f "${temporary}" "${file}"
+}
+
 ensure_ssh_login_path() {
-  append_path_line "${HOME}/.bashrc" || return 1
+  prepend_ssh_bootstrap_lines "${HOME}/.bashrc" || return 1
   append_path_line "${HOME}/.profile" || return 1
   append_path_line "${TOOLCHAINS_BASH_ENV}" || return 1
   chmod 0600 "${TOOLCHAINS_BASH_ENV}"

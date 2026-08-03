@@ -1,7 +1,7 @@
 import {
   BOXDOWN_CONTAINER_DEVCONTAINER_DIR
 } from './constants.ts'
-import { buildGeneratedDevcontainerConfig, publishContainerPortFromConfig, readGeneratedAgentProfile, readGeneratedToolchainPlanMount, writeGeneratedDevcontainerConfig } from './config.ts'
+import { buildGeneratedDevcontainerConfig, publishContainerPortFromConfig, readGeneratedAgentProfile, readGeneratedToolchainPlanMount, readGeneratedToolchainResultMount, writeGeneratedDevcontainerConfig } from './config.ts'
 import { codingAgentBinary, type CodingAgentCli } from './coding-agents.ts'
 import { resolveDevcontainerCli } from './devcontainer-cli.ts'
 import { configureWorkspaceGithubGitAuth } from './github-git-auth.ts'
@@ -363,7 +363,10 @@ export async function startDevcontainer (context: WorkspaceContext, options: Sta
     : await findWorkspaceContainer(context, { logger: options.logger })
   const priorGeneratedAgentProfile = readGeneratedAgentProfile(context)
   if (existingContainer !== undefined) {
-    if (toolchainPlan !== undefined && toolchainPlan.selected.length > 0 && !readGeneratedToolchainPlanMount(context)) {
+    if (toolchainPlan !== undefined && (
+      !readGeneratedToolchainPlanMount(context) ||
+      !readGeneratedToolchainResultMount(context)
+    )) {
       throw new Error(toolchainPlanMismatchMessage())
     }
 

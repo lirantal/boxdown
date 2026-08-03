@@ -72,6 +72,16 @@ run_bootstrap() {
     bash "${script}"
 }
 
+run_post_create_bootstrap() {
+  local script="$1" home="$2" plan="$3" results="$4" workspace="$5" log="$6"
+  HOME="${home}" PATH='/usr/bin:/bin' MISE_LOG="${log}" \
+    BOXDOWN_CONTAINER_TOOLCHAIN_PLAN_PATH="${plan}" \
+    BOXDOWN_CONTAINER_TOOLCHAIN_RESULTS_DIR="${results}" \
+    BOXDOWN_CONTAINER_WORKSPACE_FOLDER="${workspace}" \
+    bash -c 'source "$1"; DEVCONTAINER_DIR="$2"; configure_toolchains' _ \
+      "${POST_CREATE}" "$(cd "$(dirname "${script}")/.." && pwd -P)"
+}
+
 validator_status() {
   local plan="$1" result="$2"
   set +e
@@ -131,6 +141,52 @@ test_post_create_dispatch() {
   [[ -e "${marker}" ]] || fail 'legacy no-plan dependency behavior changed'
 }
 
+test_dependency_exit_semantics() {
+  local workspace="${TEST_ROOT}/dependency-status/workspace"
+  local bin="${TEST_ROOT}/dependency-status/bin" plan="${TEST_ROOT}/dependency-status/missing-plan.json"
+  mkdir -p "${workspace}" "${bin}"
+  printf '{}\n' > "${workspace}/package.json"
+  printf '{}\n' > "${workspace}/package-lock.json"
+  printf '#!/usr/bin/env bash\nexit 29\n' > "${bin}/npm"
+  chmod 0755 "${bin}/npm"
+
+  (cd "${workspace}" && BASH_ENV=/dev/null PATH="${bin}:/usr/bin:/bin" \
+    bash "${DEVCONTAINER_DIR}/utils/deps-install.sh") || fail 'legacy non-strict dependency failure returned nonzero'
+  if (cd "${workspace}" && BASH_ENV=/dev/null PATH="${bin}:/usr/bin:/bin" BOXDOWN_DEPS_INSTALL_STRICT=1 \
+    bash "${DEVCONTAINER_DIR}/utils/deps-install.sh"); then
+    fail 'strict dependency failure returned zero'
+  fi
+  (cd "${workspace}" && BASH_ENV=/dev/null PATH="${bin}:/usr/bin:/bin" \
+    BOXDOWN_CONTAINER_TOOLCHAIN_PLAN_PATH="${plan}" DEVCONTAINER_DIR="${DEVCONTAINER_DIR}" \
+    bash -c 'source "$1"; run_deps_install "$2"' _ "${POST_CREATE}" "${NODE_BIN}") ||
+    fail 'post-create legacy dependency failure returned nonzero'
+}
+
+test_noninteractive_bashrc_path() {
+  local home="${TEST_ROOT}/bashrc/home" workspace="${TEST_ROOT}/bashrc/workspace"
+  local plan="${TEST_ROOT}/bashrc/plan.json" results="${TEST_ROOT}/bashrc/results" log="${TEST_ROOT}/bashrc/mise.log"
+  local mise="${TEST_ROOT}/bashrc/bin/mise" bootstrap="${TEST_ROOT}/bashrc/devcontainer/utils/toolchains-bootstrap.sh"
+  mkdir -p "${home}" "${workspace}"
+  cat > "${home}/.bashrc" <<'BASHRC'
+# Standard Debian noninteractive guard.
+case $- in
+  *i*) ;;
+  *) return ;;
+esac
+export USER_BASHRC_MARKER=preserved
+BASHRC
+  make_fake_mise "${mise}"
+  make_bootstrap "${bootstrap}" "${mise}"
+  write_plan "${plan}" '[]'
+  : > "${log}"
+  run_bootstrap "${bootstrap}" "${home}" "${plan}" "${results}" "${workspace}" "${log}"
+  [[ "$(sed -n '1p' "${home}/.bashrc")" == 'source /opt/boxdown/devcontainer/utils/toolchains-env-bootstrap.sh' ]] ||
+    fail 'secret and toolchain dispatcher was not placed before the noninteractive bashrc return'
+  [[ "$(sed -n '2p' "${home}/.bashrc")" == 'export PATH="$HOME/.local/bin:$PATH"' ]] ||
+    fail 'toolchain PATH was not placed before the noninteractive bashrc return'
+  grep -Fqx 'export USER_BASHRC_MARKER=preserved' "${home}/.bashrc" || fail 'bashrc contents were not preserved'
+}
+
 test_results_failures_and_modes() {
   local dir="${TEST_ROOT}/results" home="${TEST_ROOT}/results/home" workspace="${TEST_ROOT}/results/workspace"
   local plan="${TEST_ROOT}/results/plan.json" results="${TEST_ROOT}/results/output" log="${TEST_ROOT}/results/mise.log"
@@ -145,7 +201,7 @@ test_results_failures_and_modes() {
 
   printf '{}\n' > "${workspace}/package.json"
   write_plan "${plan}" "[{\"id\":\"node\",\"version\":\"$(${NODE_BIN} --version | sed 's/^v//')\"}]"
-  MISE_FAIL_EXEC=1 run_bootstrap "${bootstrap}" "${home}" "${plan}" "${results}" "${workspace}" "${log}"
+  MISE_FAIL_EXEC=1 run_post_create_bootstrap "${bootstrap}" "${home}" "${plan}" "${results}" "${workspace}" "${log}"
   assert_json "${results}/result.json" 'value.state === "failed" && value.runtimes.length === 1 && value.runtimes[0].message === "dependency synchronization failed"'
   rm -f "${workspace}/package.json"
 
@@ -248,6 +304,8 @@ test_symlink_refusal() {
 
 test_post_start_validator
 test_post_create_dispatch
+test_dependency_exit_semantics
+test_noninteractive_bashrc_path
 test_results_failures_and_modes
 test_owned_wrappers
 test_symlink_refusal
