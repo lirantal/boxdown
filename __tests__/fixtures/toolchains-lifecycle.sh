@@ -63,6 +63,14 @@ make_bootstrap() {
   chmod 0755 "${target}"
 }
 
+make_env_dispatcher() {
+  local target="$1" secret_bootstrap="$2"
+  mkdir -p "$(dirname "${target}")"
+  sed "s#/opt/boxdown/devcontainer/utils/secret-env-bootstrap.sh#${secret_bootstrap}#" \
+    "${DEVCONTAINER_DIR}/utils/toolchains-env-bootstrap.sh" > "${target}"
+  chmod 0755 "${target}"
+}
+
 run_bootstrap() {
   local script="$1" home="$2" plan="$3" results="$4" workspace="$5" log="$6"
   HOME="${home}" PATH='/usr/bin:/bin' MISE_LOG="${log}" \
@@ -187,6 +195,37 @@ BASHRC
   grep -Fqx 'export USER_BASHRC_MARKER=preserved' "${home}/.bashrc" || fail 'bashrc contents were not preserved'
 }
 
+test_env_dispatcher_preserves_caller_shell_options() {
+  local dir="${TEST_ROOT}/env-dispatcher" home="${TEST_ROOT}/env-dispatcher/home"
+  local dispatcher="${dir}/toolchains-env-bootstrap.sh" secret_bootstrap="${dir}/secret-env-bootstrap.sh"
+  mkdir -p "${home}/.local/share/boxdown/toolchains"
+  printf 'export PATH="$HOME/.local/bin:$PATH"\n' > "${home}/.local/share/boxdown/toolchains/bash-env.sh"
+  printf '#!/usr/bin/env bash\nexport BOXDOWN_SECRET_DISPATCHER_SENTINEL=present\n' > "${secret_bootstrap}"
+  make_env_dispatcher "${dispatcher}" "${secret_bootstrap}"
+
+  HOME="${home}" PATH='/usr/bin:/bin' bash -c '
+    set +u
+    set +o pipefail
+    source "$1"
+    [[ "$-" != *u* ]] || exit 11
+    false | true
+    [[ $? == 0 ]] || exit 12
+    [[ -z "${unset_after_dispatcher}" ]] || exit 13
+    [[ "$PATH" == "$HOME/.local/bin:/usr/bin:/bin" ]] || exit 14
+    [[ "${BOXDOWN_SECRET_DISPATCHER_SENTINEL}" == present ]] || exit 15
+  ' _ "${dispatcher}" || fail 'dispatcher changed disabled caller shell options or did not load PATH and secrets'
+
+  HOME="${home}" PATH='/usr/bin:/bin' bash -c '
+    set -u
+    set -o pipefail
+    source "$1"
+    [[ "$-" == *u* ]] || exit 21
+    if false | true; then exit 22; fi
+    [[ "$PATH" == "$HOME/.local/bin:/usr/bin:/bin" ]] || exit 23
+    [[ "${BOXDOWN_SECRET_DISPATCHER_SENTINEL}" == present ]] || exit 24
+  ' _ "${dispatcher}" || fail 'dispatcher changed enabled caller shell options or did not load PATH and secrets'
+}
+
 test_results_failures_and_modes() {
   local dir="${TEST_ROOT}/results" home="${TEST_ROOT}/results/home" workspace="${TEST_ROOT}/results/workspace"
   local plan="${TEST_ROOT}/results/plan.json" results="${TEST_ROOT}/results/output" log="${TEST_ROOT}/results/mise.log"
@@ -247,6 +286,20 @@ test_owned_wrappers() {
   run_bootstrap "${bootstrap}" "${home}" "${plan}" "${results}" "${workspace}" "${log}"
   [[ -e "${home}/.local/bin/node" ]] || fail 'stale cleanup removed user executable'
   [[ ! -e "${home}/.local/bin/python" ]] || fail 'stale cleanup retained owned wrapper'
+
+  rm -f "${home}/.local/bin/node" "${home}/.local/bin/npm" "${home}/.local/bin/npx" "${home}/.local/bin/corepack"
+  write_plan "${plan}" "[{\"id\":\"node\",\"version\":\"$(${NODE_BIN} --version | sed 's/^v//')\"}]"
+  run_bootstrap "${bootstrap}" "${home}" "${plan}" "${results}" "${workspace}" "${log}"
+  grep -Fqx '# boxdown-toolchain-wrapper-v1' "${home}/.local/bin/node" || fail 'successful runtime did not create an owned node wrapper'
+  printf '#!/usr/bin/env bash\nprintf user-corepack\n' > "${home}/.local/bin/corepack"
+  chmod 0755 "${home}/.local/bin/corepack"
+
+  write_plan "${plan}" '[{"id":"node","version":"1.2.3"}]'
+  MISE_FAIL_INSTALL=1 run_bootstrap "${bootstrap}" "${home}" "${plan}" "${results}" "${workspace}" "${log}"
+  [[ ! -e "${home}/.local/bin/node" && ! -e "${home}/.local/bin/npm" && ! -e "${home}/.local/bin/npx" ]] ||
+    fail 'failed runtime install retained stale Boxdown-owned wrappers'
+  assert_file_equals "${home}/.local/bin/corepack" $'#!/usr/bin/env bash\nprintf user-corepack'
+  assert_json "${results}/result.json" 'value.state === "failed" && value.runtimes[0].message === "mise install failed"'
 }
 
 test_symlink_refusal() {
@@ -306,6 +359,7 @@ test_post_start_validator
 test_post_create_dispatch
 test_dependency_exit_semantics
 test_noninteractive_bashrc_path
+test_env_dispatcher_preserves_caller_shell_options
 test_results_failures_and_modes
 test_owned_wrappers
 test_symlink_refusal

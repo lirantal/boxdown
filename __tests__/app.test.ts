@@ -8562,7 +8562,7 @@ describe('devcontainer config generation', () => {
     assert.ok(config.mounts?.includes(
       `type=bind,source=${context.assetsDevcontainerDir},target=${BOXDOWN_CONTAINER_DEVCONTAINER_DIR},readonly`
     ))
-    assert.ok(dispatcher.includes(`source ${BOXDOWN_CONTAINER_SECRET_ENV_BOOTSTRAP}`))
+    assert.ok(dispatcher.split(/\r?\n/u).some((line) => line === `source ${BOXDOWN_CONTAINER_SECRET_ENV_BOOTSTRAP}`))
     assert.strictEqual(config.containerEnv?.NODE_ENV, 'development')
     assert.doesNotMatch(serialized, /--env-file|\.env\.development|ANTHROPIC_API_KEY|SNYK_TOKEN|OP_SERVICE_ACCOUNT_TOKEN/)
   })

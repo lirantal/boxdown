@@ -159,6 +159,12 @@ is_owned_wrapper() {
   [[ "$(sed -n '2p' "${target}")" == "${WRAPPER_MARKER}" ]]
 }
 
+is_owned_runtime_wrapper() {
+  local target="$1" runtime="$2" command="$3"
+  is_owned_wrapper "${target}" || return 1
+  grep -Eq "^exec [^[:space:]]+ --no-config exec '${runtime}@[0-9A-Za-z.+-]+' -- '${command}' \"\\\$@\"$" "${target}"
+}
+
 write_wrapper() {
   local command="$1" runtime="$2" version="$3"
   local bin_dir="${HOME}/.local/bin" target="${HOME}/.local/bin/${command}" temporary
@@ -199,6 +205,25 @@ write_runtime_wrappers() {
   esac
   for command in "${commands[@]}"; do
     write_wrapper "${command}" "${id}" "${version}" || return 1
+  done
+}
+
+remove_failed_runtime_wrappers() {
+  local id="$1" command target
+  local -a commands=()
+  case "${id}" in
+    node) commands=(node npm npx corepack) ;;
+    python) commands=(python python3 pip) ;;
+    go) commands=(go) ;;
+    rust) commands=(cargo rustc rustup) ;;
+    *) return 1 ;;
+  esac
+  for command in "${commands[@]}"; do
+    target="${HOME}/.local/bin/${command}"
+    path_is_safe "${target}" || return 1
+    if [[ -e "${target}" ]] && is_owned_runtime_wrapper "${target}" "${id}" "${command}"; then
+      rm -f "${target}" || return 1
+    fi
   done
 }
 
@@ -373,6 +398,7 @@ main() {
     [[ -n "${id}" ]] || continue
     message=''
     if ! install_runtime "${id}" "${version}"; then
+      remove_failed_runtime_wrappers "${id}" || warn "${id} ${version}: could not remove stale Boxdown-owned wrappers."
       message='mise install failed'
     elif ! write_runtime_wrappers "${id}" "${version}"; then
       message='refused to replace a non-Boxdown runtime command'
