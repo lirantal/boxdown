@@ -1,7 +1,6 @@
 import { randomUUID } from 'node:crypto'
-import { chmodSync, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmdirSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
-import { posix, win32 } from 'node:path'
-import { dirname, join } from 'node:path'
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, readdirSync, renameSync, rmdirSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import { dirname, isAbsolute, join, posix, resolve, win32 } from 'node:path'
 import { applyEdits, createScanner, findNodeAtLocation, getNodeValue, modify, parseTree, printParseErrorCode, type FormattingOptions, type ModificationOptions, type Node as JsonNode, type ParseError } from 'jsonc-parser'
 
 import type { WorkspaceContext } from './paths.ts'
@@ -373,12 +372,37 @@ function sameMapping (left: CursorRemotePlatformMapping, right: CursorRemotePlat
   return left.alias === right.alias && comparableSettingsPath(left.settingsPath) === comparableSettingsPath(right.settingsPath)
 }
 
+const MAX_CURSOR_SYMLINK_DEPTH = 40
+
+function resolveCursorFileTarget (path: string): string {
+  let currentPath = resolve(path)
+  const visited = new Set<string>()
+  for (let depth = 0; depth < MAX_CURSOR_SYMLINK_DEPTH; depth++) {
+    let status
+    try {
+      status = lstatSync(currentPath)
+    } catch (error) {
+      if (errorCode(error) === 'ENOENT') return currentPath
+      throw error
+    }
+    if (!status.isSymbolicLink()) return currentPath
+    if (visited.has(currentPath)) {
+      throw new Error(`Cursor settings symbolic link cycle: ${path}`)
+    }
+    visited.add(currentPath)
+    const target = readlinkSync(currentPath)
+    currentPath = isAbsolute(target) ? resolve(target) : resolve(dirname(currentPath), target)
+  }
+  throw new Error(`Cursor settings symbolic link depth exceeds ${MAX_CURSOR_SYMLINK_DEPTH}: ${path}`)
+}
+
 function readFileSnapshot (path: string): FileSnapshot {
+  const sourcePath = resolveCursorFileTarget(path)
   try {
     return {
       exists: true,
-      text: readFileSync(path, 'utf8'),
-      mode: statSync(path).mode & 0o777
+      text: readFileSync(sourcePath, 'utf8'),
+      mode: statSync(sourcePath).mode & 0o777
     }
   } catch (error) {
     if (errorCode(error) === 'ENOENT') return { exists: false }
@@ -387,7 +411,7 @@ function readFileSnapshot (path: string): FileSnapshot {
 }
 
 function atomicWriteFile (path: string, contents: string, defaultMode: number, createNonce: () => string): void {
-  const destinationPath = existsSync(path) ? realpathSync(path) : path
+  const destinationPath = resolveCursorFileTarget(path)
   const existingMode = existsSync(destinationPath) ? statSync(destinationPath).mode & 0o777 : undefined
   const mode = existingMode ?? defaultMode
   const temporaryPath = join(dirname(destinationPath), `.${destinationPath.split(/[\\/]/u).at(-1) ?? 'cursor'}.tmp-${process.pid}-${createNonce()}`)

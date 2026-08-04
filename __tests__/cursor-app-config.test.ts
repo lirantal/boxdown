@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, join, relative } from 'node:path'
 import { after, test } from 'node:test'
 
 import {
@@ -496,6 +496,74 @@ test('atomic settings updates preserve an existing symlink target', async () => 
   assert.strictEqual(readlinkSync(item.settingsPath), targetPath)
   assert.strictEqual(readMapping(targetPath, 'link-devcontainer'), 'linux')
   assert.strictEqual(statSync(targetPath).mode & 0o777, 0o640)
+})
+
+test('atomic settings updates preserve a dangling relative symlink', async () => {
+  const item = cursorFixture('dangling-relative-symlink')
+  const relativeTarget = '../targets/settings.json'
+  const targetPath = join(item.root, 'targets', 'settings.json')
+  mkdirSync(dirname(item.settingsPath), { recursive: true })
+  symlinkSync(relativeTarget, item.settingsPath)
+
+  await installCursorSshTarget(item.context, 'dangling-devcontainer', item.options)
+
+  assert.strictEqual(lstatSync(item.settingsPath).isSymbolicLink(), true)
+  assert.strictEqual(readlinkSync(item.settingsPath), relativeTarget)
+  assert.strictEqual(readMapping(targetPath, 'dangling-devcontainer'), 'linux')
+  assert.strictEqual(statSync(targetPath).mode & 0o777, 0o600)
+})
+
+test('atomic settings updates preserve a dangling symlink chain', async () => {
+  const item = cursorFixture('dangling-symlink-chain')
+  const intermediatePath = join(item.root, 'links', 'cursor-settings.json')
+  const targetPath = join(item.root, 'targets', 'chained-settings.json')
+  mkdirSync(dirname(item.settingsPath), { recursive: true })
+  mkdirSync(dirname(intermediatePath), { recursive: true })
+  symlinkSync('../links/cursor-settings.json', item.settingsPath)
+  symlinkSync(targetPath, intermediatePath)
+
+  await installCursorSshTarget(item.context, 'chain-devcontainer', item.options)
+
+  assert.strictEqual(lstatSync(item.settingsPath).isSymbolicLink(), true)
+  assert.strictEqual(lstatSync(intermediatePath).isSymbolicLink(), true)
+  assert.strictEqual(readlinkSync(intermediatePath), targetPath)
+  assert.strictEqual(readMapping(targetPath, 'chain-devcontainer'), 'linux')
+})
+
+test('atomic settings updates reject a symbolic link cycle', async () => {
+  const item = cursorFixture('symlink-cycle')
+  const otherPath = join(dirname(item.settingsPath), 'other-settings.json')
+  mkdirSync(dirname(item.settingsPath), { recursive: true })
+  symlinkSync('other-settings.json', item.settingsPath)
+  symlinkSync('settings.json', otherPath)
+
+  await assert.rejects(
+    installCursorSshTarget(item.context, 'cycle-devcontainer', item.options),
+    /Cursor settings symbolic link cycle/
+  )
+  assert.strictEqual(lstatSync(item.settingsPath).isSymbolicLink(), true)
+  assert.strictEqual(lstatSync(otherPath).isSymbolicLink(), true)
+  assert.strictEqual(existsSync(cursorIntegrationPath(item.context)), false)
+})
+
+test('atomic settings updates reject excessive symbolic link depth', async () => {
+  const item = cursorFixture('symlink-depth')
+  const chainDirectory = join(item.root, 'deep-links')
+  mkdirSync(dirname(item.settingsPath), { recursive: true })
+  mkdirSync(chainDirectory, { recursive: true })
+  let linkPath = item.settingsPath
+  for (let index = 0; index < 41; index++) {
+    const nextPath = join(chainDirectory, `link-${index}.json`)
+    symlinkSync(relative(dirname(linkPath), nextPath), linkPath)
+    linkPath = nextPath
+  }
+
+  await assert.rejects(
+    installCursorSshTarget(item.context, 'depth-devcontainer', item.options),
+    /Cursor settings symbolic link depth exceeds 40/
+  )
+  assert.strictEqual(lstatSync(item.settingsPath).isSymbolicLink(), true)
+  assert.strictEqual(existsSync(cursorIntegrationPath(item.context)), false)
 })
 
 test('atomic install does not touch settings when record persistence fails', async () => {
