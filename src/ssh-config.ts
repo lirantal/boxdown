@@ -1,6 +1,6 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { dirname, join, win32 } from 'node:path'
+import { dirname, join, posix, win32 } from 'node:path'
 
 import type { WorkspaceContext } from './paths.ts'
 import { shellQuote, sshConfigQuote } from './shell.ts'
@@ -24,14 +24,23 @@ export function defaultSshConfigPath (
   if (configuredPath !== undefined) return configuredPath
 
   if (platform === 'win32') {
-    const home = env.USERPROFILE ?? env.HOME
-    if (home === undefined || home.length === 0) {
+    const home = nonEmptyEnvironmentValue(env.USERPROFILE) ?? nonEmptyEnvironmentValue(env.HOME)
+    if (home === undefined) {
       throw new Error('Cannot resolve the Windows home directory for the SSH config')
     }
     return win32.join(home, '.ssh', 'config')
   }
 
-  return join(env.HOME ?? homedir(), '.ssh', 'config')
+  const home = nonEmptyEnvironmentValue(env.HOME) ?? (platform === process.platform ? homedir() : undefined)
+  if (home === undefined) {
+    const platformName = platform === 'darwin' ? 'macOS' : 'Linux'
+    throw new Error(`Cannot resolve the ${platformName} home directory for the SSH config`)
+  }
+  return posix.join(home, '.ssh', 'config')
+}
+
+function nonEmptyEnvironmentValue (value: string | undefined): string | undefined {
+  return value === undefined || value.length === 0 ? undefined : value
 }
 
 export function buildProxyCommand (context: WorkspaceContext, alias: string): string {

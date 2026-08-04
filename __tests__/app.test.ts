@@ -10651,9 +10651,22 @@ describe('SSH config generation', () => {
       defaultSshConfigPath({ USERPROFILE: 'C:\\Users\\tester' }, 'win32'),
       'C:\\Users\\tester\\.ssh\\config'
     )
+    assert.strictEqual(
+      defaultSshConfigPath({ USERPROFILE: '', HOME: 'C:\\Users\\fallback' }, 'win32'),
+      'C:\\Users\\fallback\\.ssh\\config'
+    )
     assert.throws(
       () => defaultSshConfigPath({}, 'win32'),
       /Cannot resolve the Windows home directory for the SSH config/
+    )
+    const foreignPosixPlatform: NodeJS.Platform = process.platform === 'linux' ? 'darwin' : 'linux'
+    assert.throws(
+      () => defaultSshConfigPath({}, foreignPosixPlatform),
+      /Cannot resolve the (?:macOS|Linux) home directory for the SSH config/
+    )
+    assert.throws(
+      () => defaultSshConfigPath({ HOME: '' }, foreignPosixPlatform),
+      /Cannot resolve the (?:macOS|Linux) home directory for the SSH config/
     )
   })
 
