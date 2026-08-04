@@ -10,6 +10,7 @@ export type SshConfigInstallTarget = 'codex' | 'claude' | 'cursor'
 
 export interface SshInstallTargetOptions {
   quiet?: boolean
+  writeEssential?: (message: string) => void
 }
 
 export interface SshInstallTargetDefinition {
@@ -197,15 +198,16 @@ async function warnAboutCursorRemoteSshPrerequisite (): Promise<void> {
 
 async function installCursorTarget (context: WorkspaceContext, alias: string, options: SshInstallTargetOptions = {}): Promise<void> {
   const result = await installCursorSshTarget(context, alias)
+  const writeEssential = options.writeEssential ?? ((message: string) => process.stdout.write(`${message}\n`))
 
   if (options.quiet !== true) {
     process.stdout.write('\n')
     process.stdout.write(cursorDispositionMessage(alias, result))
   }
-  process.stdout.write(`Cursor settings: ${result.settingsPath}\n`)
-  process.stdout.write(`Cursor remote folder URI: ${result.folderUri}\n`)
-  process.stdout.write(`Cursor open command${result.commandLabel === undefined ? '' : ` (${result.commandLabel})`}: ${result.command}\n`)
-  process.stdout.write('Refresh Cursor Remote Explorer or restart Cursor if the SSH alias is not visible.\n')
+  writeEssential(`Cursor settings: ${result.settingsPath}`)
+  writeEssential(`Cursor remote folder URI: ${result.folderUri}`)
+  writeEssential(`Cursor open command${result.commandLabel === undefined ? '' : ` (${result.commandLabel})`}: ${result.command}`)
+  writeEssential('Refresh Cursor Remote Explorer or restart Cursor if the SSH alias is not visible.')
 
   await warnAboutCursorRemoteSshPrerequisite()
 }

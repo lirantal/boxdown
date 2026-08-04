@@ -340,6 +340,57 @@ function recordProgressStepEvents (
   return events
 }
 
+function createTerminalOutputModel (): {
+  write: (message: string) => void
+  text: () => string
+} {
+  const lines = ['']
+  let row = 0
+  let column = 0
+
+  function ensureRow (): void {
+    while (lines.length <= row) lines.push('')
+  }
+
+  function write (message: string): void {
+    for (let index = 0; index < message.length;) {
+      const control = message.slice(index).match(/^\u001B\[([0-9;?]*)([A-Za-z])/u)
+      if (control !== null) {
+        const parameters = control[1] ?? ''
+        const command = control[2]
+        if (command === 'A') row = Math.max(0, row - (Number.parseInt(parameters, 10) || 1))
+        if (command === 'K') {
+          ensureRow()
+          lines[row] = ''
+        }
+        index += control[0].length
+        continue
+      }
+
+      const character = message[index] ?? ''
+      if (character === '\r') {
+        column = 0
+      } else if (character === '\n') {
+        row += 1
+        column = 0
+        ensureRow()
+      } else {
+        ensureRow()
+        const current = lines[row] ?? ''
+        const padded = current.padEnd(column, ' ')
+        lines[row] = `${padded.slice(0, column)}${character}${padded.slice(column + 1)}`
+        column += 1
+      }
+      index += 1
+    }
+  }
+
+  return {
+    write,
+    text: () => lines.map(line => line.trimEnd()).join('\n').replace(/\n+$/u, '')
+  }
+}
+
 function recordProgressSpinnerEvents (progress: ReturnType<typeof createProgress>): string[] {
   const events: string[] = []
   const startSpinner = progress.startSpinner.bind(progress)
@@ -3336,17 +3387,96 @@ describe('CLI execution', () => {
     ])
   })
 
-  test('structured setup always prints the essential Cursor handoff without launching Cursor', async () => {
-    for (const mode of ['interactive', 'detailed'] as const) {
-      const workspace = tempDir(`setup-cursor-${mode}-workspace`)
-      const sshConfigPath = join(tempDir(`setup-cursor-${mode}-ssh`), 'config')
-      const settingsPath = join(tempDir(`setup-cursor-${mode}-settings`), 'settings.json')
+  test('interactive TTY setup keeps the essential Cursor handoff and checklist coherent after completion redraw', async () => {
+    const workspace = tempDir('setup-cursor-interactive-workspace')
+    const sshConfigPath = join(tempDir('setup-cursor-interactive-ssh'), 'config')
+    const settingsPath = join(tempDir('setup-cursor-interactive-settings'), 'settings.json')
+    const cursor = fakeCursorCli()
+    const env = {
+      HOME: tempDir('setup-cursor-interactive-home'),
+      BOXDOWN_CACHE_HOME: tempDir('setup-cursor-interactive-cache'),
+      BOXDOWN_DATA_HOME: tempDir('setup-cursor-interactive-data'),
+      BOXDOWN_RUNTIME_HOME: tempDir('setup-cursor-interactive-runtime'),
+      BOXDOWN_SSH_CONFIG: sshConfigPath,
+      BOXDOWN_CURSOR_SETTINGS: settingsPath,
+      BOXDOWN_HOST_PATH_PREFIX: cursor.env.BOXDOWN_HOST_PATH_PREFIX as string,
+      BOXDOWN_FAKE_CURSOR_LOG: cursor.env.BOXDOWN_FAKE_CURSOR_LOG as string,
+      BOXDOWN_FAKE_CURSOR_EXTENSIONS: cursor.env.BOXDOWN_FAKE_CURSOR_EXTENSIONS as string,
+      BOXDOWN_FAKE_CURSOR_EXIT_CODE: cursor.env.BOXDOWN_FAKE_CURSOR_EXIT_CODE as string
+    }
+    const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+    const alias = `${context.workspaceBasename}-devcontainer`
+    const terminal = createTerminalOutputModel()
+    const progress = createProgress({
+      mode: 'interactive',
+      isTTY: true,
+      spinnerIntervalMs: 60_000,
+      write: (_target, message) => terminal.write(`${message}\n`),
+      writeRaw: (_target, message) => terminal.write(message)
+    })
+    const setupSteps = [
+      { id: 'ssh-identity', label: 'Preparing SSH identity' },
+      { id: 'devcontainer-config', label: 'Writing devcontainer configuration' },
+      { id: 'devcontainer-start', label: 'Starting devcontainer' },
+      { id: 'ssh-alias', label: 'Installing SSH alias' },
+      { id: 'ssh-target:cursor', label: 'Installing Cursor SSH target' }
+    ] as const
+    progress.section('Boxdown setup')
+    progress.setSteps(setupSteps)
+    mkdirSync(dirname(settingsPath), { recursive: true })
+    writeFileSync(settingsPath, JSON.stringify({ 'remote.SSH.configFile': sshConfigPath }))
+
+    try {
+      await withProcessEnv(env, async () => setupWorkspace(context, alias, {
+        progress,
+        targets: ['cursor'],
+        start: async () => {
+          for (const step of setupSteps.slice(0, 3)) {
+            progress.startStep(step.id)
+            progress.completeStep(step.id)
+          }
+          return 'setup-container'
+        },
+        installSsh: async () => {},
+        installTarget: installSshInstallTarget
+      }))
+    } finally {
+      progress.end()
+    }
+
+    const output = terminal.text()
+    const folderUri = `vscode-remote://ssh-remote+${alias}/workspaces/${encodeURIComponent(context.workspaceBasename)}`
+    const handoffLines = [
+      `Cursor settings: ${settingsPath}`,
+      `Cursor remote folder URI: ${folderUri}`,
+      `Cursor open command: cursor --folder-uri '${folderUri}'`,
+      'Refresh Cursor Remote Explorer or restart Cursor if the SSH alias is not visible.'
+    ]
+
+    for (const line of handoffLines) {
+      assert.strictEqual(output.split(line).length - 1, 1, line)
+    }
+    for (const step of setupSteps) {
+      assert.strictEqual(output.split(step.label).length - 1, 1, step.label)
+      assert.ok(output.includes(`✔ ${step.label}`), step.label)
+    }
+    assert.deepStrictEqual(fakeCursorCalls(cursor.logPath), ['--list-extensions'])
+  })
+
+  test('detailed and non-TTY setup keep the essential Cursor handoff without launching Cursor', async () => {
+    for (const scenario of [
+      { name: 'detailed', mode: 'detailed', isTTY: true },
+      { name: 'non-tty', mode: 'interactive', isTTY: false }
+    ] as const) {
+      const workspace = tempDir(`setup-cursor-${scenario.name}-workspace`)
+      const sshConfigPath = join(tempDir(`setup-cursor-${scenario.name}-ssh`), 'config')
+      const settingsPath = join(tempDir(`setup-cursor-${scenario.name}-settings`), 'settings.json')
       const cursor = fakeCursorCli()
       const env = {
-        HOME: tempDir(`setup-cursor-${mode}-home`),
-        BOXDOWN_CACHE_HOME: tempDir(`setup-cursor-${mode}-cache`),
-        BOXDOWN_DATA_HOME: tempDir(`setup-cursor-${mode}-data`),
-        BOXDOWN_RUNTIME_HOME: tempDir(`setup-cursor-${mode}-runtime`),
+        HOME: tempDir(`setup-cursor-${scenario.name}-home`),
+        BOXDOWN_CACHE_HOME: tempDir(`setup-cursor-${scenario.name}-cache`),
+        BOXDOWN_DATA_HOME: tempDir(`setup-cursor-${scenario.name}-data`),
+        BOXDOWN_RUNTIME_HOME: tempDir(`setup-cursor-${scenario.name}-runtime`),
         BOXDOWN_SSH_CONFIG: sshConfigPath,
         BOXDOWN_CURSOR_SETTINGS: settingsPath,
         BOXDOWN_HOST_PATH_PREFIX: cursor.env.BOXDOWN_HOST_PATH_PREFIX as string,
@@ -3356,19 +3486,19 @@ describe('CLI execution', () => {
       }
       const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
       const alias = `${context.workspaceBasename}-devcontainer`
-      const progress = createProgress({ mode, write: () => {} })
+      const output: string[] = []
+      const progress = createProgress({
+        mode: scenario.mode,
+        isTTY: scenario.isTTY,
+        write: (_target, message) => output.push(`${message}\n`),
+        writeRaw: (_target, message) => output.push(message)
+      })
       progress.setSteps([
         { id: 'ssh-alias', label: 'Installing SSH alias' },
         { id: 'ssh-target:cursor', label: 'Installing Cursor SSH target' }
       ])
       mkdirSync(dirname(settingsPath), { recursive: true })
       writeFileSync(settingsPath, JSON.stringify({ 'remote.SSH.configFile': sshConfigPath }))
-      const stdout: string[] = []
-      const originalStdoutWrite = process.stdout.write
-      process.stdout.write = ((chunk: string | Uint8Array) => {
-        stdout.push(Buffer.isBuffer(chunk) ? chunk.toString('utf8') : chunk)
-        return true
-      }) as typeof process.stdout.write
 
       try {
         await withProcessEnv(env, async () => setupWorkspace(context, alias, {
@@ -3379,16 +3509,16 @@ describe('CLI execution', () => {
           installTarget: installSshInstallTarget
         }))
       } finally {
-        process.stdout.write = originalStdoutWrite
+        progress.end()
       }
 
-      const output = stdout.join('')
+      const rendered = output.join('')
       const folderUri = `vscode-remote://ssh-remote+${alias}/workspaces/${encodeURIComponent(context.workspaceBasename)}`
-      assert.ok(output.includes(`Cursor settings: ${settingsPath}\n`), mode)
-      assert.ok(output.includes(`Cursor remote folder URI: ${folderUri}\n`), mode)
-      assert.ok(output.includes(`Cursor open command: cursor --folder-uri '${folderUri}'\n`), mode)
-      assert.match(output, /Refresh Cursor Remote Explorer or restart Cursor/, mode)
-      assert.deepStrictEqual(fakeCursorCalls(cursor.logPath), ['--list-extensions'], mode)
+      assert.ok(rendered.includes(`Cursor settings: ${settingsPath}\n`), scenario.name)
+      assert.ok(rendered.includes(`Cursor remote folder URI: ${folderUri}\n`), scenario.name)
+      assert.ok(rendered.includes(`Cursor open command: cursor --folder-uri '${folderUri}'\n`), scenario.name)
+      assert.match(rendered, /Refresh Cursor Remote Explorer or restart Cursor/, scenario.name)
+      assert.deepStrictEqual(fakeCursorCalls(cursor.logPath), ['--list-extensions'], scenario.name)
     }
   })
 

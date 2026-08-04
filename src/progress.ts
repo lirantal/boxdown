@@ -207,6 +207,16 @@ export class ProgressReporter {
     this.#writeInteractiveLine(`${promptRail()}  ${color(message, 'dim')}`)
   }
 
+  output (message: string): void {
+    if (this.mode === 'none') return
+    if (this.mode === 'interactive') {
+      this.#writeInteractiveLine(message)
+      return
+    }
+
+    this.#write(this.target, message)
+  }
+
   warn (message: string): void {
     if (this.mode === 'none') {
       return

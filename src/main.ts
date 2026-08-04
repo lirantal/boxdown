@@ -1117,7 +1117,10 @@ export async function setupWorkspace (
 
     try {
       await installTarget(context, alias, target, {
-        quiet: structuredProgress
+        quiet: structuredProgress,
+        ...(target === 'cursor' && structuredProgress && progress !== undefined
+          ? { writeEssential: (message: string) => progress.output(message) }
+          : {})
       })
       if (hasTargetStep) {
         progress?.completeStep(stepId)

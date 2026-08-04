@@ -83,3 +83,31 @@ production reader uses Node filesystem flags and fd metadata on every platform.
 No unresolved product concern remains. The initial sandboxed combined run's
 Unix-socket `EPERM` was environmental and passed in the required unrestricted
 full-suite rerun.
+
+## Interactive TTY Follow-up
+
+A final re-review found that Cursor's essential handoff still wrote directly to
+stdout while the interactive setup checklist owned the terminal. Completing the
+Cursor step then moved upward by the checklist height and overwrote those lines.
+
+The focused RED test uses one terminal-output model for normal and raw progress
+writes, enables `isTTY: true`, renders the real five-step setup checklist, and
+completes the Cursor step after emitting all four handoff lines. Before the fix,
+the remote-folder URI appeared zero times instead of once. The detailed and
+non-TTY preservation scenario passed at RED.
+
+Cursor installation now accepts an optional essential-output callback. Setup
+routes that callback through `ProgressReporter.output()`, which clears and
+restores an active interactive checklist while keeping handoff text plain. A
+standalone install retains the direct-stdout fallback. Routine quiet output is
+still suppressed, and no Cursor launch was introduced.
+
+Follow-up verification:
+
+- Focused Cursor setup, standalone install, and progress redraw group: 5/5
+  passed.
+- Full suite outside the filesystem sandbox: 581/581 passed, 0 failed, 0
+  skipped.
+- TypeScript and CJS/ESM build: passed.
+- ESLint initially caught a dynamic test-only `RegExp`; the assertion was made
+  literal, then ESLint and markdownlint passed on rerun.
