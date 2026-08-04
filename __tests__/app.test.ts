@@ -11,6 +11,7 @@ import { describe, test } from 'node:test'
 
 import { claudeSshConfigEntryForWorkspace, defaultClaudeSshConfigsPath, installClaudeSshConfigHost, mergeClaudeSshConfigHost, parseClaudeSshConfigs, removeClaudeSshConfigHost, uninstallClaudeSshConfigHost } from '../src/claude-app-config.ts'
 import { canonicalCodexRemotePathForWorkspace, codexDiscoveredRemoteHostId, codexProjectEntryForWorkspace, defaultCodexAppConfigPath, defaultCodexGlobalStatePath, installCodexAppConfigProject, installCodexGlobalStateProject, legacyCodexRemotePathForWorkspace, mergeCodexAppProject, normalizeCodexGlobalStateProject, parseCodexAppConfig, removeCodexAppProject, removeCodexGlobalStateProject, uninstallCodexAppConfigProject, uninstallCodexGlobalStateProject } from '../src/codex-app-config.ts'
+import { cursorIntegrationPath } from '../src/cursor-app-config.ts'
 import { codingAgentBinary, codingAgentFromCommand, type CodingAgentCli } from '../src/coding-agents.ts'
 import { AGENT_PROFILES, agentProfileMarker, isAgentProfile, parseAgentProfileMarker, resolveAgentProfile, type AgentProfile, type ContainerAgentProfile } from '../src/agent-profile.ts'
 import { color, formatPromptEnd, formatPromptTitle, promptRail, selectedMark } from '../src/cli-style.ts'
@@ -247,6 +248,47 @@ function fakeDockerCalls (logPath: string): string[] {
   }
 
   return readFileSync(logPath, 'utf8').trim().split(/\r?\n/).filter((line) => line.length > 0)
+}
+
+function fakeCursorCli (extensions = 'anysphere.remote-ssh', exitCode = 0): {
+  env: NodeJS.ProcessEnv
+  logPath: string
+} {
+  const binDir = tempDir('fake-cursor-bin')
+  const logPath = join(tempDir('fake-cursor-log'), 'calls.log')
+  const cursorPath = join(binDir, 'cursor')
+  const script = [
+    '#!/usr/bin/env bash',
+    'printf "%s\\n" "$*" >> "${BOXDOWN_FAKE_CURSOR_LOG}"',
+    'if [ "${1:-}" = "--list-extensions" ]; then',
+    '  printf "%s\\n" "${BOXDOWN_FAKE_CURSOR_EXTENSIONS:-}"',
+    '  exit "${BOXDOWN_FAKE_CURSOR_EXIT_CODE:-0}"',
+    'fi',
+    'exit 88'
+  ].join('\n')
+
+  writeFileSync(cursorPath, script)
+  chmodSync(cursorPath, 0o755)
+
+  return {
+    env: {
+      BOXDOWN_HOST_PATH_PREFIX: binDir,
+      BOXDOWN_FAKE_CURSOR_LOG: logPath,
+      BOXDOWN_FAKE_CURSOR_EXTENSIONS: extensions,
+      BOXDOWN_FAKE_CURSOR_EXIT_CODE: String(exitCode)
+    },
+    logPath
+  }
+}
+
+function fakeCursorCalls (logPath: string): string[] {
+  if (!existsSync(logPath)) return []
+  return readFileSync(logPath, 'utf8').trim().split(/\r?\n/u).filter((line) => line.length > 0)
+}
+
+function cursorRemotePlatforms (settingsPath: string): Record<string, string> {
+  const settings = JSON.parse(readFileSync(settingsPath, 'utf8')) as Record<string, unknown>
+  return settings['remote.SSH.remotePlatform'] as Record<string, string>
 }
 
 async function inspectFakeContainerAgentProfile (containerId: string): Promise<ContainerAgentProfile | undefined> {
@@ -992,6 +1034,15 @@ describe('CLI parsing', () => {
       json: false,
       verbose: false
     })
+    assert.deepStrictEqual(parseCliArgs(['ssh', 'install', '--target', 'cursor', '--target', 'cursor']), {
+      command: 'ssh-install',
+      workspace: undefined,
+      alias: undefined,
+      targets: ['cursor'],
+      recreate: false,
+      json: false,
+      verbose: false
+    })
   })
 
   test('parses ssh uninstall', () => {
@@ -1179,7 +1230,7 @@ describe('CLI parsing', () => {
     assert.throws(() => parseCliArgs(['ssh', 'uninstall', 'extra']), /Unknown ssh command: uninstall extra/)
     assert.throws(() => parseCliArgs(['install-ssh-config']), /Unknown command/)
     assert.throws(() => parseCliArgs(['start', '--json']), /--json is only supported with status and list/)
-    assert.throws(() => parseCliArgs(['ssh', 'install', '--target', 'cursor']), /Unsupported ssh install target: cursor/)
+    assert.throws(() => parseCliArgs(['ssh', 'install', '--target', 'other']), /Unsupported ssh install target: other/)
     assert.throws(
       () => parseCliArgs(['start', '--target', 'codex']),
       /--target is only supported with setup, ssh install, and ssh uninstall/
@@ -1275,7 +1326,7 @@ describe('CLI parsing', () => {
     assert.match(USAGE, /ssh uninstall\s+Remove Boxdown's managed SSH host alias/)
     assert.doesNotMatch(USAGE, /ssh-config/)
     assert.match(USAGE, /--target <name>\s+Optional SSH integration target/)
-    assert.match(USAGE, /Repeatable\. Supported by[\s\S]*setup, ssh install, and ssh uninstall: codex, claude\./)
+    assert.match(USAGE, /Repeatable\. Supported by[\s\S]*setup, ssh install, and ssh uninstall: codex, claude, cursor\./)
     assert.match(USAGE, /ssh-proxy\s+Internal command used by the generated SSH/)
     assert.match(USAGE, /tunnel\s+Start or reuse the devcontainer/)
     assert.match(USAGE, /boxdown tunnel \[--port <port>\]/)
@@ -3632,6 +3683,121 @@ describe('CLI execution', () => {
     assert.deepStrictEqual(claudeConfig.trustedHosts, [`${workspaceName}-devcontainer`])
   })
 
+  test('installs explicit Cursor target and prints connection details without launching Cursor', () => {
+    const workspace = tempDir('cli-explicit-cursor-workspace')
+    const workspaceName = realpathSync(workspace).split('/').at(-1) ?? 'workspace'
+    const alias = `${workspaceName}-devcontainer`
+    const sshConfigPath = join(tempDir('cli-explicit-cursor-ssh'), 'config')
+    const cursorSettingsPath = join(tempDir('cli-explicit-cursor-settings'), 'settings.json')
+    const cursor = fakeCursorCli('github.copilot\nANySphere.Remote-SSH')
+    const result = runCliProcess(['ssh', 'install', '--workspace', workspace, '--target', 'cursor'], {
+      ...process.env,
+      ...cursor.env,
+      HOME: tempDir('cli-explicit-cursor-home'),
+      BOXDOWN_CACHE_HOME: tempDir('cli-explicit-cursor-cache'),
+      BOXDOWN_DATA_HOME: tempDir('cli-explicit-cursor-data'),
+      BOXDOWN_SSH_CONFIG: sshConfigPath,
+      BOXDOWN_CURSOR_SETTINGS: cursorSettingsPath
+    })
+    const folderUri = `vscode-remote://ssh-remote+${alias}/workspaces/${encodeURIComponent(workspaceName)}`
+
+    assert.strictEqual(result.code, 0)
+    assert.deepStrictEqual(cursorRemotePlatforms(cursorSettingsPath), { [alias]: 'linux' })
+    assert.ok(result.stdout.includes(`Cursor settings: ${cursorSettingsPath}\n`))
+    assert.match(result.stdout, /Installed Cursor Linux platform mapping:/)
+    assert.ok(result.stdout.includes(folderUri))
+    assert.ok(result.stdout.includes(`cursor --folder-uri '${folderUri}'`))
+    assert.match(result.stdout, /Refresh Cursor Remote Explorer or restart Cursor/)
+    assert.deepStrictEqual(fakeCursorCalls(cursor.logPath), ['--list-extensions'])
+  })
+
+  test('Cursor extension probe failures warn without rolling back configuration or mirroring output', () => {
+    const cases = [
+      { name: 'missing-extension', extensions: 'private.probe-output', exitCode: 0 },
+      { name: 'failed-query', extensions: 'private.failed-output', exitCode: 23 }
+    ]
+
+    for (const entry of cases) {
+      const workspace = tempDir(`cli-cursor-probe-${entry.name}-workspace`)
+      const sshConfigPath = join(tempDir(`cli-cursor-probe-${entry.name}-ssh`), 'config')
+      const cursorSettingsPath = join(tempDir(`cli-cursor-probe-${entry.name}-settings`), 'settings.json')
+      const cursor = fakeCursorCli(entry.extensions, entry.exitCode)
+      const result = runCliProcess(['ssh', 'install', '--workspace', workspace, '--target', 'cursor'], {
+        ...process.env,
+        ...cursor.env,
+        HOME: tempDir(`cli-cursor-probe-${entry.name}-home`),
+        BOXDOWN_CACHE_HOME: tempDir(`cli-cursor-probe-${entry.name}-cache`),
+        BOXDOWN_DATA_HOME: tempDir(`cli-cursor-probe-${entry.name}-data`),
+        BOXDOWN_SSH_CONFIG: sshConfigPath,
+        BOXDOWN_CURSOR_SETTINGS: cursorSettingsPath
+      })
+      const combined = `${result.stdout}\n${result.stderr}`
+
+      assert.strictEqual(result.code, 0, entry.name)
+      assert.strictEqual(existsSync(cursorSettingsPath), true, entry.name)
+      assert.match(combined, /Warning:.*anysphere\.remote-ssh/iu, entry.name)
+      assert.match(combined, /cursor --install-extension anysphere\.remote-ssh/u, entry.name)
+      assert.doesNotMatch(combined, /private\.(?:probe|failed)-output/u, entry.name)
+      assert.deepStrictEqual(fakeCursorCalls(cursor.logPath), ['--list-extensions'], entry.name)
+    }
+  })
+
+  test('targeted Cursor uninstall preserves the SSH alias and removes only that mapping', () => {
+    const workspace = tempDir('cli-uninstall-cursor-workspace')
+    const workspaceName = realpathSync(workspace).split('/').at(-1) ?? 'workspace'
+    const alias = `${workspaceName}-devcontainer`
+    const sshConfigPath = join(tempDir('cli-uninstall-cursor-ssh'), 'config')
+    const cursorSettingsPath = join(tempDir('cli-uninstall-cursor-settings'), 'settings.json')
+    const cursor = fakeCursorCli()
+    const env = {
+      ...process.env,
+      ...cursor.env,
+      HOME: tempDir('cli-uninstall-cursor-home'),
+      BOXDOWN_CACHE_HOME: tempDir('cli-uninstall-cursor-cache'),
+      BOXDOWN_DATA_HOME: tempDir('cli-uninstall-cursor-data'),
+      BOXDOWN_SSH_CONFIG: sshConfigPath,
+      BOXDOWN_CURSOR_SETTINGS: cursorSettingsPath
+    }
+
+    assert.strictEqual(runCliProcess(['ssh', 'install', '--workspace', workspace, '--target', 'cursor'], env).code, 0)
+    const result = runCliProcess(['ssh', 'uninstall', '--workspace', workspace, '--target', 'cursor'], env)
+
+    assert.strictEqual(result.code, 0)
+    assert.ok(readFileSync(sshConfigPath, 'utf8').includes(`Host ${alias}\n`))
+    assert.deepStrictEqual(cursorRemotePlatforms(cursorSettingsPath), {})
+    assert.match(result.stdout, /Removed Cursor Linux platform mapping:/)
+    assert.doesNotMatch(result.stdout, /Removed SSH alias:/)
+  })
+
+  test('unqualified SSH uninstall cleans every recorded Cursor mapping', () => {
+    const workspace = tempDir('cli-uninstall-cursor-workspace-cleanup')
+    const sshConfigPath = join(tempDir('cli-uninstall-cursor-workspace-cleanup-ssh'), 'config')
+    const cursorSettingsPath = join(tempDir('cli-uninstall-cursor-workspace-cleanup-settings'), 'settings.json')
+    const cursor = fakeCursorCli()
+    const env = {
+      ...process.env,
+      ...cursor.env,
+      HOME: tempDir('cli-uninstall-cursor-workspace-cleanup-home'),
+      BOXDOWN_CACHE_HOME: tempDir('cli-uninstall-cursor-workspace-cleanup-cache'),
+      BOXDOWN_DATA_HOME: tempDir('cli-uninstall-cursor-workspace-cleanup-data'),
+      BOXDOWN_SSH_CONFIG: sshConfigPath,
+      BOXDOWN_CURSOR_SETTINGS: cursorSettingsPath
+    }
+
+    assert.strictEqual(runCliProcess(['ssh', 'install', '--workspace', workspace, '--alias', 'cursor-alias-a', '--target', 'cursor'], env).code, 0)
+    assert.strictEqual(runCliProcess(['ssh', 'install', '--workspace', workspace, '--alias', 'cursor-alias-b', '--target', 'cursor'], env).code, 0)
+    assert.deepStrictEqual(cursorRemotePlatforms(cursorSettingsPath), {
+      'cursor-alias-a': 'linux',
+      'cursor-alias-b': 'linux'
+    })
+
+    const result = runCliProcess(['ssh', 'uninstall', '--workspace', workspace, '--alias', 'cursor-alias-b'], env)
+
+    assert.strictEqual(result.code, 0)
+    assert.deepStrictEqual(cursorRemotePlatforms(cursorSettingsPath), {})
+    assert.doesNotMatch(readFileSync(sshConfigPath, 'utf8'), /^Host cursor-alias-b$/mu)
+  })
+
   test('uninstalls selected SSH target for Claude only', () => {
     const workspace = tempDir('cli-uninstall-claude-workspace')
     const sshConfigPath = join(tempDir('cli-uninstall-claude-ssh'), 'config')
@@ -4050,6 +4216,7 @@ describe('CLI execution', () => {
 
       input.write('\u001B[A')
       input.write('\u001B[A')
+      input.write('\u001B[A')
       input.write(' ')
       input.write('\r')
 
@@ -4064,6 +4231,7 @@ describe('CLI execution', () => {
     assert.match(promptOutput, /Add this project to an AI coding app\? \(Select any\)/)
     assert.match(promptOutput, /ChatGPT app - Connect ChatGPT to this project\./)
     assert.match(promptOutput, /Claude app - Connect Claude to this project\./)
+    assert.match(promptOutput, /Cursor - Connect Cursor to this project\./)
     assert.match(promptOutput, /Not now — Finish setup without adding the project to an app\./)
   })
 
@@ -4131,6 +4299,7 @@ describe('CLI execution', () => {
         assert.doesNotMatch(text, /Recorded Docker image used by this workspace: boxdown-stale:latest/)
         assert.match(text, /Docker volumes attached only to that container/)
         assert.ok(text.includes(`SSH connection: provided-devcontainer, recorded-devcontainer, ${defaultSshAlias(context.workspaceBasename)}`))
+        assert.match(text, /Codex, Claude, and Cursor integrations for those SSH connections, when installed/)
         assert.ok(text.includes(context.workspaceCacheDir))
         assert.ok(text.includes(context.workspaceDataDir))
         assert.ok(text.includes(context.workspaceRuntimeDir))
@@ -4975,6 +5144,76 @@ describe('CLI execution', () => {
       assert.match(result.stderr, /Failed Docker image sha256:failing-image/)
       assert.strictEqual(existsSync(context.workspaceCacheDir), false)
       assert.strictEqual(existsSync(context.workspaceDataDir), false)
+    })
+  })
+
+  test('purge removes every recorded Cursor alias before deleting workspace data', async () => {
+    const workspace = tempDir('purge-cursor-alias-history-workspace')
+    const cursorSettingsPath = join(tempDir('purge-cursor-alias-history-settings'), 'settings.json')
+    const cursor = fakeCursorCli()
+    const env = {
+      ...process.env,
+      ...cursor.env,
+      HOME: tempDir('purge-cursor-alias-history-home'),
+      BOXDOWN_CACHE_HOME: tempDir('purge-cursor-alias-history-cache'),
+      BOXDOWN_DATA_HOME: tempDir('purge-cursor-alias-history-data'),
+      BOXDOWN_SSH_CONFIG: join(tempDir('purge-cursor-alias-history-ssh'), 'config'),
+      BOXDOWN_CURSOR_SETTINGS: cursorSettingsPath
+    }
+    const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+
+    assert.strictEqual(runCliProcess(['ssh', 'install', '--workspace', workspace, '--alias', 'purge-cursor-a', '--target', 'cursor'], env).code, 0)
+    assert.strictEqual(runCliProcess(['ssh', 'install', '--workspace', workspace, '--alias', 'purge-cursor-b', '--target', 'cursor'], env).code, 0)
+    assert.deepStrictEqual(cursorRemotePlatforms(cursorSettingsPath), {
+      'purge-cursor-a': 'linux',
+      'purge-cursor-b': 'linux'
+    })
+    assert.strictEqual(existsSync(cursorIntegrationPath(context)), true)
+
+    await withFakeDocker([], async (_logPath, dockerEnv) => {
+      const result = runCliProcess(['purge', '--workspace', workspace], { ...env, ...dockerEnv })
+
+      assert.strictEqual(result.code, 0, result.stderr)
+      assert.deepStrictEqual(cursorRemotePlatforms(cursorSettingsPath), {})
+      assert.strictEqual(existsSync(cursorIntegrationPath(context)), false)
+      assert.strictEqual(existsSync(context.workspaceDataDir), false)
+    })
+  })
+
+  test('purge retains a shared Cursor alias until the last workspace owner is cleaned', async () => {
+    const firstWorkspace = tempDir('purge-cursor-shared-first-workspace')
+    const secondWorkspace = tempDir('purge-cursor-shared-second-workspace')
+    const cursorSettingsPath = join(tempDir('purge-cursor-shared-settings'), 'settings.json')
+    const cursor = fakeCursorCli()
+    const env = {
+      ...process.env,
+      ...cursor.env,
+      HOME: tempDir('purge-cursor-shared-home'),
+      BOXDOWN_CACHE_HOME: tempDir('purge-cursor-shared-cache'),
+      BOXDOWN_DATA_HOME: tempDir('purge-cursor-shared-data'),
+      BOXDOWN_SSH_CONFIG: join(tempDir('purge-cursor-shared-ssh'), 'config'),
+      BOXDOWN_CURSOR_SETTINGS: cursorSettingsPath
+    }
+    const firstContext = createWorkspaceContext({ workspace: firstWorkspace, env, assetsDevcontainerDir })
+    const secondContext = createWorkspaceContext({ workspace: secondWorkspace, env, assetsDevcontainerDir })
+    const alias = 'purge-cursor-shared'
+
+    assert.strictEqual(runCliProcess(['ssh', 'install', '--workspace', firstWorkspace, '--alias', alias, '--target', 'cursor'], env).code, 0)
+    assert.strictEqual(runCliProcess(['ssh', 'install', '--workspace', secondWorkspace, '--alias', alias, '--target', 'cursor'], env).code, 0)
+
+    await withFakeDocker([], async (_logPath, dockerEnv) => {
+      const firstResult = runCliProcess(['purge', '--workspace', firstWorkspace], { ...env, ...dockerEnv })
+
+      assert.strictEqual(firstResult.code, 0, firstResult.stderr)
+      assert.deepStrictEqual(cursorRemotePlatforms(cursorSettingsPath), { [alias]: 'linux' })
+      assert.strictEqual(existsSync(firstContext.workspaceDataDir), false)
+      assert.strictEqual(existsSync(cursorIntegrationPath(secondContext)), true)
+
+      const secondResult = runCliProcess(['purge', '--workspace', secondWorkspace], { ...env, ...dockerEnv })
+
+      assert.strictEqual(secondResult.code, 0, secondResult.stderr)
+      assert.deepStrictEqual(cursorRemotePlatforms(cursorSettingsPath), {})
+      assert.strictEqual(existsSync(secondContext.workspaceDataDir), false)
     })
   })
 

@@ -45,6 +45,32 @@ describe('setup agent profile resolution', () => {
     }), { cancelled: false, profile: 'auth' })
   })
 
+  test('does not prompt for Cursor alone but prompts for mixed agent targets', async () => {
+    const cursorStreams = linePromptStreams()
+    const cursorResult = resolveSetupAgentProfile({
+      recordedProfile: 'full',
+      targets: ['cursor'],
+      input: cursorStreams.input,
+      output: cursorStreams.output,
+      env: { CI: 'false' }
+    })
+    setImmediate(() => cursorStreams.input.end())
+    assert.deepStrictEqual(await cursorResult, { cancelled: false, profile: 'full' })
+    assert.strictEqual(cursorStreams.outputText(), '')
+
+    for (const targets of [['cursor', 'codex'], ['cursor', 'claude']] as const) {
+      const streams = linePromptStreams()
+      const result = resolveSetupAgentProfile({
+        targets,
+        input: streams.input,
+        output: streams.output,
+        env: { CI: 'false' }
+      })
+      streams.input.write('2\n')
+      assert.deepStrictEqual(await result, { cancelled: false, profile: 'auth' })
+    }
+  })
+
   test('uses recorded or default profile non-interactively with targets', async () => {
     assert.deepStrictEqual(await resolveSetupAgentProfile({
       recordedProfile: 'none',

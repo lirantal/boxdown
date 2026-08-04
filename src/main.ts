@@ -18,7 +18,7 @@ import { createPurgePlan, formatPurgePlanDetails, formatPurgePlanText, purgeWork
 import { resolveSetupAgentProfile } from './setup-agent-profile.ts'
 import { formatDetectedToolchainsSummary, formatSelectedToolchainsSummary, resolveSetupToolchains } from './setup-toolchains.ts'
 import { defaultSshAlias, installSshConfig, uninstallSshConfig, validateSshAlias } from './ssh-config.ts'
-import { dedupeSshInstallTargets, installSshInstallTarget, isSshConfigInstallTarget, SSH_INSTALL_TARGETS, sshInstallTargetFlagHintsText, supportedSshInstallTargetsText, uninstallSshInstallTarget, type SshConfigInstallTarget } from './ssh-install-targets.ts'
+import { dedupeSshInstallTargets, installSshInstallTarget, isSshConfigInstallTarget, SSH_INSTALL_TARGETS, sshInstallTargetFlagHintsText, supportedSshInstallTargetsText, uninstallSshInstallTarget, uninstallWorkspaceSshInstallTarget, type SshConfigInstallTarget } from './ssh-install-targets.ts'
 import { createStatusInfo, formatStatusText, statusIsHealthy } from './status.ts'
 import { parseToolchainSelector, readToolchainPlan, resolveToolchainPlan } from './toolchains/plan.ts'
 import type { ToolchainSelector } from './toolchains/types.ts'
@@ -125,7 +125,7 @@ Commands:
   ssh install               Install or update an SSH host alias for the workspace
                             devcontainer.
   ssh uninstall             Remove Boxdown's managed SSH host alias block or
-                            selected Codex/Claude app integrations.
+                            selected Codex, Claude, or Cursor integrations.
   ssh-proxy                 Internal command used by the generated SSH
                             ProxyCommand. Starts or reuses the devcontainer and
                             bridges SSH over docker exec.
@@ -143,7 +143,7 @@ Options:
                       terminals prompt for tracked workspaces.
   --alias <name>      SSH host alias. Defaults to <repo-name>-devcontainer.
   --target <name>     Optional SSH integration target. Repeatable. Supported by
-                      setup, ssh install, and ssh uninstall: codex, claude.
+                      setup, ssh install, and ssh uninstall: ${supportedSshInstallTargetsText()}.
   --toolchain <selector>
                       Select a workspace toolchain. Repeatable. Supported by
                       setup and start: auto, none, node, python, go, rust, or
@@ -1439,10 +1439,13 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
 
       if (parsed.targets === undefined) {
         uninstallSshConfig(alias)
-      }
-
-      for (const target of targets) {
-        await uninstallSshInstallTarget(context, alias, target)
+        for (const target of targets) {
+          await uninstallWorkspaceSshInstallTarget(context, [alias], target)
+        }
+      } else {
+        for (const target of targets) {
+          await uninstallSshInstallTarget(context, alias, target)
+        }
       }
 
       return 0

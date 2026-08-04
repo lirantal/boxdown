@@ -5,7 +5,7 @@ import {
   type PromptOutput,
   type SelectPromptChoice
 } from './interactive-prompts.ts'
-import type { SshConfigInstallTarget } from './ssh-install-targets.ts'
+import { sshInstallTargetsUseContainerAgentProfile, type SshConfigInstallTarget } from './ssh-install-targets.ts'
 
 const setupAgentProfileChoices: readonly SelectPromptChoice<AgentProfile>[] = [
   {
@@ -46,7 +46,10 @@ export async function resolveSetupAgentProfile (
     options.recordedProfile
   ).value
 
-  if (options.explicitProfile !== undefined || options.targets.length === 0) {
+  if (
+    options.explicitProfile !== undefined ||
+    !sshInstallTargetsUseContainerAgentProfile(options.targets)
+  ) {
     return { cancelled: false, profile: current }
   }
 

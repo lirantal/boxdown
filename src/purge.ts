@@ -1,13 +1,12 @@
 import { existsSync, rmSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, parse, relative, resolve } from 'node:path'
 
-import { claudeSshConfigEntryForWorkspace, uninstallClaudeSshConfigHost } from './claude-app-config.ts'
-import { codexProjectEntryForWorkspace, legacyCodexRemotePathForWorkspace, uninstallCodexAppConfigProject, uninstallCodexGlobalStateProject } from './codex-app-config.ts'
 import { findWorkspaceContainer, inspectContainerImage, removeContainerById, removeDockerImage } from './devcontainer.ts'
 import type { WorkspaceCommandLogger } from './logging.ts'
 import { readWorkspaceMetadata, type WorkspaceMetadata } from './metadata.ts'
 import type { WorkspaceContext } from './paths.ts'
 import { defaultSshAlias, uninstallSshConfig } from './ssh-config.ts'
+import { SSH_INSTALL_TARGETS, uninstallWorkspaceSshInstallTarget } from './ssh-install-targets.ts'
 import type { ContainerSummary } from './status.ts'
 
 export interface PurgeOptions {
@@ -100,7 +99,7 @@ export async function createPurgePlan (
   }
 
   removals.push(`SSH connection: ${aliases.join(', ')}`)
-  removals.push('Codex remote project and Claude remote connection for those SSH connections, when installed')
+  removals.push('Codex, Claude, and Cursor integrations for those SSH connections, when installed')
   removals.push(planStatePath('Generated Boxdown configuration', context.workspaceCacheDir, 'generated configuration and cache'))
   removals.push(planStatePath('Boxdown workspace data', context.workspaceDataDir, 'workspace SSH key, command log, metadata, and Git-config snapshot'))
   removals.push(planStatePath('Temporary runtime state', context.workspaceRuntimeDir, 'runtime-only secret files'))
@@ -192,47 +191,13 @@ export function removeWorkspaceRuntimeState (context: WorkspaceContext): void {
   removeWorkspaceStateDir(context, 'workspace runtime directory', context.workspaceRuntimeDir, context.runtimeRoot)
 }
 
-async function purgeAliasIntegrations (context: WorkspaceContext, alias: string): Promise<boolean> {
-  let failed = false
-
-  failed = await runPurgeStep(`SSH alias ${alias}`, () => {
+async function purgeSshAlias (alias: string): Promise<boolean> {
+  return await runPurgeStep(`SSH alias ${alias}`, () => {
     const changed = uninstallSshConfig(alias, { quiet: true })
     process.stdout.write(changed
       ? `Removed SSH alias: ${alias}\n`
       : `SSH alias absent: ${alias}\n`)
-  }) || failed
-
-  const entry = codexProjectEntryForWorkspace(context, alias)
-  const legacyRemotePath = legacyCodexRemotePathForWorkspace(context)
-
-  failed = await runPurgeStep(`Codex app config for ${alias}`, () => {
-    const result = uninstallCodexAppConfigProject(entry, {
-      additionalRemotePaths: [legacyRemotePath]
-    })
-    process.stdout.write(result.changed
-      ? `Removed Codex remote project: ${entry.label} (${alias})\n`
-      : `Codex remote project absent: ${entry.label} (${alias})\n`)
-  }) || failed
-
-  failed = await runPurgeStep(`Codex app state for ${alias}`, () => {
-    const result = uninstallCodexGlobalStateProject(entry, {
-      additionalRemotePaths: [legacyRemotePath]
-    })
-    process.stdout.write(result.changed
-      ? `Removed Codex sidebar state: ${entry.label} (${alias})\n`
-      : `Codex sidebar state absent: ${entry.label} (${alias})\n`)
-  }) || failed
-
-  const claudeEntry = claudeSshConfigEntryForWorkspace(context, alias)
-
-  failed = await runPurgeStep(`Claude SSH config for ${alias}`, () => {
-    const result = uninstallClaudeSshConfigHost(claudeEntry)
-    process.stdout.write(result.changed
-      ? `Removed Claude SSH remote: ${claudeEntry.name} (${alias})\n`
-      : `Claude SSH remote absent: ${claudeEntry.name} (${alias})\n`)
-  }) || failed
-
-  return failed
+  })
 }
 
 export async function purgeWorkspace (context: WorkspaceContext, options: PurgeOptions = {}): Promise<number> {
@@ -251,12 +216,21 @@ export async function purgeWorkspace (context: WorkspaceContext, options: PurgeO
       : `Snapshot workspace metadata: ${context.workspaceDataDir}\n`)
   }) || failed
 
-  for (const alias of uniqueAliases([
+  const aliases = uniqueAliases([
     options.alias,
     metadata?.sshAlias,
     defaultSshAlias(context.workspaceBasename)
-  ])) {
-    failed = await purgeAliasIntegrations(context, alias) || failed
+  ])
+
+  for (const alias of aliases) {
+    failed = await purgeSshAlias(alias) || failed
+  }
+
+  for (const target of SSH_INSTALL_TARGETS) {
+    failed = await runPurgeStep(`${target.label} workspace integration cleanup`, async () => {
+      await uninstallWorkspaceSshInstallTarget(context, aliases, target.value, { quiet: true })
+      process.stdout.write(`Cleaned ${target.label} workspace integrations.\n`)
+    }) || failed
   }
 
   failed = await runPurgeStep('workspace Docker container lookup', async () => {
