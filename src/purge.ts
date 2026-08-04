@@ -202,6 +202,7 @@ async function purgeSshAlias (alias: string): Promise<boolean> {
 
 export async function purgeWorkspace (context: WorkspaceContext, options: PurgeOptions = {}): Promise<number> {
   let failed = false
+  let integrationCleanupFailed = false
   let metadata: WorkspaceMetadata | undefined
   let container: ContainerSummary | undefined
   let dockerImageId: string | undefined
@@ -227,10 +228,12 @@ export async function purgeWorkspace (context: WorkspaceContext, options: PurgeO
   }
 
   for (const target of SSH_INSTALL_TARGETS) {
-    failed = await runPurgeStep(`${target.label} workspace integration cleanup`, async () => {
+    const targetFailed = await runPurgeStep(`${target.label} workspace integration cleanup`, async () => {
       await uninstallWorkspaceSshInstallTarget(context, aliases, target.value, { quiet: true })
       process.stdout.write(`Cleaned ${target.label} workspace integrations.\n`)
-    }) || failed
+    })
+    integrationCleanupFailed = integrationCleanupFailed || targetFailed
+    failed = targetFailed || failed
   }
 
   failed = await runPurgeStep('workspace Docker container lookup', async () => {
@@ -283,11 +286,15 @@ export async function purgeWorkspace (context: WorkspaceContext, options: PurgeO
     removeWorkspaceStateDir(context, 'workspace cache', context.workspaceCacheDir, context.cacheRoot)
   }) || failed
 
-  failed = await runPurgeStep('workspace data directory', () => {
-    options.logger?.boxdown(`Removing workspace data: ${context.workspaceDataDir}\n`)
-    options.logger?.disable()
-    removeWorkspaceStateDir(context, 'workspace data', context.workspaceDataDir, context.dataRoot)
-  }) || failed
+  if (integrationCleanupFailed) {
+    process.stderr.write(`Retained workspace data after integration cleanup failure: ${context.workspaceDataDir}\n`)
+  } else {
+    failed = await runPurgeStep('workspace data directory', () => {
+      options.logger?.boxdown(`Removing workspace data: ${context.workspaceDataDir}\n`)
+      options.logger?.disable()
+      removeWorkspaceStateDir(context, 'workspace data', context.workspaceDataDir, context.dataRoot)
+    }) || failed
+  }
 
   return failed ? 1 : 0
 }

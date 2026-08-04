@@ -177,6 +177,42 @@ test('treats an empty Cursor SSH config setting as the platform default', () => 
   }), { cursorSshConfigPath: '/home/tester/.ssh/config', source: 'default' })
 })
 
+test('keeps Cursor default SSH config independent from Boxdown overrides', () => {
+  const env = { HOME: '/home/tester', BOXDOWN_SSH_CONFIG: '/tmp/boxdown-config' }
+
+  for (const settingsText of ['{}', '{"remote.SSH.configFile":""}']) {
+    assert.throws(
+      () => validateCursorSshConfigCompatibility(settingsText, '/tmp/settings.json', '/tmp/boxdown-config', {
+        platform: 'linux', env
+      }),
+      /Cursor SSH config.*\/home\/tester\/\.ssh\/config.*Boxdown SSH config.*\/tmp\/boxdown-config/s
+    )
+  }
+
+  assert.deepStrictEqual(
+    validateCursorSshConfigCompatibility('{"remote.SSH.configFile":"/tmp/boxdown-config"}', '/tmp/settings.json', '/tmp/boxdown-config', {
+      platform: 'linux', env
+    }),
+    { cursorSshConfigPath: '/tmp/boxdown-config', source: 'setting' }
+  )
+})
+
+test('keeps Cursor default SSH config independent from DEVCONTAINER_SSH_CONFIG', () => {
+  const env = { HOME: '/home/tester', DEVCONTAINER_SSH_CONFIG: '/tmp/devcontainer-config' }
+  assert.throws(
+    () => validateCursorSshConfigCompatibility('{}', '/tmp/settings.json', '/tmp/devcontainer-config', {
+      platform: 'linux', env
+    }),
+    /Cursor SSH config.*\/home\/tester\/\.ssh\/config.*Boxdown SSH config.*\/tmp\/devcontainer-config/s
+  )
+  assert.deepStrictEqual(
+    validateCursorSshConfigCompatibility('{"remote.SSH.configFile":"/tmp/devcontainer-config"}', '/tmp/settings.json', '/tmp/devcontainer-config', {
+      platform: 'linux', env
+    }),
+    { cursorSshConfigPath: '/tmp/devcontainer-config', source: 'setting' }
+  )
+})
+
 test('normalizes Windows SSH config paths case-insensitively', () => {
   assert.deepStrictEqual(validateCursorSshConfigCompatibility('{"remote.SSH.configFile":"C:\\\\Users\\\\Tester\\\\.ssh\\\\config"}', 'C:\\settings.json', 'c:\\users\\tester\\.ssh\\config', {
     platform: 'win32', env: { USERPROFILE: 'C:\\Users\\Tester' }

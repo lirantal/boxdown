@@ -80,7 +80,7 @@ as an installed Boxdown alias.
 Selecting Cursor or running `boxdown ssh install --target cursor` keeps the
 normal SSH installation flow and configures only the public Cursor Remote SSH
 setting `remote.SSH.remotePlatform.<repo-name>-devcontainer` to `"linux"`.
-Targets are repeatable, so Cursor can be installed with Codex and Claude in one
+Targets are repeatable, so Codex, Claude, and Cursor can be installed in one
 command. Re-running an install is safe and does not duplicate a mapping.
 
 Boxdown resolves Cursor's user settings file from these platform defaults:
@@ -194,7 +194,7 @@ creates or updates its sidebar project entry.
 Selecting Claude from the interactive prompt or running
 `boxdown ssh install --target claude` keeps the normal SSH install flow and also
 writes a Claude app SSH remote entry for the same alias. `--target` is
-repeatable, so `codex` and `claude` can be installed in one command.
+repeatable, so `codex`, `claude`, and `cursor` can be installed in one command.
 
 The Claude SSH config is written to:
 

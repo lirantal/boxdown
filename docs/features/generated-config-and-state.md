@@ -93,6 +93,10 @@ prove ownership of records under the earlier root. Targeted Cursor uninstall
 processes the selected alias; unqualified uninstall and purge process every
 recorded mapping before deleting the workspace data directory.
 
+If complete integration cleanup fails, purge retains the workspace data and its
+ownership record for a safe retry while continuing Docker, runtime, and cache
+cleanup. An unrelated Docker failure does not retain workspace data.
+
 ## Workspace Toolchain State
 
 When a workspace has a confirmed toolchain selection, Boxdown keeps its plan

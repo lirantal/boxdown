@@ -357,7 +357,8 @@ best-effort mount probe is reported as a warning and does not block setup.
 
 `boxdown start` is standalone: it can create or reuse the devcontainer even if
 `boxdown setup` was skipped or its preflight failed. Setup-only SSH aliases and
-Codex/Claude application integrations are still installed only by `setup`.
+Codex/Claude/Cursor application integrations are still installed only by
+`setup`.
 
 Before a command creates or starts a container, Boxdown waits up to 60 seconds
 for the Docker daemon and the selected Docker Buildx builder. If Buildx is not

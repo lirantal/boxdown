@@ -4,14 +4,14 @@ import { once } from 'node:events'
 import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readlinkSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { createConnection, createServer } from 'node:net'
 import { tmpdir } from 'node:os'
-import { delimiter, join, relative } from 'node:path'
+import { delimiter, dirname, join, relative } from 'node:path'
 import { PassThrough } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import { describe, test } from 'node:test'
 
 import { claudeSshConfigEntryForWorkspace, defaultClaudeSshConfigsPath, installClaudeSshConfigHost, mergeClaudeSshConfigHost, parseClaudeSshConfigs, removeClaudeSshConfigHost, uninstallClaudeSshConfigHost } from '../src/claude-app-config.ts'
 import { canonicalCodexRemotePathForWorkspace, codexDiscoveredRemoteHostId, codexProjectEntryForWorkspace, defaultCodexAppConfigPath, defaultCodexGlobalStatePath, installCodexAppConfigProject, installCodexGlobalStateProject, legacyCodexRemotePathForWorkspace, mergeCodexAppProject, normalizeCodexGlobalStateProject, parseCodexAppConfig, removeCodexAppProject, removeCodexGlobalStateProject, uninstallCodexAppConfigProject, uninstallCodexGlobalStateProject } from '../src/codex-app-config.ts'
-import { cursorIntegrationPath } from '../src/cursor-app-config.ts'
+import { cursorIntegrationPath, installCursorSshTarget } from '../src/cursor-app-config.ts'
 import { codingAgentBinary, codingAgentFromCommand, type CodingAgentCli } from '../src/coding-agents.ts'
 import { AGENT_PROFILES, agentProfileMarker, isAgentProfile, parseAgentProfileMarker, resolveAgentProfile, type AgentProfile, type ContainerAgentProfile } from '../src/agent-profile.ts'
 import { color, formatPromptEnd, formatPromptTitle, promptRail, selectedMark } from '../src/cli-style.ts'
@@ -1505,9 +1505,12 @@ test('documents agent profile tiers', () => {
 })
 
 test('feature docs document Cursor SSH support boundaries', () => {
+  const readme = readFileSync(join(process.cwd(), 'README.md'), 'utf8')
   const setupDocs = readFileSync(join(process.cwd(), 'docs/features/setup.md'), 'utf8')
   const sshDocs = readFileSync(join(process.cwd(), 'docs/features/ssh-config-and-proxy.md'), 'utf8')
   const stateDocs = readFileSync(join(process.cwd(), 'docs/features/generated-config-and-state.md'), 'utf8')
+  const developmentDocs = readFileSync(join(process.cwd(), 'docs/development.md'), 'utf8')
+  const lifecycleDocs = readFileSync(join(process.cwd(), 'docs/features/lifecycle.md'), 'utf8')
 
   assert.match(setupDocs, /boxdown setup --target cursor/)
   assert.match(setupDocs, /Cursor alone.*does not.*agent-profile/is)
@@ -1517,6 +1520,11 @@ test('feature docs document Cursor SSH support boundaries', () => {
   assert.match(sshDocs, /does not.*(?:SQLite|workspaceStorage)/is)
   assert.match(stateDocs, /BOXDOWN_CURSOR_SETTINGS/)
   assert.match(stateDocs, /cursor-integration\.json/)
+  assert.match(readme, /SSH aliases and\s+Codex\/Claude\/Cursor application integrations/)
+  assert.match(developmentDocs, /--target cursor/)
+  assert.match(sshDocs, /`codex`, `claude`, and `cursor` can be installed/)
+  assert.match(lifecycleDocs, /SSH\/Codex\/Claude\/Cursor entries/)
+  assert.match(stateDocs, /integration cleanup fails.*retains.*workspace data/is)
 })
 
 test('documents interactive container reuse lifecycle', () => {
@@ -3705,6 +3713,8 @@ describe('CLI execution', () => {
     const sshConfigPath = join(tempDir('cli-explicit-cursor-ssh'), 'config')
     const cursorSettingsPath = join(tempDir('cli-explicit-cursor-settings'), 'settings.json')
     const cursor = fakeCursorCli('github.copilot\nANySphere.Remote-SSH')
+    mkdirSync(dirname(cursorSettingsPath), { recursive: true })
+    writeFileSync(cursorSettingsPath, JSON.stringify({ 'remote.SSH.configFile': sshConfigPath }))
     const result = runCliProcess(['ssh', 'install', '--workspace', workspace, '--target', 'cursor'], {
       ...process.env,
       ...cursor.env,
@@ -3737,6 +3747,8 @@ describe('CLI execution', () => {
       const sshConfigPath = join(tempDir(`cli-cursor-probe-${entry.name}-ssh`), 'config')
       const cursorSettingsPath = join(tempDir(`cli-cursor-probe-${entry.name}-settings`), 'settings.json')
       const cursor = fakeCursorCli(entry.extensions, entry.exitCode)
+      mkdirSync(dirname(cursorSettingsPath), { recursive: true })
+      writeFileSync(cursorSettingsPath, JSON.stringify({ 'remote.SSH.configFile': sshConfigPath }))
       const result = runCliProcess(['ssh', 'install', '--workspace', workspace, '--target', 'cursor'], {
         ...process.env,
         ...cursor.env,
@@ -3773,6 +3785,8 @@ describe('CLI execution', () => {
       BOXDOWN_SSH_CONFIG: sshConfigPath,
       BOXDOWN_CURSOR_SETTINGS: cursorSettingsPath
     }
+    mkdirSync(dirname(cursorSettingsPath), { recursive: true })
+    writeFileSync(cursorSettingsPath, JSON.stringify({ 'remote.SSH.configFile': sshConfigPath }))
 
     assert.strictEqual(runCliProcess(['ssh', 'install', '--workspace', workspace, '--target', 'cursor'], env).code, 0)
     const result = runCliProcess(['ssh', 'uninstall', '--workspace', workspace, '--target', 'cursor'], env)
@@ -3798,6 +3812,8 @@ describe('CLI execution', () => {
       BOXDOWN_SSH_CONFIG: sshConfigPath,
       BOXDOWN_CURSOR_SETTINGS: cursorSettingsPath
     }
+    mkdirSync(dirname(cursorSettingsPath), { recursive: true })
+    writeFileSync(cursorSettingsPath, JSON.stringify({ 'remote.SSH.configFile': sshConfigPath }))
 
     assert.strictEqual(runCliProcess(['ssh', 'install', '--workspace', workspace, '--alias', 'cursor-alias-a', '--target', 'cursor'], env).code, 0)
     assert.strictEqual(runCliProcess(['ssh', 'install', '--workspace', workspace, '--alias', 'cursor-alias-b', '--target', 'cursor'], env).code, 0)
@@ -4583,6 +4599,56 @@ describe('CLI execution', () => {
       assert.deepStrictEqual(codexState['sidebar-collapsed-groups'], {
         'other-project-id': true
       })
+    })
+  })
+
+  test('retains Cursor ownership data when complete integration cleanup times out', async () => {
+    const workspace = tempDir('purge-cursor-lock-workspace')
+    const env = {
+      HOME: tempDir('purge-cursor-lock-home'),
+      BOXDOWN_CACHE_HOME: tempDir('purge-cursor-lock-cache'),
+      BOXDOWN_DATA_HOME: tempDir('purge-cursor-lock-data'),
+      BOXDOWN_RUNTIME_HOME: tempDir('purge-cursor-lock-runtime'),
+      BOXDOWN_SSH_CONFIG: join(tempDir('purge-cursor-lock-ssh'), 'config'),
+      BOXDOWN_CURSOR_SETTINGS: join(tempDir('purge-cursor-lock-settings'), 'settings.json')
+    }
+    const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+    const alias = defaultSshAlias(context.workspaceBasename)
+    const lockPath = join(context.dataRoot, 'cursor-integration.lock')
+
+    mkdirSync(context.workspaceCacheDir, { recursive: true })
+    writeFileSync(context.generatedConfigPath, '{}\n')
+    mkdirSync(dirname(env.BOXDOWN_CURSOR_SETTINGS), { recursive: true })
+    writeFileSync(env.BOXDOWN_CURSOR_SETTINGS, JSON.stringify({
+      'remote.SSH.configFile': env.BOXDOWN_SSH_CONFIG
+    }))
+    await installCursorSshTarget(context, alias, { env })
+    assert.strictEqual(existsSync(cursorIntegrationPath(context)), true)
+    mkdirSync(lockPath, { recursive: true })
+    writeFileSync(join(lockPath, 'owner.json'), JSON.stringify({
+      pid: process.pid,
+      timestamp: new Date().toISOString(),
+      nonce: 'active-purge-owner'
+    }))
+
+    await withFakeDocker([
+      {
+        workspace,
+        id: 'purge-cursor-lock-container',
+        imageId: 'sha256:purge-cursor-lock-image',
+        imageName: 'boxdown-purge-cursor-lock:latest'
+      }
+    ], async (logPath, dockerEnv) => {
+      const result = runCliProcess(['purge', '--workspace', workspace], { ...dockerEnv, ...env })
+      const calls = fakeDockerCalls(logPath)
+
+      assert.strictEqual(result.code, 1)
+      assert.match(result.stderr, /Failed Cursor workspace integration cleanup/)
+      assert.ok(calls.includes('rm -f -v purge-cursor-lock-container'))
+      assert.ok(calls.includes('image rm -f sha256:purge-cursor-lock-image'))
+      assert.strictEqual(existsSync(context.workspaceCacheDir), false)
+      assert.strictEqual(existsSync(context.workspaceDataDir), true)
+      assert.strictEqual(existsSync(cursorIntegrationPath(context)), true)
     })
   })
 

@@ -180,6 +180,13 @@ function platformPathFunctions (platform: NodeJS.Platform): {
     : { isAbsolutePath: posix.isAbsolute, resolvePath: posix.resolve }
 }
 
+function defaultCursorSshConfigPath (
+  env: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform
+): string {
+  return defaultSshConfigPath({ HOME: env.HOME, USERPROFILE: env.USERPROFILE }, platform)
+}
+
 export function validateCursorSshConfigCompatibility (
   settingsText: string,
   settingsPath: string,
@@ -199,7 +206,7 @@ export function validateCursorSshConfigCompatibility (
   const usesDefault = configuredValue === undefined || configuredValue === ''
   const source = usesDefault ? 'default' : 'setting'
   const selectedPath: string = usesDefault
-    ? defaultSshConfigPath(env, platform)
+    ? defaultCursorSshConfigPath(env, platform)
     : configuredValue as string
   const { isAbsolutePath, resolvePath } = platformPathFunctions(platform)
   if (source === 'setting' && !isAbsolutePath(selectedPath)) {

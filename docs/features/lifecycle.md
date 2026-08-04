@@ -105,10 +105,15 @@ tunnel session bytes are not tee'd into the log.
 
 `purge` removes the workspace Docker container and its attached anonymous
 volumes, force-removes the exact Docker image ID Boxdown can inspect or has
-recorded for the workspace, removes Boxdown-managed SSH/Codex/Claude entries
+recorded for the workspace, removes Boxdown-managed SSH/Codex/Claude/Cursor entries
 for the computed, recorded, and provided aliases, and deletes the workspace's
 Boxdown cache/data directories, including the per-workspace command log. It
 does not delete the target repository directory or files inside it.
+
+Purge continues Docker, runtime, and cache cleanup after any complete target
+integration cleanup failure, but retains workspace data when integration cleanup
+fails so its ownership record can be retried safely. A failure in an unrelated
+Docker step does not itself retain workspace data.
 
 Before an interactive confirmation, Boxdown shows a resource-level removal
 plan. It names the Docker container and image when available, the managed SSH
