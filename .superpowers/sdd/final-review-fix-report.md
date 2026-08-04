@@ -111,3 +111,29 @@ Follow-up verification:
 - TypeScript and CJS/ESM build: passed.
 - ESLint initially caught a dynamic test-only `RegExp`; the assertion was made
   literal, then ESLint and markdownlint passed on rerun.
+
+## Interactive TTY Prerequisite Warning Follow-up
+
+A subsequent re-review found the same shared-terminal hazard in the Cursor
+Remote SSH prerequisite warning. The probe wrote warning rows directly to
+stderr while the interactive checklist tracked only its stdout rows, so the
+Cursor step completion could overwrite the warning and leave stale checklist
+rows.
+
+The existing real `isTTY: true` terminal model now receives both progress
+output and direct stderr. With the Remote SSH extension absent, the focused RED
+run found the primary warning zero times after the completion redraw. Cursor
+installation now accepts an optional warning callback, and structured setup
+routes it through `ProgressReporter.warn()`. Standalone and non-structured
+paths retain byte-equivalent direct stderr output. The extension probe remains
+buffered with output mirroring and logging disabled, and no installation or
+Cursor launch was added.
+
+Follow-up verification:
+
+- Focused shared-terminal, detailed/non-TTY, standalone stderr, and progress
+  warning group: 4/4 passed.
+- Full suite outside the filesystem sandbox: 581/581 passed, 0 failed, 0
+  skipped.
+- ESLint, markdownlint, TypeScript compilation, and both CJS/ESM builds passed.
+- `git diff --check`: passed.

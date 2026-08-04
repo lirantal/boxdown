@@ -11,6 +11,7 @@ export type SshConfigInstallTarget = 'codex' | 'claude' | 'cursor'
 export interface SshInstallTargetOptions {
   quiet?: boolean
   writeEssential?: (message: string) => void
+  warn?: (message: string) => void
 }
 
 export interface SshInstallTargetDefinition {
@@ -169,7 +170,7 @@ function printCursorUninstallResults (results: readonly CursorUninstallResult[])
   }
 }
 
-async function warnAboutCursorRemoteSshPrerequisite (): Promise<void> {
+async function warnAboutCursorRemoteSshPrerequisite (warn?: (message: string) => void): Promise<void> {
   const result = await runBuffered('cursor', ['--list-extensions'], {
     timeoutMs: 5_000,
     mirrorStdout: false,
@@ -182,8 +183,10 @@ async function warnAboutCursorRemoteSshPrerequisite (): Promise<void> {
 
   if (installed) return
 
+  const writeWarning = warn ?? ((message: string) => process.stderr.write(`Warning: ${message}\n`))
+
   if (result.code === 127) {
-    process.stderr.write('Warning: Cursor CLI was not found; install Cursor and the anysphere.remote-ssh extension before opening the remote workspace.\n')
+    writeWarning('Cursor CLI was not found; install Cursor and the anysphere.remote-ssh extension before opening the remote workspace.')
     return
   }
 
@@ -192,8 +195,12 @@ async function warnAboutCursorRemoteSshPrerequisite (): Promise<void> {
     : result.code === 0
       ? 'the extension is not listed'
       : `the extension query exited with code ${result.code}`
-  process.stderr.write(`Warning: Could not verify the Cursor Remote SSH extension (anysphere.remote-ssh): ${reason}.\n`)
-  process.stderr.write('Install it if needed with: cursor --install-extension anysphere.remote-ssh\n')
+  writeWarning(`Could not verify the Cursor Remote SSH extension (anysphere.remote-ssh): ${reason}.`)
+  if (warn === undefined) {
+    process.stderr.write('Install it if needed with: cursor --install-extension anysphere.remote-ssh\n')
+  } else {
+    warn('Install it if needed with: cursor --install-extension anysphere.remote-ssh')
+  }
 }
 
 async function installCursorTarget (context: WorkspaceContext, alias: string, options: SshInstallTargetOptions = {}): Promise<void> {
@@ -209,7 +216,7 @@ async function installCursorTarget (context: WorkspaceContext, alias: string, op
   writeEssential(`Cursor open command${result.commandLabel === undefined ? '' : ` (${result.commandLabel})`}: ${result.command}`)
   writeEssential('Refresh Cursor Remote Explorer or restart Cursor if the SSH alias is not visible.')
 
-  await warnAboutCursorRemoteSshPrerequisite()
+  await warnAboutCursorRemoteSshPrerequisite(options.warn)
 }
 
 async function uninstallCursorTarget (context: WorkspaceContext, alias: string, options: SshInstallTargetOptions = {}): Promise<void> {

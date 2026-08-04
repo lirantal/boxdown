@@ -3387,11 +3387,11 @@ describe('CLI execution', () => {
     ])
   })
 
-  test('interactive TTY setup keeps the essential Cursor handoff and checklist coherent after completion redraw', async () => {
+  test('interactive TTY setup keeps the Cursor handoff, prerequisite warning, and checklist coherent after completion redraw', async () => {
     const workspace = tempDir('setup-cursor-interactive-workspace')
     const sshConfigPath = join(tempDir('setup-cursor-interactive-ssh'), 'config')
     const settingsPath = join(tempDir('setup-cursor-interactive-settings'), 'settings.json')
-    const cursor = fakeCursorCli()
+    const cursor = fakeCursorCli('github.copilot')
     const env = {
       HOME: tempDir('setup-cursor-interactive-home'),
       BOXDOWN_CACHE_HOME: tempDir('setup-cursor-interactive-cache'),
@@ -3425,6 +3425,11 @@ describe('CLI execution', () => {
     progress.setSteps(setupSteps)
     mkdirSync(dirname(settingsPath), { recursive: true })
     writeFileSync(settingsPath, JSON.stringify({ 'remote.SSH.configFile': sshConfigPath }))
+    const originalStderrWrite = process.stderr.write
+    process.stderr.write = ((chunk: string | Uint8Array) => {
+      if (typeof chunk === 'string') terminal.write(chunk)
+      return true
+    }) as typeof process.stderr.write
 
     try {
       await withProcessEnv(env, async () => setupWorkspace(context, alias, {
@@ -3441,6 +3446,7 @@ describe('CLI execution', () => {
         installTarget: installSshInstallTarget
       }))
     } finally {
+      process.stderr.write = originalStderrWrite
       progress.end()
     }
 
@@ -3452,8 +3458,12 @@ describe('CLI execution', () => {
       `Cursor open command: cursor --folder-uri '${folderUri}'`,
       'Refresh Cursor Remote Explorer or restart Cursor if the SSH alias is not visible.'
     ]
+    const warningLines = [
+      'Could not verify the Cursor Remote SSH extension (anysphere.remote-ssh): the extension is not listed.',
+      'Install it if needed with: cursor --install-extension anysphere.remote-ssh'
+    ]
 
-    for (const line of handoffLines) {
+    for (const line of [...handoffLines, ...warningLines]) {
       assert.strictEqual(output.split(line).length - 1, 1, line)
     }
     for (const step of setupSteps) {
@@ -3951,6 +3961,9 @@ describe('CLI execution', () => {
       assert.strictEqual(existsSync(cursorSettingsPath), true, entry.name)
       assert.match(combined, /Warning:.*anysphere\.remote-ssh/iu, entry.name)
       assert.match(combined, /cursor --install-extension anysphere\.remote-ssh/u, entry.name)
+      assert.match(result.stderr, /Warning:.*anysphere\.remote-ssh/iu, entry.name)
+      assert.match(result.stderr, /cursor --install-extension anysphere\.remote-ssh/u, entry.name)
+      assert.doesNotMatch(result.stdout, /cursor --install-extension anysphere\.remote-ssh/u, entry.name)
       assert.doesNotMatch(combined, /private\.(?:probe|failed)-output/u, entry.name)
       assert.deepStrictEqual(fakeCursorCalls(cursor.logPath), ['--list-extensions'], entry.name)
     }
