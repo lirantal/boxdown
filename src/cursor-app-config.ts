@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, readdirSync, renameSync, rmdirSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, closeSync, constants as fsConstants, existsSync, fstatSync, lstatSync, mkdirSync, openSync, readFileSync, readlinkSync, readSync, readdirSync, renameSync, rmdirSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, join, posix, resolve, win32 } from 'node:path'
 import { applyEdits, createScanner, findNodeAtLocation, getNodeValue, modify, parseTree, printParseErrorCode, type FormattingOptions, type ModificationOptions, type Node as JsonNode, type ParseError } from 'jsonc-parser'
 
@@ -84,7 +84,9 @@ function nonEmptyEnvironmentValue (value: string | undefined): string | undefine
 
 export function cursorRemoteFolderUri (alias: string, workspaceBasename: string): string {
   validateSshAlias(alias)
-  const encodedBasename = encodeURIComponent(workspaceBasename).replaceAll("'", '%27')
+  const encodedBasename = encodeURIComponent(workspaceBasename).replace(/[!'()*]/gu, character => (
+    `%${character.codePointAt(0)?.toString(16).toUpperCase() ?? ''}`
+  ))
   return `vscode-remote://ssh-remote+${alias}/workspaces/${encodedBasename}`
 }
 
@@ -302,15 +304,18 @@ export function removeCursorRemotePlatform (settingsText: string, alias: string)
   validateSshAlias(alias)
   const { bom, body, root } = parseCursorRoot(settingsText)
   const { remotePlatformNode } = validateRelevantRootProperties(root)
+  if (remotePlatformNode === undefined) {
+    return { text: settingsText, changed: false, retainedBecause: 'missing' }
+  }
+  if (remotePlatformNode.type !== 'object') {
+    return { text: settingsText, changed: false, retainedBecause: 'changed-value' }
+  }
   const aliasNode = remoteAliasNode(remotePlatformNode, alias)
   if (aliasNode === undefined) {
     return { text: settingsText, changed: false, retainedBecause: 'missing' }
   }
   if (getNodeValue(aliasNode) !== 'linux') {
     return { text: settingsText, changed: false, retainedBecause: 'changed-value' }
-  }
-  if (remotePlatformNode === undefined) {
-    throw new Error('Invalid Cursor settings JSONC: missing remote platform parent')
   }
   if (selectedAliasHasCommentTrivia(body, remotePlatformNode, aliasNode)) {
     return { text: settingsText, changed: false, retainedBecause: 'attached-comment' }
@@ -330,6 +335,8 @@ const CURSOR_LOCK_DIRECTORY = 'cursor-integration.lock'
 const CURSOR_LOCK_OWNER_FILENAME = 'owner.json'
 const DEFAULT_LOCK_TIMEOUT_MS = 5_000
 const DEFAULT_STALE_LOCK_MS = 600_000
+const MAX_CURSOR_INTEGRATION_RECORD_BYTES = 1_048_576
+const MAX_CURSOR_LOCK_OWNER_BYTES = 16_384
 
 interface FileSnapshot {
   exists: boolean
@@ -358,6 +365,8 @@ class MissingLockOwnerError extends Error {
     super(lockPath, { cause })
   }
 }
+
+class UnsafeCursorFileError extends Error {}
 
 function errorCode (error: unknown): string | undefined {
   return error !== null && typeof error === 'object' && 'code' in error
@@ -403,23 +412,67 @@ function resolveCursorFileTarget (path: string): string {
   throw new Error(`Cursor settings symbolic link depth exceeds ${MAX_CURSOR_SYMLINK_DEPTH}: ${path}`)
 }
 
-function readFileSnapshot (path: string): FileSnapshot {
-  const sourcePath = resolveCursorFileTarget(path)
+function readRegularFileUtf8 (
+  path: string,
+  label: string,
+  maxBytes?: number
+): { text: string, mode: number } | undefined {
+  let descriptor: number
   try {
-    return {
-      exists: true,
-      text: readFileSync(sourcePath, 'utf8'),
-      mode: statSync(sourcePath).mode & 0o777
-    }
+    descriptor = openSync(path, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK)
   } catch (error) {
-    if (errorCode(error) === 'ENOENT') return { exists: false }
+    if (errorCode(error) === 'ENOENT') return undefined
     throw error
+  }
+
+  try {
+    const status = fstatSync(descriptor)
+    if (!status.isFile()) {
+      throw new UnsafeCursorFileError(`${label} must be a regular file: ${path}`)
+    }
+    if (maxBytes === undefined) {
+      return { text: readFileSync(descriptor, 'utf8'), mode: status.mode & 0o777 }
+    }
+    if (status.size > maxBytes) {
+      throw new UnsafeCursorFileError(`${label} exceeds the maximum size of ${maxBytes} bytes: ${path}`)
+    }
+
+    const contents = Buffer.allocUnsafe(maxBytes + 1)
+    let offset = 0
+    while (offset < contents.length) {
+      const bytesRead = readSync(descriptor, contents, offset, contents.length - offset, null)
+      if (bytesRead === 0) break
+      offset += bytesRead
+    }
+    if (offset > maxBytes) {
+      throw new UnsafeCursorFileError(`${label} exceeds the maximum size of ${maxBytes} bytes: ${path}`)
+    }
+    return { text: contents.subarray(0, offset).toString('utf8'), mode: status.mode & 0o777 }
+  } finally {
+    closeSync(descriptor)
   }
 }
 
-function atomicWriteFile (path: string, contents: string, defaultMode: number, createNonce: () => string): void {
+function readFileSnapshot (
+  path: string,
+  options: { label: string, maxBytes?: number }
+): FileSnapshot {
+  const sourcePath = resolveCursorFileTarget(path)
+  const contents = readRegularFileUtf8(sourcePath, options.label, options.maxBytes)
+  return contents === undefined
+    ? { exists: false }
+    : { exists: true, text: contents.text, mode: contents.mode }
+}
+
+function atomicWriteFile (
+  path: string,
+  contents: string,
+  defaultMode: number,
+  createNonce: () => string,
+  preserveExistingMode = true
+): void {
   const destinationPath = resolveCursorFileTarget(path)
-  const existingMode = existsSync(destinationPath) ? statSync(destinationPath).mode & 0o777 : undefined
+  const existingMode = preserveExistingMode && existsSync(destinationPath) ? statSync(destinationPath).mode & 0o777 : undefined
   const mode = existingMode ?? defaultMode
   const temporaryPath = join(dirname(destinationPath), `.${destinationPath.split(/[\\/]/u).at(-1) ?? 'cursor'}.tmp-${process.pid}-${createNonce()}`)
   mkdirSync(dirname(destinationPath), { recursive: true, mode: 0o700 })
@@ -445,7 +498,7 @@ function restoreFileSnapshot (path: string, snapshot: FileSnapshot, createNonce:
     }
     return
   }
-  atomicWriteFile(path, snapshot.text ?? '', snapshot.mode ?? 0o600, createNonce)
+  atomicWriteFile(path, snapshot.text ?? '', 0o600, createNonce, false)
 }
 
 function parseIntegrationRecord (text: string, path: string): CursorIntegrationRecord {
@@ -488,7 +541,10 @@ function parseIntegrationRecord (text: string, path: string): CursorIntegrationR
 }
 
 function readIntegrationRecordSnapshot (path: string): { snapshot: FileSnapshot, record?: CursorIntegrationRecord } {
-  const snapshot = readFileSnapshot(path)
+  const snapshot = readFileSnapshot(path, {
+    label: 'Cursor integration record',
+    maxBytes: MAX_CURSOR_INTEGRATION_RECORD_BYTES
+  })
   return {
     snapshot,
     record: snapshot.exists ? parseIntegrationRecord(snapshot.text ?? '', path) : undefined
@@ -509,7 +565,10 @@ function scanIntegrationRecords (context: WorkspaceContext): OwnershipScan {
     if (!entry.isDirectory()) continue
     const path = join(workspacesPath, entry.name, CURSOR_INTEGRATION_FILENAME)
     try {
-      const snapshot = readFileSnapshot(path)
+      const snapshot = readFileSnapshot(path, {
+        label: 'Cursor integration record',
+        maxBytes: MAX_CURSOR_INTEGRATION_RECORD_BYTES
+      })
       if (snapshot.exists) records.push({ path, record: parseIntegrationRecord(snapshot.text ?? '', path) })
     } catch {
       complete = false
@@ -531,7 +590,7 @@ function persistIntegrationRecord (path: string, record: CursorIntegrationRecord
     }
     return
   }
-  atomicWriteFile(path, serializeIntegrationRecord(record), 0o600, createNonce)
+  atomicWriteFile(path, serializeIntegrationRecord(record), 0o600, createNonce, false)
 }
 
 function parseLockOwner (text: string, lockPath: string): LockOwner {
@@ -555,8 +614,12 @@ function parseLockOwner (text: string, lockPath: string): LockOwner {
 
 function readLockOwner (lockPath: string): LockOwner {
   try {
-    return parseLockOwner(readFileSync(join(lockPath, CURSOR_LOCK_OWNER_FILENAME), 'utf8'), lockPath)
+    const ownerPath = resolveCursorFileTarget(join(lockPath, CURSOR_LOCK_OWNER_FILENAME))
+    const contents = readRegularFileUtf8(ownerPath, 'Cursor integration lock owner', MAX_CURSOR_LOCK_OWNER_BYTES)
+    if (contents === undefined) throw new MissingLockOwnerError(lockPath, new Error(`Missing lock owner: ${ownerPath}`))
+    return parseLockOwner(contents.text, lockPath)
   } catch (error) {
+    if (error instanceof MissingLockOwnerError || error instanceof UnsafeCursorFileError) throw error
     if (errorCode(error) === 'ENOENT') throw new MissingLockOwnerError(lockPath, error)
     if (error instanceof Error && error.message.startsWith('Malformed Cursor integration lock:')) throw error
     throw new Error(`Malformed Cursor integration lock: ${lockPath}`, { cause: error })
@@ -702,7 +765,7 @@ export async function installCursorSshTarget (
   const createNonce = options.createNonce ?? randomUUID
 
   return await withIntegrationLock(context, options, () => {
-    const settingsSnapshot = readFileSnapshot(settingsPath)
+    const settingsSnapshot = readFileSnapshot(settingsPath, { label: 'Cursor settings' })
     const settingsText = settingsSnapshot.text ?? ''
     validateCursorSshConfigCompatibility(settingsText, settingsPath, sshConfigPath, { platform, env })
     const merged = mergeCursorRemotePlatform(settingsText, alias)
@@ -786,7 +849,7 @@ async function uninstallCursorMappings (
       } else if (!scan.complete) {
         retainedBecause = 'uncertain-peer'
       } else {
-        const settingsSnapshot = readFileSnapshot(mapping.settingsPath)
+        const settingsSnapshot = readFileSnapshot(mapping.settingsPath, { label: 'Cursor settings' })
         if (!settingsSnapshot.exists) {
           retainedBecause = 'user-modified'
         } else {

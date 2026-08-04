@@ -35,6 +35,7 @@ import { buildHostToolPath, runBuffered, runInteractive } from '../src/process.t
 import { createProgress, formatCommandFailure, resolveProgressMode, runProgressCommand } from '../src/progress.ts'
 import { DEFAULT_TTY_MAX_COLUMNS, interactiveCommandScript, interactiveShellEnvArgs, interactiveShellScript } from '../src/shell.ts'
 import { buildSshConfigBlock, defaultSshAlias, defaultSshConfigPath, installSshConfig, removeSshConfigBlock, replaceSshConfigBlock, uninstallSshConfig } from '../src/ssh-config.ts'
+import { installSshInstallTarget, uninstallSshInstallTarget, uninstallWorkspaceSshInstallTarget } from '../src/ssh-install-targets.ts'
 import { createStatusInfo, formatStatusText, inspectSshConfigStatus, parseDockerPsJsonLines, statusIsHealthy } from '../src/status.ts'
 import { ensureHostSshKey } from '../src/ssh-key.ts'
 import { resolveSetupToolchains } from '../src/setup-toolchains.ts'
@@ -3335,6 +3336,62 @@ describe('CLI execution', () => {
     ])
   })
 
+  test('structured setup always prints the essential Cursor handoff without launching Cursor', async () => {
+    for (const mode of ['interactive', 'detailed'] as const) {
+      const workspace = tempDir(`setup-cursor-${mode}-workspace`)
+      const sshConfigPath = join(tempDir(`setup-cursor-${mode}-ssh`), 'config')
+      const settingsPath = join(tempDir(`setup-cursor-${mode}-settings`), 'settings.json')
+      const cursor = fakeCursorCli()
+      const env = {
+        HOME: tempDir(`setup-cursor-${mode}-home`),
+        BOXDOWN_CACHE_HOME: tempDir(`setup-cursor-${mode}-cache`),
+        BOXDOWN_DATA_HOME: tempDir(`setup-cursor-${mode}-data`),
+        BOXDOWN_RUNTIME_HOME: tempDir(`setup-cursor-${mode}-runtime`),
+        BOXDOWN_SSH_CONFIG: sshConfigPath,
+        BOXDOWN_CURSOR_SETTINGS: settingsPath,
+        BOXDOWN_HOST_PATH_PREFIX: cursor.env.BOXDOWN_HOST_PATH_PREFIX as string,
+        BOXDOWN_FAKE_CURSOR_LOG: cursor.env.BOXDOWN_FAKE_CURSOR_LOG as string,
+        BOXDOWN_FAKE_CURSOR_EXTENSIONS: cursor.env.BOXDOWN_FAKE_CURSOR_EXTENSIONS as string,
+        BOXDOWN_FAKE_CURSOR_EXIT_CODE: cursor.env.BOXDOWN_FAKE_CURSOR_EXIT_CODE as string
+      }
+      const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+      const alias = `${context.workspaceBasename}-devcontainer`
+      const progress = createProgress({ mode, write: () => {} })
+      progress.setSteps([
+        { id: 'ssh-alias', label: 'Installing SSH alias' },
+        { id: 'ssh-target:cursor', label: 'Installing Cursor SSH target' }
+      ])
+      mkdirSync(dirname(settingsPath), { recursive: true })
+      writeFileSync(settingsPath, JSON.stringify({ 'remote.SSH.configFile': sshConfigPath }))
+      const stdout: string[] = []
+      const originalStdoutWrite = process.stdout.write
+      process.stdout.write = ((chunk: string | Uint8Array) => {
+        stdout.push(Buffer.isBuffer(chunk) ? chunk.toString('utf8') : chunk)
+        return true
+      }) as typeof process.stdout.write
+
+      try {
+        await withProcessEnv(env, async () => setupWorkspace(context, alias, {
+          progress,
+          targets: ['cursor'],
+          start: async () => 'setup-container',
+          installSsh: async () => {},
+          installTarget: installSshInstallTarget
+        }))
+      } finally {
+        process.stdout.write = originalStdoutWrite
+      }
+
+      const output = stdout.join('')
+      const folderUri = `vscode-remote://ssh-remote+${alias}/workspaces/${encodeURIComponent(context.workspaceBasename)}`
+      assert.ok(output.includes(`Cursor settings: ${settingsPath}\n`), mode)
+      assert.ok(output.includes(`Cursor remote folder URI: ${folderUri}\n`), mode)
+      assert.ok(output.includes(`Cursor open command: cursor --folder-uri '${folderUri}'\n`), mode)
+      assert.match(output, /Refresh Cursor Remote Explorer or restart Cursor/, mode)
+      assert.deepStrictEqual(fakeCursorCalls(cursor.logPath), ['--list-extensions'], mode)
+    }
+  })
+
   test('removes each requested down workspace', async () => {
     const alpha = tempDir('down-alpha-workspace')
     const beta = tempDir('down-beta-workspace')
@@ -3796,6 +3853,125 @@ describe('CLI execution', () => {
     assert.deepStrictEqual(cursorRemotePlatforms(cursorSettingsPath), {})
     assert.match(result.stdout, /Removed Cursor Linux platform mapping:/)
     assert.doesNotMatch(result.stdout, /Removed SSH alias:/)
+  })
+
+  test('targeted Cursor cleanup reports every settings path with its exact disposition', async () => {
+    const root = tempDir('cursor-cleanup-dispositions')
+    const env = {
+      HOME: root,
+      BOXDOWN_CACHE_HOME: join(root, 'cache'),
+      BOXDOWN_DATA_HOME: join(root, 'data'),
+      BOXDOWN_RUNTIME_HOME: join(root, 'runtime'),
+      BOXDOWN_SSH_CONFIG: join(root, '.ssh', 'config')
+    }
+    const workspace = join(root, 'workspace-current')
+    const peerWorkspace = join(root, 'workspace-peer')
+    mkdirSync(workspace, { recursive: true })
+    mkdirSync(peerWorkspace, { recursive: true })
+    mkdirSync(dirname(env.BOXDOWN_SSH_CONFIG), { recursive: true })
+    writeFileSync(env.BOXDOWN_SSH_CONFIG, '')
+    const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+    const peerContext = createWorkspaceContext({ workspace: peerWorkspace, env, assetsDevcontainerDir })
+    const alias = 'multi-path-devcontainer'
+    const removedPath = join(root, 'Cursor-removed', 'settings.json')
+    const userOwnedPath = join(root, 'Cursor-user-owned', 'settings.json')
+    const userModifiedPath = join(root, 'Cursor-user-modified', 'settings.json')
+    const sharedPath = join(root, 'Cursor-shared', 'settings.json')
+    const optionsFor = (settingsPath: string) => ({
+      env,
+      platform: 'linux' as const,
+      settingsPath,
+      sshConfigPath: env.BOXDOWN_SSH_CONFIG
+    })
+    const writeSettings = (settingsPath: string, remotePlatform?: unknown): void => {
+      mkdirSync(dirname(settingsPath), { recursive: true })
+      writeFileSync(settingsPath, JSON.stringify({
+        'remote.SSH.configFile': env.BOXDOWN_SSH_CONFIG,
+        ...(remotePlatform === undefined ? {} : { 'remote.SSH.remotePlatform': remotePlatform })
+      }))
+    }
+
+    for (const settingsPath of [removedPath, userModifiedPath, sharedPath]) {
+      writeSettings(settingsPath)
+      await installCursorSshTarget(context, alias, optionsFor(settingsPath))
+    }
+    writeSettings(userOwnedPath, { [alias]: 'linux' })
+    await installCursorSshTarget(context, alias, optionsFor(userOwnedPath))
+    await installCursorSshTarget(peerContext, alias, optionsFor(sharedPath))
+    writeSettings(userModifiedPath, null)
+
+    const stdout: string[] = []
+    const originalStdoutWrite = process.stdout.write
+    process.stdout.write = ((chunk: string | Uint8Array) => {
+      stdout.push(Buffer.isBuffer(chunk) ? chunk.toString('utf8') : chunk)
+      return true
+    }) as typeof process.stdout.write
+    try {
+      await uninstallSshInstallTarget(context, alias, 'cursor')
+    } finally {
+      process.stdout.write = originalStdoutWrite
+    }
+
+    const output = stdout.join('')
+    assert.ok(output.includes(`Removed Cursor Linux platform mapping: ${alias}\nCursor settings: ${removedPath}\n`))
+    assert.ok(output.includes(`Preserved user-modified Cursor Linux platform mapping while releasing Boxdown ownership: ${alias}\nCursor settings: ${userModifiedPath}\n`))
+    assert.ok(output.includes(`Preserved shared Cursor Linux platform mapping for another Boxdown workspace: ${alias}\nCursor settings: ${sharedPath}\n`))
+    assert.ok(output.includes(`Preserved user-owned Cursor Linux platform mapping while releasing Boxdown ownership: ${alias}\nCursor settings: ${userOwnedPath}\n`))
+    assert.strictEqual(output.match(/Cursor Linux platform mapping/gu)?.length, 4)
+    assert.strictEqual(output.match(/Removed Cursor Linux platform mapping:/gu)?.length, 1)
+  })
+
+  test('quiet complete Cursor cleanup still warns about actionable peer uncertainty', async () => {
+    const root = tempDir('cursor-cleanup-uncertainty')
+    const env = {
+      HOME: root,
+      BOXDOWN_CACHE_HOME: join(root, 'cache'),
+      BOXDOWN_DATA_HOME: join(root, 'data'),
+      BOXDOWN_RUNTIME_HOME: join(root, 'runtime'),
+      BOXDOWN_SSH_CONFIG: join(root, '.ssh', 'config')
+    }
+    const workspace = join(root, 'workspace-current')
+    mkdirSync(workspace, { recursive: true })
+    mkdirSync(dirname(env.BOXDOWN_SSH_CONFIG), { recursive: true })
+    writeFileSync(env.BOXDOWN_SSH_CONFIG, '')
+    const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+    const alias = 'uncertain-output-devcontainer'
+    const settingsPath = join(root, 'Cursor', 'settings.json')
+    await installCursorSshTarget(context, alias, {
+      env,
+      platform: 'linux',
+      settingsPath,
+      sshConfigPath: env.BOXDOWN_SSH_CONFIG
+    })
+    const malformedPeer = join(context.dataRoot, 'workspaces', 'malformed-peer', 'cursor-integration.json')
+    mkdirSync(dirname(malformedPeer), { recursive: true })
+    writeFileSync(malformedPeer, '{malformed')
+
+    const stdout: string[] = []
+    const stderr: string[] = []
+    const originalStdoutWrite = process.stdout.write
+    const originalStderrWrite = process.stderr.write
+    process.stdout.write = ((chunk: string | Uint8Array) => {
+      stdout.push(Buffer.isBuffer(chunk) ? chunk.toString('utf8') : chunk)
+      return true
+    }) as typeof process.stdout.write
+    process.stderr.write = ((chunk: string | Uint8Array) => {
+      stderr.push(Buffer.isBuffer(chunk) ? chunk.toString('utf8') : chunk)
+      return true
+    }) as typeof process.stderr.write
+    try {
+      await uninstallWorkspaceSshInstallTarget(context, [], 'cursor', { quiet: true })
+    } finally {
+      process.stdout.write = originalStdoutWrite
+      process.stderr.write = originalStderrWrite
+    }
+
+    assert.strictEqual(stdout.join(''), '')
+    assert.match(stderr.join(''), /Warning: Preserved Cursor Linux platform mapping because peer ownership is uncertain/)
+    assert.ok(stderr.join('').includes(`${alias} (${settingsPath})`))
+    assert.ok(stderr.join('').includes(`Review unreadable Cursor integration records under ${join(context.dataRoot, 'workspaces')} before removing it manually.`))
+    assert.strictEqual(cursorRemotePlatforms(settingsPath)[alias], 'linux')
+    assert.strictEqual(existsSync(cursorIntegrationPath(context)), false)
   })
 
   test('unqualified SSH uninstall cleans every recorded Cursor mapping', () => {
@@ -5242,6 +5418,8 @@ describe('CLI execution', () => {
       BOXDOWN_CURSOR_SETTINGS: cursorSettingsPath
     }
     const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+    mkdirSync(dirname(cursorSettingsPath), { recursive: true })
+    writeFileSync(cursorSettingsPath, JSON.stringify({ 'remote.SSH.configFile': env.BOXDOWN_SSH_CONFIG }))
 
     assert.strictEqual(runCliProcess(['ssh', 'install', '--workspace', workspace, '--alias', 'purge-cursor-a', '--target', 'cursor'], env).code, 0)
     assert.strictEqual(runCliProcess(['ssh', 'install', '--workspace', workspace, '--alias', 'purge-cursor-b', '--target', 'cursor'], env).code, 0)
@@ -5278,6 +5456,8 @@ describe('CLI execution', () => {
     const firstContext = createWorkspaceContext({ workspace: firstWorkspace, env, assetsDevcontainerDir })
     const secondContext = createWorkspaceContext({ workspace: secondWorkspace, env, assetsDevcontainerDir })
     const alias = 'purge-cursor-shared'
+    mkdirSync(dirname(cursorSettingsPath), { recursive: true })
+    writeFileSync(cursorSettingsPath, JSON.stringify({ 'remote.SSH.configFile': env.BOXDOWN_SSH_CONFIG }))
 
     assert.strictEqual(runCliProcess(['ssh', 'install', '--workspace', firstWorkspace, '--alias', alias, '--target', 'cursor'], env).code, 0)
     assert.strictEqual(runCliProcess(['ssh', 'install', '--workspace', secondWorkspace, '--alias', alias, '--target', 'cursor'], env).code, 0)

@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readlinkSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, relative } from 'node:path'
@@ -89,6 +90,49 @@ function writePeerRecord (item: CursorFixture, name: string, value: unknown): st
   return recordPath
 }
 
+function makeFifo (path: string): void {
+  mkdirSync(dirname(path), { recursive: true })
+  const result = spawnSync('mkfifo', [path], { encoding: 'utf8' })
+  assert.strictEqual(result.error, undefined)
+  assert.strictEqual(result.status, 0, result.stderr)
+}
+
+function runCursorOperationSubprocess (
+  item: CursorFixture,
+  operation: 'install' | 'uninstall',
+  alias: string
+): ReturnType<typeof spawnSync> {
+  const script = [
+    'import { installCursorSshTarget, uninstallCursorSshTarget } from "./src/cursor-app-config.ts"',
+    'import { createWorkspaceContext } from "./src/paths.ts"',
+    'const payload = JSON.parse(process.env.BOXDOWN_CURSOR_TEST_PAYLOAD ?? "{}")',
+    'const context = createWorkspaceContext({ workspace: payload.workspace, env: payload.env, platform: "linux" })',
+    'const options = { env: payload.env, platform: "linux", settingsPath: payload.settingsPath, sshConfigPath: payload.sshConfigPath }',
+    'const result = payload.operation === "install"',
+    '  ? await installCursorSshTarget(context, payload.alias, options)',
+    '  : await uninstallCursorSshTarget(context, payload.alias, options)',
+    'process.stdout.write(JSON.stringify(result))'
+  ].join('\n')
+  return spawnSync(process.execPath, [
+    '--import', 'tsx', '--input-type=module', '--eval', script
+  ], {
+    cwd: process.cwd(),
+    encoding: 'utf8',
+    timeout: 5_000,
+    env: {
+      ...process.env,
+      BOXDOWN_CURSOR_TEST_PAYLOAD: JSON.stringify({
+        operation,
+        alias,
+        workspace: item.context.workspaceFolder,
+        env: item.env,
+        settingsPath: item.settingsPath,
+        sshConfigPath: item.sshConfigPath
+      })
+    }
+  })
+}
+
 test('resolves Cursor settings paths by platform', () => {
   assert.strictEqual(defaultCursorSettingsPath({ HOME: '/Users/tester' }, 'darwin'), '/Users/tester/Library/Application Support/Cursor/User/settings.json')
   assert.strictEqual(defaultCursorSettingsPath({ HOME: '/home/tester' }, 'linux'), '/home/tester/.config/Cursor/User/settings.json')
@@ -145,8 +189,8 @@ test('treats empty platform variables as absent when a safe fallback exists', ()
 })
 
 test('builds encoded Cursor folder URIs and platform commands', () => {
-  const uri = cursorRemoteFolderUri('demo-devcontainer', "repo 100%'s")
-  assert.strictEqual(uri, 'vscode-remote://ssh-remote+demo-devcontainer/workspaces/repo%20100%25%27s')
+  const uri = cursorRemoteFolderUri('demo-devcontainer', "repo 100%!'()*s")
+  assert.strictEqual(uri, 'vscode-remote://ssh-remote+demo-devcontainer/workspaces/repo%20100%25%21%27%28%29%2As')
   assert.deepStrictEqual(formatCursorFolderCommand(uri, 'darwin'), {
     command: `cursor --folder-uri '${uri}'`
   })
@@ -433,6 +477,17 @@ test('install and uninstall ownership operations are idempotent and preserve mod
   assert.strictEqual(statSync(fresh.settingsPath).mode & 0o777, 0o600)
 })
 
+test('persistence tightens an existing Cursor ownership record to mode 0600', async () => {
+  const item = cursorFixture('record-mode')
+  const recordPath = cursorIntegrationPath(item.context)
+  await installCursorSshTarget(item.context, 'first-devcontainer', item.options)
+  chmodSync(recordPath, 0o644)
+
+  await installCursorSshTarget(item.context, 'second-devcontainer', item.options)
+
+  assert.strictEqual(statSync(recordPath).mode & 0o777, 0o600)
+})
+
 test('discovers direct peer ownership without metadata', async () => {
   const item = cursorFixture('peer-no-metadata')
   mkdirSync(dirname(item.settingsPath), { recursive: true })
@@ -519,6 +574,97 @@ test('retains ownership after user value and comment changes or missing settings
   const missingResult = await uninstallCursorSshTarget(missing.context, 'missing-devcontainer', missing.options)
   assert.strictEqual(missingResult[0]?.retainedBecause, 'user-modified')
   assert.strictEqual(existsSync(cursorIntegrationPath(missing.context)), false)
+})
+
+test('targeted cleanup releases ownership when the remote platform parent becomes null', async () => {
+  const item = cursorFixture('null-parent-targeted')
+  const alias = 'null-parent-devcontainer'
+  await installCursorSshTarget(item.context, alias, item.options)
+  const reconfigured = '{"editor.fontSize":14,"remote.SSH.remotePlatform":null}'
+  writeFileSync(item.settingsPath, reconfigured)
+
+  const results = await uninstallCursorSshTarget(item.context, alias, item.options)
+
+  assert.deepStrictEqual(results.map(result => result.retainedBecause), ['user-modified'])
+  assert.strictEqual(readFileSync(item.settingsPath, 'utf8'), reconfigured)
+  assert.strictEqual(existsSync(cursorIntegrationPath(item.context)), false)
+})
+
+test('complete cleanup used by purge releases ownership when the remote platform parent is absent', async () => {
+  const item = cursorFixture('missing-parent-complete')
+  await installCursorSshTarget(item.context, 'old-alias', item.options)
+  await installCursorSshTarget(item.context, 'current-alias', item.options)
+  const reconfigured = '{"editor.fontSize":14}'
+  writeFileSync(item.settingsPath, reconfigured)
+
+  const results = await uninstallCursorWorkspaceTarget(item.context, item.options)
+
+  assert.deepStrictEqual(results.map(result => result.retainedBecause), ['user-modified', 'user-modified'])
+  assert.strictEqual(readFileSync(item.settingsPath, 'utf8'), reconfigured)
+  assert.strictEqual(existsSync(cursorIntegrationPath(item.context)), false)
+})
+
+test('rejects a Cursor settings FIFO without blocking', { skip: process.platform === 'win32' }, () => {
+  const item = cursorFixture('settings-fifo')
+  makeFifo(item.settingsPath)
+
+  const result = runCursorOperationSubprocess(item, 'install', 'fifo-devcontainer')
+
+  assert.strictEqual(result.error, undefined, 'Cursor settings FIFO read timed out')
+  assert.notStrictEqual(result.status, 0)
+  assert.match(result.stderr.toString(), /regular file/i)
+})
+
+test('treats a peer ownership-record FIFO as uncertain without blocking', { skip: process.platform === 'win32' }, async () => {
+  const item = cursorFixture('peer-fifo')
+  const alias = 'peer-fifo-devcontainer'
+  await installCursorSshTarget(item.context, alias, item.options)
+  const peerPath = join(item.context.dataRoot, 'workspaces', 'fifo-peer', CURSOR_INTEGRATION_FILENAME)
+  makeFifo(peerPath)
+
+  const result = runCursorOperationSubprocess(item, 'uninstall', alias)
+
+  assert.strictEqual(result.error, undefined, 'peer ownership FIFO read timed out')
+  assert.strictEqual(result.status, 0, result.stderr.toString())
+  const parsed = JSON.parse(result.stdout.toString()) as Array<{ retainedBecause?: string }>
+  assert.strictEqual(parsed[0]?.retainedBecause, 'uncertain-peer')
+})
+
+test('rejects a Cursor lock-owner FIFO without blocking', { skip: process.platform === 'win32' }, () => {
+  const item = cursorFixture('lock-owner-fifo')
+  const ownerPath = join(item.context.dataRoot, 'cursor-integration.lock', 'owner.json')
+  makeFifo(ownerPath)
+
+  const result = runCursorOperationSubprocess(item, 'install', 'lock-fifo-devcontainer')
+
+  assert.strictEqual(result.error, undefined, 'Cursor lock-owner FIFO read timed out')
+  assert.notStrictEqual(result.status, 0)
+  assert.match(result.stderr.toString(), /regular file/i)
+})
+
+test('limits small Cursor ownership and lock-owner JSON files without limiting settings JSONC', async () => {
+  const oversizedRecord = cursorFixture('oversized-record')
+  mkdirSync(oversizedRecord.context.workspaceDataDir, { recursive: true })
+  writeFileSync(cursorIntegrationPath(oversizedRecord.context), ' '.repeat(1_048_577))
+  await assert.rejects(
+    installCursorSshTarget(oversizedRecord.context, 'record-size-devcontainer', oversizedRecord.options),
+    /integration record.*maximum size/i
+  )
+
+  const oversizedOwner = cursorFixture('oversized-owner')
+  const lockPath = join(oversizedOwner.context.dataRoot, 'cursor-integration.lock')
+  mkdirSync(lockPath, { recursive: true })
+  writeFileSync(join(lockPath, 'owner.json'), ' '.repeat(16_385))
+  await assert.rejects(
+    installCursorSshTarget(oversizedOwner.context, 'owner-size-devcontainer', oversizedOwner.options),
+    /lock owner.*maximum size/i
+  )
+
+  const largeSettings = cursorFixture('large-settings')
+  mkdirSync(dirname(largeSettings.settingsPath), { recursive: true })
+  writeFileSync(largeSettings.settingsPath, `{${' '.repeat(1_048_577)}}`)
+  const installed = await installCursorSshTarget(largeSettings.context, 'large-settings-devcontainer', largeSettings.options)
+  assert.strictEqual(installed.settingsChanged, true)
 })
 
 test('atomic settings updates preserve an existing symlink target', async () => {

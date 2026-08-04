@@ -1,3 +1,5 @@
+import { join } from 'node:path'
+
 import { claudeSshConfigEntryForWorkspace, installClaudeSshConfigHost, uninstallClaudeSshConfigHost } from './claude-app-config.ts'
 import { codexProjectEntryForWorkspace, installCodexAppConfigProject, installCodexGlobalStateProject, legacyCodexRemotePathForWorkspace, uninstallCodexAppConfigProject, uninstallCodexGlobalStateProject } from './codex-app-config.ts'
 import { installCursorSshTarget, uninstallCursorSshTarget, uninstallCursorWorkspaceTarget, type CursorInstallResult, type CursorUninstallResult } from './cursor-app-config.ts'
@@ -135,10 +137,35 @@ function cursorDispositionMessage (alias: string, result: CursorInstallResult): 
   return `Preserved user-owned Cursor Linux platform mapping: ${alias}\n`
 }
 
-function cursorUninstallMessage (alias: string, results: readonly CursorUninstallResult[]): string {
-  if (results.length === 0) return `Cursor Linux platform mapping not installed: ${alias}\n`
-  if (results.some((result) => result.settingsChanged)) return `Removed Cursor Linux platform mapping: ${alias}\n`
-  return `Preserved Cursor Linux platform mapping while releasing Boxdown ownership: ${alias}\n`
+function cursorUninstallMessage (alias: string, result: CursorUninstallResult): string {
+  if (result.settingsChanged) return `Removed Cursor Linux platform mapping: ${alias}\n`
+  if (result.retainedBecause === 'user-owned') {
+    return `Preserved user-owned Cursor Linux platform mapping while releasing Boxdown ownership: ${alias}\n`
+  }
+  if (result.retainedBecause === 'shared-owner') {
+    return `Preserved shared Cursor Linux platform mapping for another Boxdown workspace: ${alias}\n`
+  }
+  if (result.retainedBecause === 'user-modified') {
+    return `Preserved user-modified Cursor Linux platform mapping while releasing Boxdown ownership: ${alias}\n`
+  }
+  return `Preserved Cursor Linux platform mapping because peer ownership is uncertain: ${alias}\n`
+}
+
+function warnAboutCursorCleanupUncertainty (context: WorkspaceContext, results: readonly CursorUninstallResult[]): void {
+  for (const result of results.filter(candidate => candidate.retainedBecause === 'uncertain-peer')) {
+    const alias = result.aliases.join(', ')
+    process.stderr.write(
+      `Warning: Preserved Cursor Linux platform mapping because peer ownership is uncertain: ${alias} (${result.settingsPath}). ` +
+      `Review unreadable Cursor integration records under ${join(context.dataRoot, 'workspaces')} before removing it manually.\n`
+    )
+  }
+}
+
+function printCursorUninstallResults (results: readonly CursorUninstallResult[]): void {
+  for (const result of results) {
+    process.stdout.write(cursorUninstallMessage(result.aliases.join(', '), result))
+    process.stdout.write(`Cursor settings: ${result.settingsPath}\n`)
+  }
 }
 
 async function warnAboutCursorRemoteSshPrerequisite (): Promise<void> {
@@ -172,28 +199,32 @@ async function installCursorTarget (context: WorkspaceContext, alias: string, op
   const result = await installCursorSshTarget(context, alias)
 
   if (options.quiet !== true) {
-    process.stdout.write(`\nCursor settings: ${result.settingsPath}\n`)
+    process.stdout.write('\n')
     process.stdout.write(cursorDispositionMessage(alias, result))
-    process.stdout.write(`Cursor remote folder URI: ${result.folderUri}\n`)
-    process.stdout.write(`Cursor open command${result.commandLabel === undefined ? '' : ` (${result.commandLabel})`}: ${result.command}\n`)
-    process.stdout.write('Refresh Cursor Remote Explorer or restart Cursor if the SSH alias is not visible.\n')
   }
+  process.stdout.write(`Cursor settings: ${result.settingsPath}\n`)
+  process.stdout.write(`Cursor remote folder URI: ${result.folderUri}\n`)
+  process.stdout.write(`Cursor open command${result.commandLabel === undefined ? '' : ` (${result.commandLabel})`}: ${result.command}\n`)
+  process.stdout.write('Refresh Cursor Remote Explorer or restart Cursor if the SSH alias is not visible.\n')
 
   await warnAboutCursorRemoteSshPrerequisite()
 }
 
 async function uninstallCursorTarget (context: WorkspaceContext, alias: string, options: SshInstallTargetOptions = {}): Promise<void> {
   const results = await uninstallCursorSshTarget(context, alias)
+  warnAboutCursorCleanupUncertainty(context, results)
   if (options.quiet === true) return
 
-  process.stdout.write(cursorUninstallMessage(alias, results))
-  for (const settingsPath of new Set(results.map((result) => result.settingsPath))) {
-    process.stdout.write(`Cursor settings: ${settingsPath}\n`)
+  if (results.length === 0) {
+    process.stdout.write(`Cursor Linux platform mapping not installed: ${alias}\n`)
+    return
   }
+  printCursorUninstallResults(results)
 }
 
 async function uninstallCursorWorkspace (context: WorkspaceContext, _aliases: readonly string[], options: SshInstallTargetOptions = {}): Promise<void> {
   const results = await uninstallCursorWorkspaceTarget(context)
+  warnAboutCursorCleanupUncertainty(context, results)
   if (options.quiet === true) return
 
   if (results.length === 0) {
@@ -201,11 +232,7 @@ async function uninstallCursorWorkspace (context: WorkspaceContext, _aliases: re
     return
   }
 
-  for (const result of results) {
-    const alias = result.aliases.join(', ')
-    process.stdout.write(cursorUninstallMessage(alias, [result]))
-    process.stdout.write(`Cursor settings: ${result.settingsPath}\n`)
-  }
+  printCursorUninstallResults(results)
 }
 
 export const SSH_INSTALL_TARGETS: readonly SshInstallTargetDefinition[] = [
