@@ -130,6 +130,8 @@ git commit -m "fix: resolve SSH config paths by platform"
 - Create: `__tests__/cursor-app-config.test.ts`
 - Modify: `package.json`
 - Modify: `pnpm-lock.yaml`
+- Modify: `docs/superpowers/specs/2026-08-04-cursor-ssh-support-design.md`
+- Modify: `docs/superpowers/plans/2026-08-04-cursor-ssh-support.md`
 
 **Interfaces:**
 
@@ -191,6 +193,12 @@ test('builds encoded Cursor folder URIs and platform commands', () => {
 })
 ```
 
+Add focused cases proving that an empty `BOXDOWN_CURSOR_SETTINGS` fails, empty
+environment variables are treated as absent, macOS/Linux fail without a usable
+home/config variable, Linux can resolve from `XDG_CONFIG_HOME` alone, and
+Windows falls back from empty `APPDATA`/`USERPROFILE` without producing a
+relative path.
+
 - [ ] **Step 3: Run the new suite and verify RED**
 
 Run:
@@ -206,30 +214,41 @@ Expected: FAIL with `ERR_MODULE_NOT_FOUND` for `src/cursor-app-config.ts`.
 Start the module with the exact public types and platform behavior:
 
 ```ts
-import { homedir } from 'node:os'
-import { isAbsolute, join, resolve, win32 } from 'node:path'
-import { applyEdits, createScanner, findNodeAtLocation, getNodeValue, modify, parseTree, printParseErrorCode, SyntaxKind, type FormattingOptions, type Node as JsonNode, type ParseError } from 'jsonc-parser'
+import { posix, win32 } from 'node:path'
+import { applyEdits, createScanner, findNodeAtLocation, getNodeValue, modify, parseTree, printParseErrorCode, type FormattingOptions, type ModificationOptions, type Node as JsonNode, type ParseError } from 'jsonc-parser'
 
 import { shellQuote } from './shell.ts'
 import { defaultSshConfigPath, validateSshAlias } from './ssh-config.ts'
 
 export function defaultCursorSettingsPath (env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform): string {
-  if (env.BOXDOWN_CURSOR_SETTINGS !== undefined) return env.BOXDOWN_CURSOR_SETTINGS
+  if (env.BOXDOWN_CURSOR_SETTINGS !== undefined) {
+    if (env.BOXDOWN_CURSOR_SETTINGS.length === 0) throw new Error('BOXDOWN_CURSOR_SETTINGS must be a non-empty path')
+    return env.BOXDOWN_CURSOR_SETTINGS
+  }
   if (platform === 'win32') {
-    const home = env.USERPROFILE ?? env.HOME
-    const appData = env.APPDATA ?? (home === undefined ? undefined : win32.join(home, 'AppData', 'Roaming'))
+    const home = nonEmptyEnvironmentValue(env.USERPROFILE) ?? nonEmptyEnvironmentValue(env.HOME)
+    const appData = nonEmptyEnvironmentValue(env.APPDATA) ?? (home === undefined ? undefined : win32.join(home, 'AppData', 'Roaming'))
     if (appData === undefined) throw new Error('Cannot resolve the Windows Cursor settings directory')
     return win32.join(appData, 'Cursor', 'User', 'settings.json')
   }
-  const home = env.HOME ?? homedir()
-  return platform === 'darwin'
-    ? join(home, 'Library', 'Application Support', 'Cursor', 'User', 'settings.json')
-    : join(env.XDG_CONFIG_HOME ?? join(home, '.config'), 'Cursor', 'User', 'settings.json')
+  const home = nonEmptyEnvironmentValue(env.HOME)
+  if (platform === 'darwin') {
+    if (home === undefined) throw new Error('Cannot resolve the macOS Cursor settings directory')
+    return posix.join(home, 'Library', 'Application Support', 'Cursor', 'User', 'settings.json')
+  }
+  const configHome = nonEmptyEnvironmentValue(env.XDG_CONFIG_HOME) ?? (home === undefined ? undefined : posix.join(home, '.config'))
+  if (configHome === undefined) throw new Error('Cannot resolve the Linux Cursor settings directory')
+  return posix.join(configHome, 'Cursor', 'User', 'settings.json')
+}
+
+function nonEmptyEnvironmentValue (value: string | undefined): string | undefined {
+  return value === undefined || value.length === 0 ? undefined : value
 }
 
 export function cursorRemoteFolderUri (alias: string, workspaceBasename: string): string {
   validateSshAlias(alias)
-  return `vscode-remote://ssh-remote+${alias}/workspaces/${encodeURIComponent(workspaceBasename)}`
+  const encodedBasename = encodeURIComponent(workspaceBasename).replaceAll("'", '%27')
+  return `vscode-remote://ssh-remote+${alias}/workspaces/${encodedBasename}`
 }
 
 export function formatCursorFolderCommand (folderUri: string, platform: NodeJS.Platform = process.platform): { label?: 'PowerShell', command: string } {
@@ -295,17 +314,26 @@ Implement private helpers with these exact rules:
 ```ts
 const REMOTE_PLATFORM_PATH = ['remote.SSH.remotePlatform'] as const
 
-function parseCursorRoot (text: string, settingsPath = 'Cursor settings'): { bom: string, body: string, root: JsonNode } {
+function parseCursorRoot (text: string, settingsPath = 'Cursor settings'): { bom: string, body: string, formattingText: string, root: JsonNode } {
   const bom = text.startsWith('\ufeff') ? '\ufeff' : ''
-  const body = bom === '' ? text : text.slice(1)
-  const source = body.trim().length === 0 ? '{}' : body
+  const formattingText = bom === '' ? text : text.slice(1)
+  const source = formattingText.trim().length === 0 ? '{}' : formattingText
   const errors: ParseError[] = []
   const root = parseTree(source, errors, { allowTrailingComma: true })
   if (errors.length > 0 || root === undefined || root.type !== 'object') {
-    const detail = errors[0] === undefined ? 'top-level value must be an object' : printParseErrorCode(errors[0].error)
+    const detail = errors[0] === undefined
+      ? 'top-level value must be an object'
+      : parseErrorDetail(source, errors[0])
     throw new Error(`Invalid Cursor settings JSONC: ${settingsPath} (${detail})`)
   }
-  return { bom, body: source, root }
+  return { bom, body: source, formattingText, root }
+}
+
+function parseErrorDetail (text: string, error: ParseError): string {
+  const prefix = text.slice(0, error.offset)
+  const lines = prefix.split(/\r\n|\r|\n/u)
+  const column = (lines.at(-1)?.length ?? 0) + 1
+  return `${printParseErrorCode(error.error)} at offset ${error.offset}, line ${lines.length}, column ${column}`
 }
 
 function formattingOptionsFor (text: string): FormattingOptions {
@@ -315,7 +343,21 @@ function formattingOptionsFor (text: string): FormattingOptions {
     ? { eol, insertSpaces: false, tabSize: 1, keepLines: true }
     : { eol, insertSpaces: true, tabSize: Math.max(1, indented.length), keepLines: true }
 }
+
+function modificationOptionsFor (text: string, formattingText = text): ModificationOptions {
+  return formattingText.trim().length === 0 || /[\r\n]/u.test(text)
+    ? { formattingOptions: formattingOptionsFor(formattingText) }
+    : {}
+}
 ```
+
+Pass `modificationOptionsFor` to the single `modify` call. Multiline documents
+use detected formatting and whitespace-only input uses normal empty-object
+formatting. Compact one-line existing JSONC deliberately omits
+`formattingOptions`: with options, `jsonc-parser@3.3.1` returns a whole-document
+replacement; without them, it returns the required surgical alias/delimiter
+edit. Add a regression that installs and removes an alias in a compact document
+and proves every unrelated byte is unchanged.
 
 Before using `findNodeAtLocation`, walk object property children and reject duplicate `remote.SSH.configFile`, duplicate `remote.SSH.remotePlatform`, or duplicate selected alias keys. Require `remote.SSH.remotePlatform` to be an object when present. Call `modify` exactly once for each document state, with the array path `['remote.SSH.remotePlatform', alias]`, then `applyEdits`. Scan the selected property's conservative sibling trivia with `createScanner(text, false)`; any `LineCommentTrivia` or `BlockCommentTrivia` retains the property during removal. Reparse the result and assert the selected value/state before returning it.
 

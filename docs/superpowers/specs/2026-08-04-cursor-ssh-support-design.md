@@ -193,9 +193,14 @@ using these platform defaults:
 | Windows | `%APPDATA%\Cursor\User\settings.json` |
 
 `BOXDOWN_CURSOR_SETTINGS` overrides the complete file path for tests and local
-development. Windows resolution uses `USERPROFILE` and `APPDATA`; POSIX
-resolution uses `HOME`. Missing required home/config variables produce an
-actionable error rather than a path rooted at the current directory.
+development, but an explicitly empty override is an error. Windows resolution
+uses a non-empty `APPDATA`, or derives it from a non-empty `USERPROFILE`/`HOME`
+fallback. macOS requires a non-empty `HOME`. Linux uses a non-empty
+`XDG_CONFIG_HOME` directly or derives `.config` from a non-empty `HOME`.
+Platform-selected `posix`/`win32` path operations keep an explicit platform
+argument host-independent. Empty values are treated as absent, and missing
+required home/config variables produce an actionable error rather than a path
+rooted at the current directory or the executing account's home.
 
 If the file does not exist or contains only whitespace, Boxdown creates its
 parent directory as needed and starts from an empty object. Writes are atomic
@@ -211,9 +216,15 @@ Boxdown will therefore add `jsonc-parser@3.3.1` as an exact direct runtime
 dependency and use its structured edit operations.
 
 The editor will use `jsonc-parser`'s `parseTree`, `modify`, and `applyEdits`
-operations. Before editing it detects the existing newline and indentation
-style and passes matching formatting options to `modify`; it handles a leading
-byte-order mark without changing it. The editor will:
+operations. Before editing a multiline document it detects the existing
+newline and indentation style and passes matching formatting options to
+`modify`; it handles a leading byte-order mark without changing it. A compact
+one-line existing JSONC object is the deliberate exception: the editor omits
+`formattingOptions` because `jsonc-parser@3.3.1` otherwise replaces and
+reformats the complete document. Omitting the options makes the library return
+the smallest alias/delimiter edit and preserves every unrelated byte.
+Whitespace-only input still starts from a normally formatted empty object. The
+editor will:
 
 - reject syntax errors with the Cursor settings path and parser location;
 - require the root value to be an object;
