@@ -91,13 +91,20 @@ export async function resolveSetupToolchains (options: {
     return {detected, skippedNonInteractive: true}
   }
 
+  const detectionsById = new Map(detected.map((detection) => [detection.id, detection]))
   const prompt = await promptMultiSelect({
     title: 'Select workspace toolchains?',
-    choices: detected.map((detection) => ({
-      value: detection.id,
-      label: TOOLCHAIN_DEFAULTS[detection.id].label,
-      description: descriptionFor(detection)
-    })),
+    choices: TOOLCHAIN_IDS.map((id) => {
+      const detection = detectionsById.get(id)
+
+      return {
+        value: id,
+        label: TOOLCHAIN_DEFAULTS[id].label,
+        description: detection === undefined
+          ? `No project markers detected; Boxdown default ${TOOLCHAIN_DEFAULTS[id].version}`
+          : descriptionFor(detection)
+      }
+    }),
     initialValues: detected
       .filter((detection) => resolveDetectedVersion(detection).kind === 'resolved')
       .map((detection) => detection.id),

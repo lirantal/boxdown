@@ -373,6 +373,45 @@ test('setup toolchain selection preselects detected runtimes and persists the ch
   assert.match(outputText(), /\u001B\[32m■\u001B\[0m/)
 })
 
+test('setup toolchain selection offers supported defaults when nothing is detected', async () => {
+  const workspace = tempDir('setup-toolchains-supported-defaults')
+  const context = createWorkspaceContext({
+    workspace,
+    env: {HOME: workspace, BOXDOWN_DATA_HOME: join(workspace, 'data')}
+  })
+  const {input, output, outputText} = fakePromptStreams()
+
+  const resultPromise = resolveSetupToolchains({
+    context,
+    selectors: [],
+    input,
+    output,
+    env: {CI: 'false'}
+  })
+
+  const initialOutput = outputText()
+  assert.strictEqual((initialOutput.match(/□/g) ?? []).length, 4)
+  assert.match(initialOutput, /■.*No toolchains/s)
+
+  input.write('\u001B[A')
+  input.write(' ')
+  input.write('\r')
+  const result = await resultPromise
+
+  assert.deepStrictEqual(result.detected, [])
+  assert.deepStrictEqual(result.plan?.selected, [{
+    id: 'rust',
+    version: '1.97.1',
+    selectionSource: 'interactive',
+    resolutionSource: 'boxdown-default',
+    evidence: []
+  }])
+  assert.match(outputText(), /Node\.js.*Boxdown default 24\.17\.0/s)
+  assert.match(outputText(), /Python.*Boxdown default 3\.14\.6/s)
+  assert.match(outputText(), /Go.*Boxdown default 1\.26\.5/s)
+  assert.match(outputText(), /Rust.*Boxdown default 1\.97\.1/s)
+})
+
 test('setup toolchain selection leaves incompatible and unresolved detections unchecked', async () => {
   const workspace = tempDir('setup-toolchains-unchecked-detections')
   const context = createWorkspaceContext({

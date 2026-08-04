@@ -54,10 +54,11 @@ boxdown setup --toolchain none
 ```
 
 - Omit selectors in an interactive `boxdown setup` to review an editable
-  multi-select. Only compatible, fully resolved detections begin selected;
-  incompatible or unchecked detections remain visible but unchecked. Setup
-  requires you to confirm the final selection. Choosing `No toolchains` writes
-  an explicit empty plan.
+  multi-select of every supported runtime. Compatible, fully resolved detections
+  begin selected. Incompatible or unchecked detections and runtimes without
+  project markers remain visible but unchecked; undetected runtimes show the
+  exact Boxdown default used when selected. Setup requires you to confirm the
+  final selection. Choosing `No toolchains` writes an explicit empty plan.
 - `auto` explicitly approves every high-confidence detection.
 - `<runtime>` selects a supported runtime only when its project declaration can
   be resolved safely; with no declaration it uses the Boxdown default. An
