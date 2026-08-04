@@ -76,8 +76,9 @@ non-interactive runs skip them unless `--target` is provided. For example,
 `boxdown setup --target codex` or `boxdown ssh install --target codex` writes
 Codex app remote project configuration under `~/.codex/codex-app/config.json`,
 and `--target claude` writes Claude app SSH remote configuration under
-`~/Library/Application Support/Claude/ssh_configs.json`, but neither file
-becomes Boxdown workspace state.
+`~/Library/Application Support/Claude/ssh_configs.json`. `--target cursor`
+updates Cursor's public Remote SSH settings for the Boxdown-managed alias.
+External app files do not become generated repository state.
 
 Boxdown writes the Codex app config entry needed to point Codex at the
 Boxdown-managed SSH alias and canonical container-side project path,
@@ -89,6 +90,19 @@ paths. Other Codex global state remains Codex-owned.
 Boxdown writes the Claude SSH remote entry needed to point Claude at the same
 Boxdown-managed SSH alias. On uninstall, it removes that matching Claude SSH
 remote and trusted-host entry.
+
+The Cursor target writes only `remote.SSH.remotePlatform.<alias> = "linux"` in
+the selected public settings file after it verifies that
+`remote.SSH.configFile` resolves to the same SSH config Boxdown manages. Cursor
+has no container agent profile relevance. Its per-workspace
+`cursor-integration.json` ownership record supports multiple aliases and
+settings paths, shared-owner cleanup, and complete-workspace cleanup. A
+data-root lock serializes integration mutations; ownership records are only
+meaningful within one stable `BOXDOWN_DATA_HOME`/`XDG_DATA_HOME` root.
+
+Cursor integration is configure-only. It prints a standard Remote SSH folder
+URI and never launches Cursor, installs extensions, edits SQLite,
+`workspaceStorage`, remote history, or a Dev Containers authority.
 
 Each app integration is independently removable through `boxdown ssh uninstall
 --target <name>`, which preserves the Boxdown-managed SSH alias. The target

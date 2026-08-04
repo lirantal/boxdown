@@ -152,9 +152,11 @@ the normal workspace mount in every tier, including committed `AGENTS.md`,
 During interactive `boxdown setup`, selecting or explicitly supplying at least
 one Codex or Claude app target opens a single-choice agent profile prompt unless
 `--agent-profile` was supplied. An explicit `--agent-profile` suppresses this
-prompt. Skipping every app target keeps the workspace's recorded profile, or
-`auth` for a new workspace, without another prompt. Non-interactive setup never
-asks.
+prompt. Cursor alone does not open the agent-profile selector because it does
+not consume a container agent profile; a mixed Cursor and Codex or Claude
+selection does. Skipping every app target keeps the workspace's recorded
+profile, or `auth` for a new workspace, without another prompt.
+Non-interactive setup never asks.
 
 Use both flags for a fully explicit setup:
 
@@ -211,8 +213,10 @@ profiles are already visible to a running container.
 
 ### Host integrations
 
-`boxdown setup` manages a workspace SSH alias. It writes Codex or Claude app
-integration records only when you select or explicitly request those targets.
+`boxdown setup` manages a workspace SSH alias. It writes Codex, Claude, or
+Cursor integration records only when you select or explicitly request those
+targets. Cursor uses the normal OpenSSH alias and public Cursor Remote SSH
+settings; it is not a container agent profile.
 
 ### Cleanup boundary
 
@@ -243,7 +247,7 @@ npx boxdown ssh install
 
 This creates a `<repo-name>-devcontainer` SSH host. When run in an interactive
 terminal, Boxdown also asks whether to install optional targets such as Codex
-and Claude.
+and Claude, plus Cursor.
 Non-interactive runs skip optional targets and print the explicit `--target`
 form to use in scripts.
 
@@ -262,6 +266,7 @@ lower-level SSH prompt:
 ```sh
 npx boxdown setup --target codex
 npx boxdown setup --target claude
+npx boxdown setup --target cursor
 ```
 
 The lower-level SSH command also supports the same targets for scripts:
@@ -269,10 +274,13 @@ The lower-level SSH command also supports the same targets for scripts:
 ```sh
 npx boxdown ssh install --target codex
 npx boxdown ssh install --target claude
+npx boxdown ssh install --target cursor
 ```
 
 Restart the target app after installing it so it applies the updated remote
-project config.
+project config. Cursor output includes a `cursor --folder-uri` command; refresh
+Cursor Remote Explorer or restart Cursor if the alias is not immediately
+visible. Boxdown does not launch Cursor or install its extensions.
 
 From the target project directory, forward a dev server running inside the
 container to your host browser:
@@ -304,6 +312,7 @@ all known integrations when you no longer need it:
 ```sh
 npx boxdown ssh uninstall --target claude
 npx boxdown ssh uninstall --target codex
+npx boxdown ssh uninstall --target cursor
 npx boxdown ssh uninstall
 ```
 
@@ -391,7 +400,7 @@ Shared options:
 ```sh
 --workspace <path>  # target project directory, defaults to cwd; repeatable with down; purge also accepts list values
 --alias <name>      # SSH alias, defaults to <repo-name>-devcontainer
---target <name>     # with setup/ssh install/ssh uninstall, optional target; repeatable; supported: codex, claude
+--target <name>     # with setup/ssh install/ssh uninstall, optional target; repeatable; supported: codex, claude, cursor
 --port <port>       # tunnel port for `boxdown tunnel`; repeatable
 --recreate          # recreate the devcontainer before starting
 --agent-profile <tier> # host agent data: none, auth (copied; default), or full (live read-write mounts)
@@ -403,7 +412,7 @@ Shared options:
 
 Use `boxdown purge` when you want to remove the workspace's Boxdown-managed
 environment residue: the devcontainer, its exact recorded Docker image, managed
-SSH/Codex/Claude entries, command log, and Boxdown cache/data for that
+SSH/Codex/Claude/Cursor entries, command log, and Boxdown cache/data for that
 workspace. It does not delete the local repository directory or files inside it.
 Interactive terminals ask for confirmation before purging.
 

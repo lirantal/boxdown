@@ -1504,6 +1504,21 @@ test('documents agent profile tiers', () => {
   assert.doesNotMatch(devcontainerTemplate, /Codex auth\.json is mounted automatically|host-owned writable credential mounts/i)
 })
 
+test('feature docs document Cursor SSH support boundaries', () => {
+  const setupDocs = readFileSync(join(process.cwd(), 'docs/features/setup.md'), 'utf8')
+  const sshDocs = readFileSync(join(process.cwd(), 'docs/features/ssh-config-and-proxy.md'), 'utf8')
+  const stateDocs = readFileSync(join(process.cwd(), 'docs/features/generated-config-and-state.md'), 'utf8')
+
+  assert.match(setupDocs, /boxdown setup --target cursor/)
+  assert.match(setupDocs, /Cursor alone.*does not.*agent-profile/is)
+  assert.match(sshDocs, /remote\.SSH\.remotePlatform/)
+  assert.match(sshDocs, /cursor --folder-uri/)
+  assert.match(sshDocs, /anysphere\.remote-ssh/)
+  assert.match(sshDocs, /does not.*(?:SQLite|workspaceStorage)/is)
+  assert.match(stateDocs, /BOXDOWN_CURSOR_SETTINGS/)
+  assert.match(stateDocs, /cursor-integration\.json/)
+})
+
 test('documents interactive container reuse lifecycle', () => {
   const startDocs = readFileSync(join(process.cwd(), 'docs/features/start-and-shell.md'), 'utf8')
   const setupDocs = readFileSync(join(process.cwd(), 'docs/features/setup.md'), 'utf8')

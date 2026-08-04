@@ -6,6 +6,8 @@
 boxdown setup
 boxdown setup --target codex
 boxdown setup --target claude
+boxdown setup --target cursor
+boxdown setup --target cursor --target codex
 boxdown setup --recreate
 boxdown setup --agent-profile full
 boxdown setup --target codex --agent-profile auth
@@ -34,9 +36,12 @@ changing its mount configuration.
 The profile-selector eligibility matrix is: during interactive setup, selecting
 or explicitly supplying at least one Codex or Claude app target opens the
 single-choice agent-profile selector when `--agent-profile` was not supplied.
-An explicit `--agent-profile` skips the selector. Skipping every app target
-retains the recorded profile, or uses `auth` for a new workspace, without
-another selector. Non-interactive setup never asks and uses that same fallback.
+Cursor alone does not open the agent-profile selector because Cursor uses the
+managed SSH alias rather than a container agent profile. A mixed Cursor and
+Codex or Claude selection still opens the selector. An explicit
+`--agent-profile` skips the selector. Skipping every app target retains the
+recorded profile, or uses `auth` for a new workspace, without another selector.
+Non-interactive setup never asks and uses that same fallback.
 
 Canceling either the target or agent-profile selector stops setup before
 workspace state is written.
@@ -96,6 +101,12 @@ entry for the same alias used by:
 ```sh
 boxdown ssh install --target claude
 ```
+
+When `--target cursor` is provided, Boxdown configures Cursor's public Remote
+SSH settings for the same alias and prints the URI plus the command that opens
+`/workspaces/<repo-name>`. It does not launch Cursor. See [SSH config and proxy
+workflow](./ssh-config-and-proxy.md#cursor-target) for prerequisites, commands,
+and cleanup behavior.
 
 When no target is provided, Boxdown uses the same optional target prompt as
 `boxdown ssh install`. In non-interactive shells, setup skips target

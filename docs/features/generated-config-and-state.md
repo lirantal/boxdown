@@ -62,6 +62,37 @@ entries with best-effort Docker state.
 Metadata may also record the last inspected Docker image ID for the workspace so
 `boxdown purge` can remove that exact image even after the container is gone.
 
+## Cursor SSH Integration State
+
+When the Cursor SSH target is selected, Boxdown updates Cursor's public user
+settings file and writes a non-secret ownership record at:
+
+```text
+~/.local/share/boxdown/workspaces/<workspace-hash>/cursor-integration.json
+```
+
+The versioned record tracks each managed `(alias, settingsPath)` mapping and
+whether Boxdown owns its `remote.SSH.remotePlatform.<alias>` Linux value. It is
+outside the repository so one workspace can retain multiple alias or
+settings-path entries without changing project files. During cleanup, peer
+records under the same data root prevent one workspace from removing a mapping
+still owned by another workspace.
+
+Cursor settings defaults are macOS
+`~/Library/Application Support/Cursor/User/settings.json`, Linux
+`${XDG_CONFIG_HOME:-~/.config}/Cursor/User/settings.json`, and Windows
+`%APPDATA%\Cursor\User\settings.json`. `BOXDOWN_CURSOR_SETTINGS` overrides the
+complete path for tests or local development; it must not be empty.
+
+Cursor integration mutations use the data-root lock
+`<dataRoot>/cursor-integration.lock`, and ownership discovery is limited to the
+same resolved data root. Retain the same `BOXDOWN_DATA_HOME` or `XDG_DATA_HOME`
+choice across install, targeted uninstall, unqualified uninstall, and purge.
+Changing it deliberately creates a separate state universe, so cleanup cannot
+prove ownership of records under the earlier root. Targeted Cursor uninstall
+processes the selected alias; unqualified uninstall and purge process every
+recorded mapping before deleting the workspace data directory.
+
 ## Workspace Toolchain State
 
 When a workspace has a confirmed toolchain selection, Boxdown keeps its plan
@@ -190,6 +221,12 @@ When requested, Boxdown writes Claude's SSH remote config at:
 `BOXDOWN_CLAUDE_SSH_CONFIGS` overrides this path for tests and local
 development. The Claude entry refers to the Boxdown-managed SSH alias and adds
 that alias to Claude's trusted host list.
+
+When requested, Boxdown configures Cursor only through the settings path above.
+It does not launch Cursor, install an extension, edit SQLite or
+`workspaceStorage`, write remote history, or synthesize a Dev Containers
+authority. The Cursor-specific settings and ownership behavior is documented in
+[SSH config and proxy workflow](./ssh-config-and-proxy.md#cursor-target).
 
 ## Generated Changes
 

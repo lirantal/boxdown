@@ -27,14 +27,17 @@ Unit tests should avoid starting Docker. Prefer pure tests for:
   cancellation before state writes, and non-interactive fallback.
 - Codex app/global-state target installation, legacy path migration,
   and idempotent project injection.
+- Cursor settings-path resolution on macOS, Linux/XDG, and Windows; JSONC
+  platform mapping edits; SSH-config compatibility; URI command formatting;
+  ownership records; shared-owner, multi-alias, lock, and cleanup behavior.
 - Lifecycle status and doctor output formatting.
 - Workspace metadata and list output formatting.
 - Safety invariants, such as not packaging `.ssh/` key material.
 
 Use temporary directories for workspace and state tests. Do not write to the
-user's real SSH config or Codex app config in unit tests. Use
-`BOXDOWN_CODEX_APP_CONFIG` or direct helper path overrides for Codex config
-fixtures.
+user's real SSH config, Codex app config, or Cursor settings in unit tests. Use
+`BOXDOWN_CODEX_APP_CONFIG`, `BOXDOWN_CURSOR_SETTINGS`, or direct helper path
+overrides for fixtures.
 
 ## Build and CLI Smoke Tests
 
@@ -60,6 +63,8 @@ Manual Docker acceptance is heavier and should be done intentionally:
 boxdown setup --workspace /path/to/repo
 boxdown setup --workspace /path/to/repo --target codex
 boxdown setup --workspace /path/to/repo --target claude
+boxdown setup --workspace /path/to/repo --target cursor
+boxdown setup --workspace /path/to/repo --target cursor --target codex
 boxdown setup --workspace /path/to/repo --target codex --agent-profile auth
 CI=1 boxdown setup --workspace /path/to/repo --target codex
 boxdown start --workspace /path/to/repo
@@ -71,6 +76,8 @@ boxdown doctor --workspace /path/to/repo
 boxdown ssh install --workspace /path/to/repo
 boxdown ssh install --workspace /path/to/repo --target codex
 boxdown ssh install --workspace /path/to/repo --target claude
+boxdown ssh install --workspace /path/to/repo --target cursor
+boxdown ssh uninstall --workspace /path/to/repo --target cursor
 CI=1 boxdown ssh install --workspace /path/to/repo
 ssh <repo-name>-devcontainer 'whoami && pwd'
 boxdown down --workspace /path/to/repo-a --workspace /path/to/repo-b
@@ -78,13 +85,18 @@ boxdown purge --workspace /path/to/disposable-repo
 ```
 
 The plain `ssh install` command should show the optional target selector when
-run in an interactive terminal. The explicit `--target codex` and
-`--target claude` commands verify scriptable target installation, and the `CI=1`
-command verifies the non-interactive skip path without blocking.
+run in an interactive terminal. The explicit `--target codex`, `--target
+claude`, and `--target cursor` commands verify scriptable target installation,
+and the `CI=1` command verifies the non-interactive skip path without blocking.
 
 The first `setup --target codex` command should show the profile selector. The
 `setup --target codex --agent-profile auth` command is fully explicit, and the
 `CI=1 setup --target codex` command verifies the non-interactive fallback.
+`setup --target cursor` should not show an agent-profile selector, while the
+mixed Cursor/Codex command should still show it. After a Cursor install, use the
+printed `cursor --folder-uri` command, then refresh Remote Explorer or restart
+Cursor if needed. Confirm the warning-only `anysphere.remote-ssh` prerequisite
+check never launches Cursor or installs an extension.
 
 The plain `tunnel` command should prompt for ports in an interactive terminal.
 Use `boxdown tunnel --workspace /path/to/repo --port 3030` when testing the

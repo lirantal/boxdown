@@ -5,11 +5,14 @@
 ```sh
 boxdown setup --target codex
 boxdown setup --target claude
+boxdown setup --target cursor
 boxdown ssh install
 boxdown ssh install --target codex
 boxdown ssh install --target claude
+boxdown ssh install --target cursor
 boxdown ssh uninstall --target claude
-boxdown ssh uninstall --target codex --target claude
+boxdown ssh uninstall --target codex --target claude --target cursor
+boxdown ssh uninstall --target cursor
 boxdown ssh uninstall
 boxdown ssh-proxy
 boxdown tunnel --port 3030
@@ -52,7 +55,7 @@ blocking and prints the explicit `--target` form for scripts.
 | Invocation | SSH alias block | Removed integrations |
 | --- | --- | --- |
 | `boxdown ssh uninstall --target claude` | Preserved | Claude only |
-| `boxdown ssh uninstall --target codex --target claude` | Preserved | Codex and Claude |
+| `boxdown ssh uninstall --target codex --target claude --target cursor` | Preserved | Codex, Claude, and Cursor |
 | `boxdown ssh uninstall` | Removed | All registered targets |
 
 `--target` is repeatable. Supplying every known target is still targeted mode,
@@ -62,10 +65,87 @@ integration; complete cleanup removes the marker block for the selected alias
 and every registered integration. Both modes leave unrelated OpenSSH config
 entries, unrelated app projects, generated state, and SSH key files in place.
 
+Unqualified uninstall and `boxdown purge` use complete-workspace cleanup for
+every registered target. Cursor therefore cleans every mapping in that
+workspace's ownership record, including an earlier alias or settings-path
+override, before the workspace data directory is removed.
+
 `boxdown status` reports whether that Boxdown-managed block is `installed`,
 `missing`, or `outdated`. It only recognizes blocks wrapped in Boxdown's marker
 comments; an unrelated OpenSSH `Host` entry with the same alias is not treated
 as an installed Boxdown alias.
+
+## Cursor Target
+
+Selecting Cursor or running `boxdown ssh install --target cursor` keeps the
+normal SSH installation flow and configures only the public Cursor Remote SSH
+setting `remote.SSH.remotePlatform.<repo-name>-devcontainer` to `"linux"`.
+Targets are repeatable, so Cursor can be installed with Codex and Claude in one
+command. Re-running an install is safe and does not duplicate a mapping.
+
+Boxdown resolves Cursor's user settings file from these platform defaults:
+
+| Platform | Settings path |
+| --- | --- |
+| macOS | `~/Library/Application Support/Cursor/User/settings.json` |
+| Linux | `${XDG_CONFIG_HOME:-~/.config}/Cursor/User/settings.json` |
+| Windows | `%APPDATA%\Cursor\User\settings.json` |
+
+`BOXDOWN_CURSOR_SETTINGS` overrides the complete settings-file path. An empty
+override is an error. The Cursor target edits JSON with comments and trailing
+commas safely and leaves unrelated settings intact.
+
+Before changing settings, Boxdown checks `remote.SSH.configFile`. If it is
+absent or empty, Cursor and Boxdown must both use the platform default SSH
+config. A non-empty value must be an absolute path and must match Boxdown's
+resolved config path (case-insensitively on Windows). A mismatch stops before
+settings or ownership change. Either point `remote.SSH.configFile` at the
+Boxdown SSH config, or set `BOXDOWN_SSH_CONFIG` to Cursor's existing absolute
+config path; Boxdown never rewrites this user-wide preference. It does not
+expand `~` or environment variables in an explicit `remote.SSH.configFile`.
+
+After configuration, Boxdown prints the raw URI and an open command. For an
+alias `<repo-name>-devcontainer`, the URI is:
+
+```text
+vscode-remote://ssh-remote+<repo-name>-devcontainer/workspaces/<repo-name>
+```
+
+On macOS and Linux, use the POSIX command printed by Boxdown:
+
+```sh
+cursor --folder-uri 'vscode-remote://ssh-remote+<repo-name>-devcontainer/workspaces/<repo-name>'
+```
+
+On Windows, Boxdown labels the following as a PowerShell command; it does not
+claim `cmd.exe` or batch-file compatibility:
+
+```powershell
+cursor --folder-uri 'vscode-remote://ssh-remote+<repo-name>-devcontainer/workspaces/<repo-name>'
+```
+
+The Cursor Remote SSH prerequisite is `anysphere.remote-ssh`. Boxdown checks it
+best-effort after configuration; a missing Cursor CLI, failed query, timeout,
+or absent extension produces a warning only and does not undo valid settings.
+Install it yourself when needed:
+
+```sh
+cursor --install-extension anysphere.remote-ssh
+```
+
+Boxdown never executes that install command. It does not launch Cursor, install
+or enable extensions, edit SQLite or `workspaceStorage`, write remote history,
+or synthesize a Dev Containers authority. It configures the normal SSH alias
+and leaves Cursor-owned databases, cache, and workspace history untouched.
+
+Boxdown records its Cursor mapping ownership per workspace under its data root.
+Multiple aliases and settings paths can be recorded for one workspace, and a
+shared owned alias remains until its last proven owner is removed. Install and
+cleanup decisions serialize through a data-root lock. Keep the same
+`BOXDOWN_DATA_HOME` or `XDG_DATA_HOME` choice for install and cleanup: changing
+the data root creates an independent ownership universe that cannot prove or
+clean the earlier records. If a new alias is not visible after settings change,
+refresh Cursor Remote Explorer or restart Cursor.
 
 ## Codex App Target
 
