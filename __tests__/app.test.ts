@@ -33,7 +33,7 @@ import { promptConfirm, promptMultiSelect, promptSelect, promptText, type Prompt
 import { buildHostToolPath, runBuffered, runInteractive } from '../src/process.ts'
 import { createProgress, formatCommandFailure, resolveProgressMode, runProgressCommand } from '../src/progress.ts'
 import { DEFAULT_TTY_MAX_COLUMNS, interactiveCommandScript, interactiveShellEnvArgs, interactiveShellScript } from '../src/shell.ts'
-import { buildSshConfigBlock, defaultSshAlias, installSshConfig, removeSshConfigBlock, replaceSshConfigBlock, uninstallSshConfig } from '../src/ssh-config.ts'
+import { buildSshConfigBlock, defaultSshAlias, defaultSshConfigPath, installSshConfig, removeSshConfigBlock, replaceSshConfigBlock, uninstallSshConfig } from '../src/ssh-config.ts'
 import { createStatusInfo, formatStatusText, inspectSshConfigStatus, parseDockerPsJsonLines, statusIsHealthy } from '../src/status.ts'
 import { ensureHostSshKey } from '../src/ssh-key.ts'
 import { resolveSetupToolchains } from '../src/setup-toolchains.ts'
@@ -10637,6 +10637,26 @@ describe('GitHub Git auth setup', () => {
 })
 
 describe('SSH config generation', () => {
+  test('resolves the shared SSH config path by platform', () => {
+    assert.strictEqual(defaultSshConfigPath({
+      BOXDOWN_SSH_CONFIG: '/tmp/boxdown-config',
+      DEVCONTAINER_SSH_CONFIG: '/tmp/devcontainer-config'
+    }, 'linux'), '/tmp/boxdown-config')
+    assert.strictEqual(defaultSshConfigPath({
+      DEVCONTAINER_SSH_CONFIG: '/tmp/devcontainer-config'
+    }, 'darwin'), '/tmp/devcontainer-config')
+    assert.strictEqual(defaultSshConfigPath({ HOME: '/Users/tester' }, 'darwin'), '/Users/tester/.ssh/config')
+    assert.strictEqual(defaultSshConfigPath({ HOME: '/home/tester' }, 'linux'), '/home/tester/.ssh/config')
+    assert.strictEqual(
+      defaultSshConfigPath({ USERPROFILE: 'C:\\Users\\tester' }, 'win32'),
+      'C:\\Users\\tester\\.ssh\\config'
+    )
+    assert.throws(
+      () => defaultSshConfigPath({}, 'win32'),
+      /Cannot resolve the Windows home directory for the SSH config/
+    )
+  })
+
   test('builds default alias and packaged proxy command', () => {
     const workspace = tempDir('ssh-workspace')
     const context = createWorkspaceContext({

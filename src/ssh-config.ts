@@ -1,5 +1,6 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, writeFileSync } from 'node:fs'
-import { dirname, join } from 'node:path'
+import { homedir } from 'node:os'
+import { dirname, join, win32 } from 'node:path'
 
 import type { WorkspaceContext } from './paths.ts'
 import { shellQuote, sshConfigQuote } from './shell.ts'
@@ -15,8 +16,22 @@ export function validateSshAlias (alias: string): void {
   }
 }
 
-export function defaultSshConfigPath (env: NodeJS.ProcessEnv = process.env): string {
-  return env.BOXDOWN_SSH_CONFIG ?? env.DEVCONTAINER_SSH_CONFIG ?? join(env.HOME ?? '', '.ssh', 'config')
+export function defaultSshConfigPath (
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform
+): string {
+  const configuredPath = env.BOXDOWN_SSH_CONFIG ?? env.DEVCONTAINER_SSH_CONFIG
+  if (configuredPath !== undefined) return configuredPath
+
+  if (platform === 'win32') {
+    const home = env.USERPROFILE ?? env.HOME
+    if (home === undefined || home.length === 0) {
+      throw new Error('Cannot resolve the Windows home directory for the SSH config')
+    }
+    return win32.join(home, '.ssh', 'config')
+  }
+
+  return join(env.HOME ?? homedir(), '.ssh', 'config')
 }
 
 export function buildProxyCommand (context: WorkspaceContext, alias: string): string {
