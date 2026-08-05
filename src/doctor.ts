@@ -324,13 +324,68 @@ function dockerMountError (output: string): boolean {
   return /invalid mount config|bind source path does not exist|mount denied|file sharing|mounts denied|permission denied|operation not permitted/i.test(output)
 }
 
+function dockerBindSourceMissing (output: string): boolean {
+  return /bind source path does not exist/i.test(output)
+}
+
 function compactOutput (output: string): string {
   return output.trim().replace(/\s+/g, ' ').slice(0, 300)
+}
+
+type DockerMountProbeResult =
+  | { status: 'ok' }
+  | { status: 'create-failed', output: string }
+  | { status: 'missing-container-id' }
+  | { status: 'cleanup-failed', output: string }
+
+async function probeDockerBindMount (
+  sourcePath: string,
+  image: string,
+  runCommand: DoctorCommandRunner
+): Promise<DockerMountProbeResult> {
+  const created = await runCommand('docker', [
+    'create',
+    '--pull=never',
+    '--entrypoint',
+    '/bin/true',
+    '--mount',
+    `type=bind,source=${sourcePath},target=/boxdown-preflight,readonly`,
+    image
+  ])
+
+  if (created.code !== 0) {
+    return { status: 'create-failed', output: `${created.stderr}\n${created.stdout}` }
+  }
+
+  const containerId = created.stdout.trim().split(/\r?\n/)[0]
+  if (containerId === undefined || containerId.length === 0) {
+    return { status: 'missing-container-id' }
+  }
+
+  const removed = await runCommand('docker', ['rm', '-f', containerId])
+  if (removed.code !== 0) {
+    return { status: 'cleanup-failed', output: removed.stderr }
+  }
+
+  return { status: 'ok' }
+}
+
+function mountProbeDetail (probe: DockerMountProbeResult): string {
+  switch (probe.status) {
+    case 'create-failed':
+    case 'cleanup-failed':
+      return compactOutput(probe.output) || 'Docker mount probe failed'
+    case 'missing-container-id':
+      return 'Docker did not return a container ID'
+    case 'ok':
+      return ''
+  }
 }
 
 interface DockerMountSource {
   label: string
   path: string
+  refreshParent?: string
 }
 
 async function checkDockerBindMounts (
@@ -364,25 +419,41 @@ async function checkDockerBindMounts (
   const sources: DockerMountSource[] = [
     { label: 'workspace', path: context.workspaceFolder },
     { label: 'Boxdown devcontainer assets', path: context.assetsDevcontainerDir },
-    { label: 'Boxdown runtime state', path: runtimeProbeDir },
-    { label: 'Boxdown runtime secret state', path: context.workspaceSecretEnvDir }
+    {
+      label: 'Boxdown runtime state',
+      path: runtimeProbeDir,
+      refreshParent: dirname(context.workspaceDataDir)
+    },
+    {
+      label: 'Boxdown runtime secret state',
+      path: context.workspaceSecretEnvDir,
+      refreshParent: dirname(context.workspaceRuntimeDir)
+    }
   ]
 
   try {
     for (const source of sources) {
-      const createResult = await runCommand('docker', [
-        'create',
-        '--pull=never',
-        '--entrypoint',
-        '/bin/true',
-        '--mount',
-        `type=bind,source=${source.path},target=/boxdown-preflight,readonly`,
-        image
-      ])
-      const output = `${createResult.stderr}\n${createResult.stdout}`
+      let probe = await probeDockerBindMount(source.path, image, runCommand)
 
-      if (createResult.code !== 0) {
-        if (dockerMountError(output)) {
+      if (
+        probe.status === 'create-failed' &&
+        source.refreshParent !== undefined &&
+        existsSync(source.path) &&
+        dockerBindSourceMissing(probe.output)
+      ) {
+        const refreshed = await probeDockerBindMount(source.refreshParent, image, runCommand)
+        if (refreshed.status !== 'ok') {
+          return {
+            name: 'docker-bind-mounts',
+            level: 'fail',
+            message: `Docker could not refresh bind-mount visibility for ${source.label} path (${source.path}) through ${source.refreshParent}: ${mountProbeDetail(refreshed)}`
+          }
+        }
+        probe = await probeDockerBindMount(source.path, image, runCommand)
+      }
+
+      if (probe.status === 'create-failed') {
+        if (dockerMountError(probe.output)) {
           return {
             name: 'docker-bind-mounts',
             level: 'fail',
@@ -393,25 +464,23 @@ async function checkDockerBindMounts (
         return {
           name: 'docker-bind-mounts',
           level: 'warn',
-          message: `Docker bind-mount readiness could not be checked for ${source.label}: ${compactOutput(output) || 'Docker create failed'}`
+          message: `Docker bind-mount readiness could not be checked for ${source.label}: ${mountProbeDetail(probe)}`
         }
       }
 
-      const containerId = createResult.stdout.trim().split(/\r?\n/)[0]
-      if (containerId === undefined || containerId.length === 0) {
+      if (probe.status === 'missing-container-id') {
         return {
           name: 'docker-bind-mounts',
           level: 'warn',
-          message: `Docker bind-mount readiness could not be checked for ${source.label}: Docker did not return a container ID`
+          message: `Docker bind-mount readiness could not be checked for ${source.label}: ${mountProbeDetail(probe)}`
         }
       }
 
-      const removeResult = await runCommand('docker', ['rm', '-f', containerId])
-      if (removeResult.code !== 0) {
+      if (probe.status === 'cleanup-failed') {
         return {
           name: 'docker-bind-mounts',
           level: 'warn',
-          message: `Docker bind-mount readiness was checked, but the disposable probe container could not be removed: ${compactOutput(removeResult.stderr) || 'docker rm failed'}`
+          message: `Docker bind-mount readiness was checked, but the disposable probe container could not be removed: ${mountProbeDetail(probe)}`
         }
       }
     }

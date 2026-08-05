@@ -19,7 +19,7 @@ import { buildGeneratedDevcontainerConfig, publishContainerPortFromConfig, readG
 import { BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_AGENTS_DIR, BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CLAUDE_CREDENTIALS_PATH, BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CODEX_AUTH_PATH, BOXDOWN_CONTAINER_AGENTS_DIR, BOXDOWN_CONTAINER_CLAUDE_CONFIG_PATH, BOXDOWN_CONTAINER_CLAUDE_CREDENTIALS_PATH, BOXDOWN_CONTAINER_CLAUDE_DIR, BOXDOWN_CONTAINER_CODEX_AUTH_PATH, BOXDOWN_CONTAINER_CODEX_DIR, BOXDOWN_CONTAINER_DEVCONTAINER_DIR, BOXDOWN_CONTAINER_GITCONFIG_PATH, BOXDOWN_CONTAINER_HOST_GITCONFIG_DIR, BOXDOWN_CONTAINER_SECRET_ENV_BOOTSTRAP, BOXDOWN_CONTAINER_SECRET_ENV_DIR, BOXDOWN_CONTAINER_TOOLCHAIN_PLAN_PATH, BOXDOWN_CONTAINER_TOOLCHAIN_RESULTS_DIR, BOXDOWN_CONTAINER_TOOLCHAINS_DIR, DEVCONTAINER_CLI_VERSION } from '../src/constants.ts'
 import { codingAgentDevcontainerExecArgs, findDockerImageConsumers, inspectContainerAgentProfile, isPublishedBoxdownImage, parseDockerInspectImage, removeDockerImageIfUnused, sshdProxyDockerArgs, sshTunnelArgs, startDevcontainer, type DockerCommandRunner } from '../src/devcontainer.ts'
 import { resolveDevcontainerCli } from '../src/devcontainer-cli.ts'
-import { doctorHasFailures, formatDoctorText, runDoctorChecks } from '../src/doctor.ts'
+import { doctorHasFailures, formatDoctorText, runDoctorChecks, type DoctorCommandResult, type DoctorCommandRunner } from '../src/doctor.ts'
 import { parseSshPublicKey, reportGitSigningPlan, resolveConfiguredSshSigningKey, resolveGitSigningPlan, selectGitSigningKey, type GitSigningPlan, type GitSigningReason } from '../src/git-signing.ts'
 import { canonicalGithubRemoteUrl, configureWorkspaceGithubGitAuth } from '../src/github-git-auth.ts'
 import { parseJsonc } from '../src/jsonc.ts'
@@ -7920,6 +7920,192 @@ describe('doctor output', () => {
     assert.ok(runtimeProbeSource !== undefined)
     assert.strictEqual(existsSync(runtimeProbeSource ?? ''), false)
     assert.ok(probeSources.some((source) => source.includes(`source=${context.workspaceSecretEnvDir},`)))
+  })
+
+  test('refreshes a stable parent and retries a stale managed Docker mount once', async () => {
+    const workspace = tempDir('doctor-stale-mount-workspace')
+    const context = createWorkspaceContext({
+      workspace,
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('doctor-stale-mount-cache'),
+        BOXDOWN_DATA_HOME: tempDir('doctor-stale-mount-data'),
+        BOXDOWN_RUNTIME_HOME: tempDir('doctor-stale-mount-runtime')
+      },
+      assetsDevcontainerDir
+    })
+    const calls: string[] = []
+    const createSources: string[] = []
+    const createdProbeIds: string[] = []
+    let managedChildAttempts = 0
+
+    const checks = await runDoctorChecks(context, {
+      includeOptional: false,
+      containerRuntimeReady: true,
+      runCommand: async (command, args) => {
+        calls.push(`${command} ${args.join(' ')}`)
+        if (command === 'docker' && args[0] === 'image') {
+          return { code: 0, stdout: 'example:latest\n', stderr: '' }
+        }
+        if (command === 'docker' && args[0] === 'create') {
+          const mount = args.find(arg => arg.startsWith('type=bind,')) ?? ''
+          const source = mount.match(/source=([^,]+)/)?.[1] ?? ''
+          createSources.push(source)
+          if (source.startsWith(`${context.workspaceDataDir}/doctor-mount-probe-`)) {
+            managedChildAttempts += 1
+            if (managedChildAttempts === 1) {
+              return { code: 1, stdout: '', stderr: 'invalid mount config for type "bind": bind source path does not exist' }
+            }
+          }
+          const containerId = `probe-${createSources.length}`
+          createdProbeIds.push(containerId)
+          return { code: 0, stdout: `${containerId}\n`, stderr: '' }
+        }
+        return { code: 0, stdout: '', stderr: '' }
+      }
+    })
+
+    assert.strictEqual(checks.find(check => check.name === 'docker-bind-mounts')?.level, 'ok')
+    assert.strictEqual(managedChildAttempts, 2)
+    assert.ok(createSources.includes(dirname(context.workspaceDataDir)))
+    assert.ok(createdProbeIds.every(containerId => calls.includes(`docker rm -f ${containerId}`)))
+  })
+
+  function mountRefreshTestContext (name: string): ReturnType<typeof createWorkspaceContext> {
+    return createWorkspaceContext({
+      workspace: tempDir(`${name}-workspace`),
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir(`${name}-cache`),
+        BOXDOWN_DATA_HOME: tempDir(`${name}-data`),
+        BOXDOWN_RUNTIME_HOME: tempDir(`${name}-runtime`)
+      },
+      assetsDevcontainerDir
+    })
+  }
+
+  function doctorMountTestRunner (
+    onCreate: (
+      source: string,
+      attempt: number
+    ) => DoctorCommandResult | undefined
+  ): { createSources: string[], runCommand: DoctorCommandRunner } {
+    const createSources: string[] = []
+    const attempts = new Map<string, number>()
+
+    return {
+      createSources,
+      runCommand: async (command, args) => {
+        if (command === 'docker' && args[0] === 'image') {
+          return { code: 0, stdout: 'example:latest\n', stderr: '' }
+        }
+        if (command === 'docker' && args[0] === 'create') {
+          const mount = args.find(arg => arg.startsWith('type=bind,')) ?? ''
+          const source = mount.match(/source=([^,]+)/)?.[1] ?? ''
+          const attempt = (attempts.get(source) ?? 0) + 1
+          attempts.set(source, attempt)
+          createSources.push(source)
+          return onCreate(source, attempt) ?? {
+            code: 0,
+            stdout: `probe-${createSources.length}\n`,
+            stderr: ''
+          }
+        }
+        return { code: 0, stdout: '', stderr: '' }
+      }
+    }
+  }
+
+  test('does not refresh a stable parent for permission or file-sharing failures', async () => {
+    for (const [name, error] of [
+      ['permission', 'permission denied'],
+      ['file-sharing', 'mounts denied: file sharing is disabled']
+    ] as const) {
+      const context = mountRefreshTestContext(`doctor-${name}-mount`)
+      const fake = doctorMountTestRunner(source =>
+        source.startsWith(`${context.workspaceDataDir}/doctor-mount-probe-`)
+          ? { code: 1, stdout: '', stderr: error }
+          : undefined
+      )
+      const checks = await runDoctorChecks(context, {
+        includeOptional: false,
+        containerRuntimeReady: true,
+        runCommand: fake.runCommand
+      })
+
+      assert.strictEqual(checks.find(check => check.name === 'docker-bind-mounts')?.level, 'fail')
+      assert.strictEqual(fake.createSources.includes(dirname(context.workspaceDataDir)), false)
+    }
+  })
+
+  test('refreshes the runtime parent before retrying stale secret state', async () => {
+    const context = mountRefreshTestContext('doctor-runtime-secret-refresh')
+    let secretAttempts = 0
+    const fake = doctorMountTestRunner((source) => {
+      if (source === context.workspaceSecretEnvDir) {
+        secretAttempts += 1
+        if (secretAttempts === 1) {
+          return { code: 1, stdout: '', stderr: 'bind source path does not exist' }
+        }
+      }
+      return undefined
+    })
+    const checks = await runDoctorChecks(context, {
+      includeOptional: false,
+      containerRuntimeReady: true,
+      runCommand: fake.runCommand
+    })
+
+    assert.strictEqual(checks.find(check => check.name === 'docker-bind-mounts')?.level, 'ok')
+    assert.strictEqual(secretAttempts, 2)
+    assert.strictEqual(fake.createSources.includes(dirname(context.workspaceRuntimeDir)), true)
+  })
+
+  test('reports a blocking failure when stable-parent refresh fails', async () => {
+    const context = mountRefreshTestContext('doctor-parent-refresh-failure')
+    let exactChild = ''
+    const fake = doctorMountTestRunner(source => {
+      if (source.startsWith(`${context.workspaceDataDir}/doctor-mount-probe-`)) {
+        exactChild = source
+        return { code: 1, stdout: '', stderr: 'bind source path does not exist' }
+      }
+      if (source === dirname(context.workspaceDataDir)) {
+        return { code: 1, stdout: '', stderr: 'mount denied' }
+      }
+      return undefined
+    })
+    const checks = await runDoctorChecks(context, {
+      includeOptional: false,
+      containerRuntimeReady: true,
+      runCommand: fake.runCommand
+    })
+    const mountCheck = checks.find(check => check.name === 'docker-bind-mounts')
+
+    assert.strictEqual(mountCheck?.level, 'fail')
+    assert.ok(mountCheck?.message.includes(exactChild))
+    assert.ok(mountCheck?.message.includes(dirname(context.workspaceDataDir)))
+    assert.strictEqual(fake.createSources.filter(source => source === exactChild).length, 1)
+  })
+
+  test('reports the exact child when its post-refresh retry still fails', async () => {
+    const context = mountRefreshTestContext('doctor-child-retry-failure')
+    let exactChild = ''
+    const fake = doctorMountTestRunner(source => {
+      if (source.startsWith(`${context.workspaceDataDir}/doctor-mount-probe-`)) {
+        exactChild = source
+        return { code: 1, stdout: '', stderr: 'bind source path does not exist' }
+      }
+      return undefined
+    })
+    const checks = await runDoctorChecks(context, {
+      includeOptional: false,
+      containerRuntimeReady: true,
+      runCommand: fake.runCommand
+    })
+    const mountCheck = checks.find(check => check.name === 'docker-bind-mounts')
+
+    assert.strictEqual(mountCheck?.level, 'fail')
+    assert.ok(mountCheck?.message.includes(exactChild))
+    assert.strictEqual(fake.createSources.filter(source => source === exactChild).length, 2)
+    assert.strictEqual(fake.createSources.includes(dirname(context.workspaceDataDir)), true)
   })
 
   test('warns when Docker bind-mount readiness cannot be probed without a local image', async () => {
