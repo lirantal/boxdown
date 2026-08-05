@@ -377,6 +377,20 @@ test('treats an already absent unused Docker image as success', async () => {
   assert.deepStrictEqual(result, { status: 'absent' })
 })
 
+test('does not classify an unrelated not-found image removal failure as absent', async () => {
+  const calls: string[][] = []
+  await assert.rejects(
+    removeDockerImageIfUnused('sha256:content-store-error', {
+      runCommand: sequenceDockerRunner([
+        { code: 0, stdout: '', stderr: '' },
+        { code: 1, stdout: '', stderr: 'content store: blob not found' },
+        { code: 0, stdout: '', stderr: '' }
+      ], calls)
+    }),
+    /Could not remove Docker image sha256:content-store-error/
+  )
+})
+
 test('fails an unrelated Docker image-removal error with no consumers', async () => {
   const calls: string[][] = []
   await assert.rejects(
@@ -8091,10 +8105,14 @@ describe('doctor output', () => {
   test('reports the exact child when its post-refresh retry still fails', async () => {
     const context = mountRefreshTestContext('doctor-child-retry-failure')
     let exactChild = ''
+    let exactChildAttempts = 0
     const fake = doctorMountTestRunner(source => {
       if (source.startsWith(`${context.workspaceDataDir}/doctor-mount-probe-`)) {
         exactChild = source
-        return { code: 1, stdout: '', stderr: 'bind source path does not exist' }
+        exactChildAttempts += 1
+        return exactChildAttempts === 1
+          ? { code: 1, stdout: '', stderr: 'bind source path does not exist' }
+          : { code: 1, stdout: '', stderr: 'daemon unavailable' }
       }
       return undefined
     })
@@ -8107,6 +8125,7 @@ describe('doctor output', () => {
 
     assert.strictEqual(mountCheck?.level, 'fail')
     assert.ok(mountCheck?.message.includes(exactChild))
+    assert.ok(mountCheck?.message.includes('daemon unavailable'))
     assert.strictEqual(fake.createSources.filter(source => source === exactChild).length, 2)
     assert.strictEqual(fake.createSources.includes(dirname(context.workspaceDataDir)), true)
   })

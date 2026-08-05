@@ -434,6 +434,7 @@ async function checkDockerBindMounts (
   try {
     for (const source of sources) {
       let probe = await probeDockerBindMount(source.path, image, runCommand)
+      let retriedAfterRefresh = false
 
       if (
         probe.status === 'create-failed' &&
@@ -449,10 +450,19 @@ async function checkDockerBindMounts (
             message: `Docker could not refresh bind-mount visibility for ${source.label} path (${source.path}) through ${source.refreshParent}: ${mountProbeDetail(refreshed)}`
           }
         }
+        retriedAfterRefresh = true
         probe = await probeDockerBindMount(source.path, image, runCommand)
       }
 
       if (probe.status === 'create-failed') {
+        if (retriedAfterRefresh) {
+          return {
+            name: 'docker-bind-mounts',
+            level: 'fail',
+            message: `Docker could not bind-mount the ${source.label} path (${source.path}) after refreshing ${source.refreshParent}: ${mountProbeDetail(probe)}`
+          }
+        }
+
         if (dockerMountError(probe.output)) {
           return {
             name: 'docker-bind-mounts',

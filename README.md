@@ -230,7 +230,8 @@ state. `boxdown start --recreate` seeds a new `auth` copy from current host
 sources; it does not remove a live `full` host profile. `down`
 retains persistent cache/data state: metadata, SSH keys, generated config, and
 command log. `boxdown purge` removes the workspace's Boxdown-managed container,
-recorded image, generated state, command log, and managed SSH/app integrations;
+its exact inspected or recorded Docker image only when unused, generated state,
+command log, and managed SSH/app integrations;
 it never removes repository files.
 
 For lifecycle details, see [Container lifecycle](./docs/features/lifecycle.md).
@@ -412,7 +413,8 @@ Shared options:
 ```
 
 Use `boxdown purge` when you want to remove the workspace's Boxdown-managed
-environment residue: the devcontainer, its exact recorded Docker image, managed
+environment residue: the devcontainer, its exact inspected or recorded Docker
+image only when unused, managed
 SSH/Codex/Claude/Cursor entries, command log, and Boxdown cache/data for that
 workspace. It does not delete the local repository directory or files inside it.
 Interactive terminals ask for confirmation before purging.

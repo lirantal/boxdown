@@ -299,7 +299,22 @@ export async function removeContainerById (containerId: string, options: { volum
 }
 
 function dockerImageMissing (stderr: string): boolean {
-  return /No such image/i.test(stderr) || /not found/i.test(stderr)
+  if (/No such image/i.test(stderr)) return true
+
+  return stderr.split(/\r?\n/).some((line) => {
+    const trimmed = line.trim()
+    const daemonPrefix = 'error response from daemon:'
+    const message = trimmed.toLowerCase().startsWith(daemonPrefix)
+      ? trimmed.slice(daemonPrefix.length).trim()
+      : trimmed
+
+    if (!message.toLowerCase().startsWith('image ')) return false
+
+    const reference = message.slice('image '.length)
+    const separator = reference.lastIndexOf(':')
+    const imageReference = reference.slice(0, separator)
+    return separator > 0 && imageReference.trim() === imageReference && reference.slice(separator + 1).trim().toLowerCase() === 'not found'
+  })
 }
 
 const runDockerCommand: DockerCommandRunner = async (args, logger) => {
