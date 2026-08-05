@@ -751,8 +751,11 @@ test('setup toolchain selection leaves incompatible and unresolved detections un
   const result = await resultPromise
 
   assert.deepStrictEqual(result.plan?.selected.map(item => item.id), ['node'])
-  assert.match(outputText(), /Boxdown default 3\.14\.6 is incompatible with <3\.12/)
-  assert.match(outputText(), /version needs review before automatic selection/)
+  const rendered = outputText()
+    .replace(/\u001B\[[0-?]*[ -/]*[@-~]|[│\r\n]/gu, ' ')
+    .replace(/\s+/gu, ' ')
+  assert.match(rendered, /Boxdown default 3\.14\.6 is incompatible with <3\.12/)
+  assert.match(rendered, /version needs review before automatic selection/)
 })
 
 test('non-interactive setup toolchain detection does not write an implicit plan', async () => {
@@ -1862,6 +1865,27 @@ describe('interactive install target prompt', () => {
       assert.deepStrictEqual(await resultPromise, { status: 'selected', value: 'auth' })
     })
 
+    test('NO_COLOR removes SGR styling from a raw single-choice prompt', async () => {
+      const { input, output, outputText } = fakePromptStreams({ columns: 36 })
+      const resultPromise = promptSelect({
+        title: 'Agent profile?',
+        choices: [{
+          value: 'auth',
+          label: 'Authentication and ~/.agents',
+          description: 'Copy agent authentication and ~/.agents; Boxdown default.'
+        }],
+        defaultValue: 'auth',
+        input,
+        output,
+        env: { CI: 'false', NO_COLOR: '1' }
+      })
+
+      assert.doesNotMatch(outputText(), /\u001B\[[0-9;]*m/u)
+      assert.match(outputText(), /\u001B\[2K/u)
+      input.write('\r')
+      assert.deepStrictEqual(await resultPromise, { status: 'selected', value: 'auth' })
+    })
+
     test('indents wrapped raw single-choice descriptions below their option', async () => {
       const { input, output, outputText } = fakePromptStreams({ columns: 36 })
       const resultPromise = promptSelect({
@@ -2102,6 +2126,68 @@ describe('interactive install target prompt', () => {
     assert.match(outputText(), /\u001B\[\?25l/u)
     assert.match(outputText(), /\u001B\[2K/u)
     assert.match(outputText(), /\u001B\[\?25h/u)
+  })
+
+  test('wraps narrow multi-select titles, descriptions, and skip labels under the prompt rail', async () => {
+    const { input, output, outputText } = fakePromptStreams({ columns: 32 })
+    const resultPromise = promptMultiSelect({
+      title: 'Add this project to an AI coding app? (Select any)',
+      choices: [{
+        value: 'codex',
+        label: 'ChatGPT app',
+        description: 'Connect ChatGPT to this project.'
+      }],
+      skipLabel: 'Not now — Finish setup without adding the project to an app.',
+      input,
+      output,
+      env: { CI: 'false' }
+    })
+
+    const rendered = outputText().replace(/\u001B\[[0-?]*[ -/]*[@-~]|\r/gu, '')
+    assert.match(rendered, /◆ {2}Add this project to an AI\n│ {2}coding app\? \(Select any\)/)
+    assert.match(rendered, /□ ChatGPT app\n│ {4}Connect ChatGPT to this\n│ {4}project\./)
+    assert.match(rendered, /■ Not now — Finish setup\n│ {4}without adding the project/)
+    for (const line of rendered.split('\n').filter(Boolean)) {
+      assert.ok(Array.from(line).length <= 32, line)
+    }
+
+    input.write('\r')
+    assert.deepStrictEqual(await resultPromise, { status: 'skipped', values: [] })
+  })
+
+  test('hard-wraps a focused colored multi-select path without losing its styles', async () => {
+    const { input, output, outputText } = fakePromptStreams({ columns: 24 })
+    const path = '/tmp/a-very-long-workspace-path'
+    const resultPromise = promptMultiSelect({
+      title: 'Purge workspaces?',
+      choices: [{
+        value: 'running',
+        label: 'demo',
+        description: `(running) ${path}`,
+        focusedDescription: [
+          { text: '(running)', color: 'green' },
+          { text: ` ${path}`, color: 'dim' }
+        ]
+      }],
+      skipLabel: 'Cancel',
+      initialValues: ['running'],
+      input,
+      output,
+      env: { CI: 'false' }
+    })
+
+    assert.match(outputText(), /\u001B\[32m\(running\)\u001B\[0m/)
+    const rendered = outputText().replace(/\u001B\[[0-?]*[ -/]*[@-~]|\r/gu, '')
+    assert.ok(rendered.replace(/[\n│ ]/gu, '').includes(`(running)${path}`))
+    for (const line of rendered.split('\n').filter(Boolean)) {
+      assert.ok(Array.from(line).length <= 24, line)
+    }
+
+    input.write('\r')
+    assert.deepStrictEqual(await resultPromise, {
+      status: 'selected',
+      values: ['running']
+    })
   })
 
   test('redraws raw-mode long choices over wrapped terminal rows', async () => {

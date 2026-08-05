@@ -1,6 +1,7 @@
 import { createInterface } from 'node:readline'
 
-import { color, emptyMark, formatPromptDetailLine, formatPromptEnd, formatPromptLabel, formatPromptTitle, maybeColor, promptRail, selectedMark, type CliColor } from './cli-style.ts'
+import { color, emptyMark, formatPromptDetailLine, formatPromptEnd, formatPromptLabel, formatPromptTitle, formatPromptTitleLines, maybeColor, promptRail, selectedMark, type CliColor } from './cli-style.ts'
+import { terminalColumns, visibleLength, wrapText, wrapTextSegments, type StyledTextSegment } from './terminal-layout.ts'
 
 export interface MultiSelectDescriptionSegment {
   text: string
@@ -106,20 +107,8 @@ export function canPromptInteractively (input: PromptInput, output: PromptOutput
   return !isCiEnvironment(env) && input.isTTY === true && output.isTTY === true
 }
 
-const ansiPattern = /\u001B\[[0-?]*[ -/]*[@-~]/gu
-
-function visibleLength (value: string): number {
-  return value.replace(ansiPattern, '').length
-}
-
-function terminalColumns (output: PromptOutput): number {
-  return Number.isInteger(output.columns) && output.columns !== undefined && output.columns > 0
-    ? output.columns
-    : 80
-}
-
 function renderedRowCount (lines: readonly string[], output: PromptOutput): number {
-  const columns = terminalColumns(output)
+  const columns = terminalColumns(output.columns)
   return lines.reduce((rows, line) => rows + Math.max(1, Math.ceil(visibleLength(line) / columns)), 0)
 }
 
@@ -139,61 +128,113 @@ function renderPromptLines (
   return renderedRowCount(lines, output)
 }
 
-function formatChoiceLine <T extends string> (
-  choice: MultiSelectChoice<T>,
-  isFocused: boolean,
-  isSelected: boolean,
+function renderDescriptionSegments (
+  segments: readonly StyledTextSegment<CliColor>[],
   colorEnabled: boolean
 ): string {
-  const mark = isSelected ? selectedMark(colorEnabled) : emptyMark(isFocused, colorEnabled)
-  const description = isFocused && choice.focusedDescription !== undefined
-    ? `${maybeColor(' - ', 'dim', colorEnabled)}${choice.focusedDescription.map((segment) => maybeColor(segment.text, segment.color, colorEnabled)).join('')}`
-    : maybeColor(` - ${choice.description}`, 'dim', colorEnabled)
-  return `${promptRail(colorEnabled)}  ${mark} ${formatPromptLabel(choice.label, isFocused, colorEnabled)}${description}`
+  return segments
+    .map((segment) => maybeColor(segment.text, segment.style, colorEnabled))
+    .join('')
 }
 
-function wrapPromptDescription (description: string, maxWidth: number): string[] {
-  const words = description === '' ? [''] : description.trim().split(/\s+/u)
-  const lines: string[] = []
-  let line = ''
+function formatPromptChoiceLines (
+  label: string,
+  descriptionSegments: readonly StyledTextSegment<CliColor>[],
+  inlineDescription: string,
+  mark: string,
+  isFocused: boolean,
+  output: PromptOutput,
+  colorEnabled: boolean
+): string[] {
+  const columns = terminalColumns(output.columns)
+  const firstPrefix = `${promptRail(colorEnabled)}  ${mark} `
+  const continuationPrefix = `${promptRail(colorEnabled)}    `
+  const inline = `${firstPrefix}${formatPromptLabel(label, isFocused, colorEnabled)}${inlineDescription}`
+  if (visibleLength(inline) <= columns) return [inline]
 
-  for (const word of words) {
-    const next = line === '' ? word : `${line} ${word}`
-    if (line !== '' && visibleLength(next) > maxWidth) {
-      lines.push(line)
-      line = word
-    } else {
-      line = next
-    }
-  }
+  const labelLines = wrapText(
+    label,
+    columns - visibleLength(firstPrefix),
+    columns - visibleLength(continuationPrefix)
+  ).map((line, index) => (
+    `${index === 0 ? firstPrefix : continuationPrefix}${formatPromptLabel(line, isFocused, colorEnabled)}`
+  ))
+  const descriptionWidth = columns - visibleLength(continuationPrefix)
+  const descriptionLines = wrapTextSegments(
+    descriptionSegments,
+    descriptionWidth
+  ).map((line) => (
+    `${continuationPrefix}${renderDescriptionSegments(line, colorEnabled)}`
+  ))
 
-  lines.push(line)
-  return lines
+  return [...labelLines, ...descriptionLines]
 }
 
 function formatSelectChoiceLines <T extends string> (
   choice: SelectPromptChoice<T>,
   isFocused: boolean,
-  output: PromptOutput
+  output: PromptOutput,
+  colorEnabled: boolean
 ): string[] {
-  const mark = isFocused ? selectedMark() : emptyMark(false)
-  const prefix = `${promptRail()}  ${mark} ${formatPromptLabel(choice.label, isFocused)}`
-  const inline = `${prefix}${color(` - ${choice.description}`, 'dim')}`
-  if (visibleLength(inline) <= terminalColumns(output)) return [inline]
-
-  const indent = `${promptRail()}    `
-  const width = terminalColumns(output) - visibleLength(indent)
-  return [
-    prefix,
-    ...wrapPromptDescription(choice.description, width).map(
-      (line) => `${indent}${color(line, 'dim')}`
-    )
-  ]
+  return formatPromptChoiceLines(
+    choice.label,
+    [{ text: choice.description, style: 'dim' }],
+    maybeColor(` - ${choice.description}`, 'dim', colorEnabled),
+    isFocused ? selectedMark(colorEnabled) : emptyMark(false, colorEnabled),
+    isFocused,
+    output,
+    colorEnabled
+  )
 }
 
-function formatSkipLine (skipLabel: string, isFocused: boolean, selectedCount: number, colorEnabled: boolean): string {
+function formatMultiSelectChoiceLines <T extends string> (
+  choice: MultiSelectChoice<T>,
+  isFocused: boolean,
+  isSelected: boolean,
+  output: PromptOutput,
+  colorEnabled: boolean
+): string[] {
+  const descriptionSegments: readonly StyledTextSegment<CliColor>[] = isFocused && choice.focusedDescription !== undefined
+    ? choice.focusedDescription.map((segment) => ({
+        text: segment.text,
+        style: segment.color
+      }))
+    : [{ text: choice.description, style: 'dim' }]
+  const inlineDescription = isFocused && choice.focusedDescription !== undefined
+    ? `${maybeColor(' - ', 'dim', colorEnabled)}${renderDescriptionSegments(descriptionSegments, colorEnabled)}`
+    : maybeColor(` - ${choice.description}`, 'dim', colorEnabled)
+  const mark = isSelected ? selectedMark(colorEnabled) : emptyMark(isFocused, colorEnabled)
+
+  return formatPromptChoiceLines(
+    choice.label,
+    descriptionSegments,
+    inlineDescription,
+    mark,
+    isFocused,
+    output,
+    colorEnabled
+  )
+}
+
+function formatSkipLines (
+  skipLabel: string,
+  isFocused: boolean,
+  selectedCount: number,
+  output: PromptOutput,
+  colorEnabled: boolean
+): string[] {
   const mark = selectedCount === 0 ? selectedMark(colorEnabled) : emptyMark(isFocused, colorEnabled)
-  return `${promptRail(colorEnabled)}  ${mark} ${formatPromptLabel(skipLabel, isFocused, colorEnabled)}`
+  const columns = terminalColumns(output.columns)
+  const firstPrefix = `${promptRail(colorEnabled)}  ${mark} `
+  const continuationPrefix = `${promptRail(colorEnabled)}    `
+
+  return wrapText(
+    skipLabel,
+    columns - visibleLength(firstPrefix),
+    columns - visibleLength(continuationPrefix)
+  ).map((line, index) => (
+    `${index === 0 ? firstPrefix : continuationPrefix}${formatPromptLabel(line, isFocused, colorEnabled)}`
+  ))
 }
 
 function formatConfirmLine (
@@ -427,7 +468,7 @@ async function promptLineMultiSelect <T extends string> (
 }
 
 function promptRawSelect <T extends string> (
-  options: Required<Pick<SelectPromptOptions<T>, 'title' | 'choices' | 'defaultValue' | 'summaryLabel' | 'input' | 'output'>>
+  options: Required<Pick<SelectPromptOptions<T>, 'title' | 'choices' | 'defaultValue' | 'summaryLabel' | 'input' | 'output'>> & {colorEnabled: boolean}
 ): Promise<SelectPromptResult<T>> {
   return new Promise((resolve) => {
     let focusedIndex = options.choices.findIndex(
@@ -438,14 +479,19 @@ function promptRawSelect <T extends string> (
 
     function lines (): string[] {
       return [
-        formatPromptTitle(options.title),
-        promptRail(),
+        ...formatPromptTitleLines(
+          options.title,
+          terminalColumns(options.output.columns),
+          options.colorEnabled
+        ),
+        promptRail(options.colorEnabled),
         ...options.choices.flatMap((choice, index) => formatSelectChoiceLines(
           choice,
           focusedIndex === index,
-          options.output
+          options.output,
+          options.colorEnabled
         )),
-        formatPromptEnd()
+        formatPromptEnd(options.colorEnabled)
       ]
     }
 
@@ -540,15 +586,26 @@ function promptRawMultiSelect <T extends string> (
 
     function lines (): string[] {
       return [
-        formatPromptTitle(options.title, options.colorEnabled),
+        ...formatPromptTitleLines(
+          options.title,
+          terminalColumns(options.output.columns),
+          options.colorEnabled
+        ),
         promptRail(options.colorEnabled),
-        ...options.choices.map((choice, index) => formatChoiceLine(
+        ...options.choices.flatMap((choice, index) => formatMultiSelectChoiceLines(
           choice,
           focusedIndex === index,
           selected.has(choice.value),
+          options.output,
           options.colorEnabled
         )),
-        formatSkipLine(options.skipLabel, focusedIndex === options.choices.length, selected.size, options.colorEnabled),
+        ...formatSkipLines(
+          options.skipLabel,
+          focusedIndex === options.choices.length,
+          selected.size,
+          options.output,
+          options.colorEnabled
+        ),
         formatPromptEnd(options.colorEnabled)
       ]
     }
@@ -673,6 +730,7 @@ export async function promptSelect <T extends string> (
   const output = options.output ?? process.stdout
   const env = options.env ?? process.env
   const summaryLabel = options.summaryLabel ?? 'Selection'
+  const colorEnabled = env.NO_COLOR === undefined
 
   if (!options.choices.some((choice) => choice.value === options.defaultValue)) {
     throw new Error(
@@ -690,17 +748,32 @@ export async function promptSelect <T extends string> (
     defaultValue: options.defaultValue,
     summaryLabel,
     input,
-    output
+    output,
+    colorEnabled
   }
 
   if (typeof input.setRawMode !== 'function') {
-    return promptLineSelect(resolved)
+    return promptLineSelect({
+      title: resolved.title,
+      choices: resolved.choices,
+      defaultValue: resolved.defaultValue,
+      summaryLabel: resolved.summaryLabel,
+      input: resolved.input,
+      output: resolved.output
+    })
   }
 
   try {
     return await promptRawSelect(resolved)
   } catch {
-    return promptLineSelect(resolved)
+    return promptLineSelect({
+      title: resolved.title,
+      choices: resolved.choices,
+      defaultValue: resolved.defaultValue,
+      summaryLabel: resolved.summaryLabel,
+      input: resolved.input,
+      output: resolved.output
+    })
   }
 }
 
