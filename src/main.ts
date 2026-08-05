@@ -19,7 +19,7 @@ import { resolveSetupAgentProfile } from './setup-agent-profile.ts'
 import { formatDetectedToolchainsSummary, formatSelectedToolchainsSummary, resolveSetupToolchains } from './setup-toolchains.ts'
 import { defaultSshAlias, installSshConfig, uninstallSshConfig, validateSshAlias } from './ssh-config.ts'
 import { installRemoteAccess, remoteAccessProgressSteps } from './ssh-install.ts'
-import { formatRemoteAccessCancellation, remoteAccessExitCode, writeRemoteAccessInstallReport, type RemoteAccessInstallNotice } from './ssh-install-result.ts'
+import { formatRemoteAccessCancellation, remoteAccessExitCode, writeRemoteAccessInstallReport, type RemoteAccessInstallNotice, type RemoteAccessInstallReport } from './ssh-install-result.ts'
 import { dedupeSshInstallTargets, installSshInstallTarget, isSshConfigInstallTarget, SSH_INSTALL_TARGETS, supportedSshInstallTargetsText, uninstallSshInstallTarget, uninstallWorkspaceSshInstallTarget, type SshConfigInstallTarget } from './ssh-install-targets.ts'
 import { createStatusInfo, formatStatusText, statusIsHealthy } from './status.ts'
 import { parseToolchainSelector, readToolchainPlan, resolveToolchainPlan } from './toolchains/plan.ts'
@@ -66,7 +66,11 @@ export interface RunCliOptions {
   promptOutput?: PromptOutput
   env?: NodeJS.ProcessEnv
   runDoctorChecks?: typeof runDoctorChecks
-  setupWorkspace?: typeof setupWorkspace
+  setupWorkspace?: (
+    context: WorkspaceContext,
+    alias: string,
+    options: SetupWorkspaceOptions
+  ) => Promise<RemoteAccessInstallReport | void>
   waitForContainerRuntime?: typeof waitForContainerRuntime
   writeWorkspaceMetadata?: typeof writeWorkspaceMetadata
   prepareContainerLifecycle?: typeof prepareContainerLifecycle
@@ -1075,7 +1079,7 @@ export async function setupWorkspace (
   context: WorkspaceContext,
   alias: string,
   options: SetupWorkspaceOptions = {}
-): Promise<void> {
+): Promise<RemoteAccessInstallReport> {
   await (options.start ?? startDevcontainer)(context, {
     agentProfile: options.agentProfile ?? DEFAULT_AGENT_PROFILE,
     recreate: options.recreate,
@@ -1083,64 +1087,12 @@ export async function setupWorkspace (
     ...(options.progress === undefined ? {} : { progress: options.progress })
   })
 
-  const progress = options.progress
-  const structuredProgress = progress !== undefined && (progress.mode === 'interactive' || progress.mode === 'detailed')
-  const hasSshAliasStep = progress?.hasStep('ssh-alias') === true
-
-  if (structuredProgress && progress !== undefined) {
-    if (hasSshAliasStep) {
-      progress.startStep('ssh-alias')
-    } else {
-      progress.item('Installing SSH alias')
-      progress.detail(alias)
-    }
-
-    try {
-      await (options.installSsh ?? installSshConfig)(context, alias, { quiet: true })
-      if (hasSshAliasStep) {
-        progress.completeStep('ssh-alias')
-      }
-    } catch (error) {
-      if (hasSshAliasStep) {
-        progress.failStep('ssh-alias')
-      }
-      throw error
-    }
-  } else {
-    await (options.installSsh ?? installSshConfig)(context, alias)
-  }
-
-  const installTarget = options.installTarget ?? installSshInstallTarget
-  for (const target of options.targets ?? []) {
-    const stepId = `ssh-target:${target}`
-    const hasTargetStep = progress?.hasStep(stepId) === true
-
-    if (hasTargetStep) {
-      progress?.startStep(stepId)
-    } else if (structuredProgress && progress !== undefined) {
-      progress.item(`Installing ${target} SSH target`)
-    }
-
-    try {
-      await installTarget(context, alias, target, {
-        quiet: structuredProgress,
-        ...(target === 'cursor' && structuredProgress && progress !== undefined
-          ? {
-              writeEssential: (message: string) => progress.output(message),
-              warn: (message: string) => progress.warn(message)
-            }
-          : {})
-      })
-      if (hasTargetStep) {
-        progress?.completeStep(stepId)
-      }
-    } catch (error) {
-      if (hasTargetStep) {
-        progress?.failStep(stepId)
-      }
-      throw error
-    }
-  }
+  return installRemoteAccess(context, alias, options.targets ?? [], {
+    progress: options.progress,
+    installSsh: options.installSsh,
+    installTarget: options.installTarget,
+    retryCommand: 'boxdown setup'
+  })
 }
 
 function createCliProgress (
@@ -1180,19 +1132,10 @@ const SETUP_OWNERSHIP_DETAILS = [
   'Run `boxdown status` to inspect managed paths and the command log.'
 ] as const
 
-function sshTargetProgressLabel (target: SshConfigInstallTarget): string {
-  const label = SSH_INSTALL_TARGETS.find((candidate) => candidate.value === target)?.label ?? target
-  return `Installing ${label} SSH target`
-}
-
 function setupProgressSteps (targets: readonly SshConfigInstallTarget[]): ProgressStepDefinition[] {
   return [
     ...devcontainerStartProgressSteps(),
-    { id: 'ssh-alias', label: 'Installing SSH alias' },
-    ...targets.map((target) => ({
-      id: `ssh-target:${target}`,
-      label: sshTargetProgressLabel(target)
-    }))
+    ...remoteAccessProgressSteps(targets)
   ]
 }
 
@@ -1554,6 +1497,7 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
 
       writeWorkspaceMetadata(context, alias, undefined, setupAgentProfile.profile, setupToolchains.plan?.updatedAt)
       const progress = createCliProgress(parsed, 'stdout', { env: options.env })
+      let setupExitCode: 0 | 1 = 0
       await runLoggedLifecycle(context, 'setup', argv, async (logger) => {
         await withProgressSection(progress, 'Boxdown setup', [
           `Workspace: ${context.workspaceFolder}`,
@@ -1561,7 +1505,7 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
           ...(progress.mode === 'none' ? [] : SETUP_OWNERSHIP_DETAILS)
         ], async () => {
           progress.setSteps(setupProgressSteps(resolvedTargets.targets))
-          await (options.setupWorkspace ?? setupWorkspace)(context, alias, {
+          const report = await (options.setupWorkspace ?? setupWorkspace)(context, alias, {
             agentProfile: setupAgentProfile.profile,
             recreate: parsed.recreate,
             targets: resolvedTargets.targets,
@@ -1569,14 +1513,29 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
             logger
           })
           showDetailedCommandLogPath(progress, context)
+
+          if (report === undefined) return
+
+          const finalReport: RemoteAccessInstallReport = {
+            ...report,
+            notices: [
+              ...report.notices,
+              ...(resolvedTargets.skippedNonInteractive
+                ? [skippedSshInstallTargetNotice('setup')]
+                : [])
+            ]
+          }
+          writeRemoteAccessInstallReport(finalReport, {
+            outcomeLabel: 'Setup',
+            verbose: parsed.verbose,
+            progress,
+            env: options.env ?? process.env
+          })
+          setupExitCode = remoteAccessExitCode(finalReport)
         })
       })
 
-      if (resolvedTargets.skippedNonInteractive) {
-        process.stdout.write(`\n${skippedSshInstallTargetNotice('setup').message}\n`)
-      }
-
-      return 0
+      return setupExitCode
     }
 
     if (!existsSync(context.assetsDevcontainerDir)) {

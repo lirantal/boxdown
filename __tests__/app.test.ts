@@ -35,6 +35,7 @@ import { buildHostToolPath, runBuffered, runInteractive } from '../src/process.t
 import { createProgress, formatCommandFailure, resolveProgressMode, runProgressCommand } from '../src/progress.ts'
 import { DEFAULT_TTY_MAX_COLUMNS, interactiveCommandScript, interactiveShellEnvArgs, interactiveShellScript } from '../src/shell.ts'
 import { buildSshConfigBlock, defaultSshAlias, defaultSshConfigPath, installSshConfig, removeSshConfigBlock, replaceSshConfigBlock, uninstallSshConfig } from '../src/ssh-config.ts'
+import type { AppInstallResult, RemoteAccessInstallReport, SshAliasInstallResult } from '../src/ssh-install-result.ts'
 import { installSshInstallTarget, uninstallSshInstallTarget, uninstallWorkspaceSshInstallTarget } from '../src/ssh-install-targets.ts'
 import { createStatusInfo, formatStatusText, inspectSshConfigStatus, parseDockerPsJsonLines, statusIsHealthy } from '../src/status.ts'
 import { ensureHostSshKey } from '../src/ssh-key.ts'
@@ -50,6 +51,73 @@ const liveFullContainerProfile: ContainerAgentProfile = { profile: 'full', mode:
 
 function tempDir (name: string): string {
   return mkdtempSync(join(tmpdir(), `boxdown-${name}-`))
+}
+
+function setupSshResult (alias = 'demo-devcontainer'): SshAliasInstallResult {
+  return {
+    kind: 'ssh',
+    disposition: 'installed',
+    summary: 'SSH alias configured',
+    alias,
+    configPath: '/Users/demo/.ssh/config',
+    identityPath: '/Users/demo/.local/share/boxdown/id_ed25519',
+    validationCommand: `ssh ${alias} 'whoami && pwd'`,
+    details: [
+      { label: 'SSH alias', value: alias },
+      { label: 'SSH config', value: '/Users/demo/.ssh/config' },
+      { label: 'Identity file', value: '/Users/demo/.local/share/boxdown/id_ed25519' }
+    ]
+  }
+}
+
+function setupAppResult (target: 'codex' | 'cursor'): AppInstallResult {
+  if (target === 'codex') {
+    return {
+      kind: 'app',
+      target,
+      appLabel: 'ChatGPT',
+      disposition: 'installed',
+      summary: 'ChatGPT configured',
+      warnings: [],
+      action: { label: 'Restart ChatGPT, then open the remote project demo.' },
+      details: []
+    }
+  }
+
+  return {
+    kind: 'app',
+    target,
+    appLabel: 'Cursor',
+    disposition: 'installed',
+    summary: 'Cursor configured',
+    warnings: [],
+    action: {
+      label: 'Open this project in Cursor:',
+      command: "cursor --folder-uri 'vscode-remote://ssh-remote+demo-devcontainer/workspaces/demo'"
+    },
+    details: [
+      { label: 'Cursor settings', value: '/Users/demo/Library/Application Support/Cursor/User/settings.json' },
+      { label: 'Cursor remote folder URI', value: 'vscode-remote://ssh-remote+demo-devcontainer/workspaces/demo' }
+    ]
+  }
+}
+
+function setupCursorWarningReport (): RemoteAccessInstallReport {
+  const cursor = setupAppResult('cursor')
+  cursor.warnings.push({
+    message: 'Could not verify Cursor Remote SSH.',
+    remediation: {
+      label: 'Install the Cursor Remote SSH extension:',
+      command: 'cursor --install-extension anysphere.remote-ssh'
+    }
+  })
+  return {
+    ssh: setupSshResult(),
+    apps: [cursor],
+    failures: [],
+    skipped: [],
+    notices: []
+  }
 }
 
 function toolchainPlanFor (context: ReturnType<typeof createWorkspaceContext>, selector = 'node'): ToolchainPlan {
@@ -2490,6 +2558,136 @@ describe('CLI execution', () => {
     assert.ok(stdout.join('').includes(`Command log: ${context.workspaceLogPath}`))
   })
 
+  test('setup renders a Cursor warning and handoff once inside the active rail', async () => {
+    const workspace = tempDir('setup-cursor-result-workspace')
+    const env = {
+      BOXDOWN_DATA_HOME: tempDir('setup-cursor-result-data'),
+      BOXDOWN_CACHE_HOME: tempDir('setup-cursor-result-cache'),
+      CI: 'false',
+      NO_COLOR: '1'
+    }
+    const terminal = createTerminalOutputModel()
+    const originalWrite = process.stdout.write
+    const originalIsTTY = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY')
+
+    process.stdout.write = ((chunk: string | Uint8Array) => {
+      terminal.write(Buffer.isBuffer(chunk) ? chunk.toString('utf8') : chunk)
+      return true
+    }) as typeof process.stdout.write
+    Object.defineProperty(process.stdout, 'isTTY', { configurable: true, value: true })
+
+    let code: number
+    try {
+      code = await withProcessEnv(env, async () => runCli([
+        'setup', '--workspace', workspace, '--toolchain', 'none', '--target', 'cursor', '--agent-profile', 'auth'
+      ], {
+        env,
+        waitForContainerRuntime: async () => ({ state: 'ready', mode: 'buildx', warnings: [] }),
+        runDoctorChecks: async () => [],
+        setupWorkspace: async (_context, _alias, setupOptions) => {
+          for (const stepId of [
+            'ssh-identity',
+            'devcontainer-config',
+            'devcontainer-start',
+            'ssh-alias',
+            'ssh-target:cursor'
+          ]) {
+            setupOptions.progress?.startStep(stepId)
+            setupOptions.progress?.completeStep(stepId)
+          }
+          return setupCursorWarningReport()
+        }
+      }))
+    } finally {
+      process.stdout.write = originalWrite
+      if (originalIsTTY === undefined) {
+        delete (process.stdout as NodeJS.WriteStream & { isTTY?: boolean }).isTTY
+      } else {
+        Object.defineProperty(process.stdout, 'isTTY', originalIsTTY)
+      }
+    }
+
+    const output = terminal.text()
+    const outcome = 'Setup complete with warnings'
+    const remediation = 'cursor --install-extension anysphere.remote-ssh'
+    const action = "cursor --folder-uri 'vscode-remote://ssh-remote+demo-devcontainer/workspaces/demo'"
+    assert.strictEqual(code, 0)
+    for (const line of [outcome, remediation, action]) {
+      assert.strictEqual(output.split(line).length - 1, 1, line)
+    }
+    assert.ok(output.indexOf(outcome) < output.indexOf(remediation))
+    assert.ok(output.indexOf(remediation) < output.indexOf(action))
+    assert.ok(output.indexOf(action) < output.lastIndexOf('└'))
+    assert.doesNotMatch(output, /Cursor settings:/)
+    assert.doesNotMatch(output, /Cursor remote folder URI:/)
+    assert.doesNotMatch(output, /SSH connection not tested/)
+  })
+
+  test('setup continues app configuration after a partial failure and returns failure status', async () => {
+    const workspace = tempDir('setup-partial-result-workspace')
+    const env = {
+      BOXDOWN_DATA_HOME: tempDir('setup-partial-result-data'),
+      BOXDOWN_CACHE_HOME: tempDir('setup-partial-result-cache'),
+      CI: 'false',
+      NO_COLOR: '1'
+    }
+    const terminal = createTerminalOutputModel()
+    const originalWrite = process.stdout.write
+    const originalIsTTY = Object.getOwnPropertyDescriptor(process.stdout, 'isTTY')
+    const targetCalls: string[] = []
+
+    process.stdout.write = ((chunk: string | Uint8Array) => {
+      terminal.write(Buffer.isBuffer(chunk) ? chunk.toString('utf8') : chunk)
+      return true
+    }) as typeof process.stdout.write
+    Object.defineProperty(process.stdout, 'isTTY', { configurable: true, value: true })
+
+    let code: number
+    try {
+      code = await withProcessEnv(env, async () => runCli([
+        'setup', '--workspace', workspace, '--toolchain', 'none', '--target', 'codex', '--target', 'cursor', '--agent-profile', 'auth'
+      ], {
+        env,
+        waitForContainerRuntime: async () => ({ state: 'ready', mode: 'buildx', warnings: [] }),
+        runDoctorChecks: async () => [],
+        setupWorkspace: async (context, alias, setupOptions) => setupWorkspace(context, alias, {
+          ...setupOptions,
+          start: async () => {
+            for (const stepId of ['ssh-identity', 'devcontainer-config', 'devcontainer-start']) {
+              setupOptions.progress?.startStep(stepId)
+              setupOptions.progress?.completeStep(stepId)
+            }
+            return 'setup-container'
+          },
+          installSsh: async () => setupSshResult(alias),
+          installTarget: async (_context, _alias, target) => {
+            targetCalls.push(target)
+            if (target === 'codex') throw new Error('invalid ChatGPT config')
+            if (target === 'cursor') return setupAppResult(target)
+            throw new Error(`Unexpected target: ${target}`)
+          }
+        })
+      }))
+    } finally {
+      process.stdout.write = originalWrite
+      if (originalIsTTY === undefined) {
+        delete (process.stdout as NodeJS.WriteStream & { isTTY?: boolean }).isTTY
+      } else {
+        Object.defineProperty(process.stdout, 'isTTY', originalIsTTY)
+      }
+    }
+
+    const output = terminal.text()
+    assert.strictEqual(code, 1)
+    assert.deepStrictEqual(targetCalls, ['codex', 'cursor'])
+    assert.match(output, /! Configuring ChatGPT app/)
+    assert.match(output, /✔ Configuring Cursor/)
+    assert.match(output, /Setup incomplete/)
+    assert.match(output, /boxdown ssh install --target codex/)
+    assert.match(output, /Open this project in Cursor:/)
+    assert.doesNotMatch(output, /Restart ChatGPT/)
+  })
+
   test('setup preflight stops before prompts or state writes when runtime readiness fails', async () => {
     const workspace = tempDir('setup-preflight-failure-workspace')
     const dataHome = tempDir('setup-preflight-failure-data')
@@ -3393,7 +3591,7 @@ describe('CLI execution', () => {
     const alias = 'demo-devcontainer'
     const calls: string[] = []
 
-    await setupWorkspace(context, alias, {
+    const report = await setupWorkspace(context, alias, {
       start: async (receivedContext, options) => {
         assert.strictEqual(receivedContext, context)
         assert.deepStrictEqual(options, { agentProfile: 'auth', recreate: undefined })
@@ -3405,10 +3603,14 @@ describe('CLI execution', () => {
         assert.strictEqual(receivedContext, context)
         assert.strictEqual(receivedAlias, alias)
         calls.push('ssh')
+        return setupSshResult(alias)
       }
     })
 
     assert.deepStrictEqual(calls, ['start', 'ssh'])
+    assert.strictEqual(report.ssh?.alias, alias)
+    assert.deepStrictEqual(report.apps, [])
+    assert.deepStrictEqual(report.failures, [])
   })
 
   test('setup workflow passes recreate and installs selected targets', async () => {
@@ -3424,7 +3626,7 @@ describe('CLI execution', () => {
     const alias = 'demo-devcontainer'
     const calls: string[] = []
 
-    await setupWorkspace(context, alias, {
+    const report = await setupWorkspace(context, alias, {
       recreate: true,
       targets: ['codex'],
       start: async (receivedContext, options) => {
@@ -3435,16 +3637,20 @@ describe('CLI execution', () => {
       },
       installSsh: async () => {
         calls.push('ssh')
+        return setupSshResult(alias)
       },
       installTarget: async (receivedContext, receivedAlias, target) => {
         assert.strictEqual(receivedContext, context)
         assert.strictEqual(receivedAlias, alias)
         assert.strictEqual(target, 'codex')
         calls.push('codex')
+        return setupAppResult('codex')
       }
     })
 
     assert.deepStrictEqual(calls, ['start', 'ssh', 'codex'])
+    assert.deepStrictEqual(report.apps.map((app) => app.target), ['codex'])
+    assert.deepStrictEqual(report.failures, [])
   })
 
   test('setup workflow uses progress-aware quiet installs', async () => {
@@ -3464,6 +3670,10 @@ describe('CLI execution', () => {
         lines.push(`${target}:${message}`)
       }
     })
+    progress.setSteps([
+      { id: 'ssh-alias', label: 'Configuring SSH alias' },
+      { id: 'ssh-target:codex', label: 'Configuring ChatGPT app' }
+    ])
     const calls: string[] = []
 
     await setupWorkspace(context, alias, {
@@ -3480,6 +3690,7 @@ describe('CLI execution', () => {
         assert.strictEqual(receivedAlias, alias)
         assert.deepStrictEqual(installOptions, { quiet: true })
         calls.push('ssh')
+        return setupSshResult(alias)
       },
       installTarget: async (receivedContext, receivedAlias, target, installOptions) => {
         assert.strictEqual(receivedContext, context)
@@ -3487,13 +3698,13 @@ describe('CLI execution', () => {
         assert.strictEqual(target, 'codex')
         assert.deepStrictEqual(installOptions, { quiet: true })
         calls.push('codex')
+        return setupAppResult('codex')
       }
     })
 
     assert.deepStrictEqual(calls, ['start', 'ssh', 'codex'])
-    assert.ok(lines.includes(`stdout:${promptRail()}  ${selectedMark()} Installing SSH alias`))
-    assert.ok(lines.includes(`stdout:${promptRail()}  ${color('demo-devcontainer', 'dim')}`))
-    assert.ok(lines.includes(`stdout:${promptRail()}  ${selectedMark()} Installing codex SSH target`))
+    assert.ok(lines.some((line) => line.includes('Configuring SSH alias')))
+    assert.ok(lines.some((line) => line.includes('Configuring ChatGPT app')))
   })
 
   test('setup workflow uses structured progress and quiet installs in detailed mode', async () => {
@@ -3515,8 +3726,8 @@ describe('CLI execution', () => {
       }
     })
     progress.setSteps([
-      { id: 'ssh-alias', label: 'Installing SSH alias' },
-      { id: 'ssh-target:codex', label: 'Installing Codex SSH target' }
+      { id: 'ssh-alias', label: 'Configuring SSH alias' },
+      { id: 'ssh-target:codex', label: 'Configuring ChatGPT app' }
     ])
     const calls: string[] = []
 
@@ -3530,22 +3741,24 @@ describe('CLI execution', () => {
       installSsh: async (_receivedContext, _receivedAlias, installOptions) => {
         assert.deepStrictEqual(installOptions, { quiet: true })
         calls.push('ssh')
+        return setupSshResult(alias)
       },
       installTarget: async (_receivedContext, _receivedAlias, target, installOptions) => {
         assert.strictEqual(target, 'codex')
         assert.deepStrictEqual(installOptions, { quiet: true })
         calls.push('codex')
+        return setupAppResult('codex')
       }
     })
 
     assert.deepStrictEqual(calls, ['start', 'ssh', 'codex'])
     assert.deepStrictEqual(lines, [
-      'Installing SSH alias',
-      'Installing Codex SSH target'
+      'Configuring SSH alias',
+      'Configuring ChatGPT app'
     ])
   })
 
-  test('interactive TTY setup keeps the Cursor handoff, prerequisite warning, and checklist coherent after completion redraw', async () => {
+  test('interactive TTY setup returns the Cursor handoff and keeps the checklist coherent after completion redraw', async () => {
     const workspace = tempDir('setup-cursor-interactive-workspace')
     const sshConfigPath = join(tempDir('setup-cursor-interactive-ssh'), 'config')
     const settingsPath = join(tempDir('setup-cursor-interactive-settings'), 'settings.json')
@@ -3576,8 +3789,8 @@ describe('CLI execution', () => {
       { id: 'ssh-identity', label: 'Preparing SSH identity' },
       { id: 'devcontainer-config', label: 'Writing devcontainer configuration' },
       { id: 'devcontainer-start', label: 'Starting devcontainer' },
-      { id: 'ssh-alias', label: 'Installing SSH alias' },
-      { id: 'ssh-target:cursor', label: 'Installing Cursor SSH target' }
+      { id: 'ssh-alias', label: 'Configuring SSH alias' },
+      { id: 'ssh-target:cursor', label: 'Configuring Cursor' }
     ] as const
     progress.section('Boxdown setup')
     progress.setSteps(setupSteps)
@@ -3589,8 +3802,9 @@ describe('CLI execution', () => {
       return true
     }) as typeof process.stderr.write
 
+    let report: RemoteAccessInstallReport
     try {
-      await withProcessEnv(env, async () => setupWorkspace(context, alias, {
+      report = await withProcessEnv(env, async () => setupWorkspace(context, alias, {
         progress,
         targets: ['cursor'],
         start: async () => {
@@ -3600,7 +3814,7 @@ describe('CLI execution', () => {
           }
           return 'setup-container'
         },
-        installSsh: async () => {},
+        installSsh: async () => setupSshResult(alias),
         installTarget: installSshInstallTarget
       }))
     } finally {
@@ -3610,20 +3824,17 @@ describe('CLI execution', () => {
 
     const output = terminal.text()
     const folderUri = `vscode-remote://ssh-remote+${alias}/workspaces/${encodeURIComponent(context.workspaceBasename)}`
-    const handoffLines = [
-      `Cursor settings: ${settingsPath}`,
-      `Cursor remote folder URI: ${folderUri}`,
-      `Cursor open command: cursor --folder-uri '${folderUri}'`,
-      'Refresh Cursor Remote Explorer or restart Cursor if the SSH alias is not visible.'
-    ]
-    const warningLines = [
-      'Could not verify the Cursor Remote SSH extension (anysphere.remote-ssh): the extension is not listed.',
-      'Install it if needed with: cursor --install-extension anysphere.remote-ssh'
-    ]
-
-    for (const line of [...handoffLines, ...warningLines]) {
-      assert.strictEqual(output.split(line).length - 1, 1, line)
-    }
+    assert.deepStrictEqual(report.apps.map((app) => app.target), ['cursor'])
+    assert.deepStrictEqual(report.failures, [])
+    assert.strictEqual(report.apps[0]?.action.command, `cursor --folder-uri '${folderUri}'`)
+    assert.deepStrictEqual(report.apps[0]?.details, [
+      { label: 'Cursor settings', value: settingsPath },
+      { label: 'Cursor remote folder URI', value: folderUri }
+    ])
+    assert.deepStrictEqual(report.apps[0]?.warnings.map((warning) => warning.remediation?.command), [
+      'cursor --install-extension anysphere.remote-ssh'
+    ])
+    assert.doesNotMatch(output, /Cursor settings:|Cursor remote folder URI:|Cursor open command:/)
     for (const step of setupSteps) {
       assert.strictEqual(output.split(step.label).length - 1, 1, step.label)
       assert.ok(output.includes(`✔ ${step.label}`), step.label)
@@ -3631,7 +3842,7 @@ describe('CLI execution', () => {
     assert.deepStrictEqual(fakeCursorCalls(cursor.logPath), ['--list-extensions'])
   })
 
-  test('detailed and non-TTY setup keep the essential Cursor handoff without launching Cursor', async () => {
+  test('detailed and non-TTY setup return the Cursor handoff without launching Cursor', async () => {
     for (const scenario of [
       { name: 'detailed', mode: 'detailed', isTTY: true },
       { name: 'non-tty', mode: 'interactive', isTTY: false }
@@ -3662,18 +3873,19 @@ describe('CLI execution', () => {
         writeRaw: (_target, message) => output.push(message)
       })
       progress.setSteps([
-        { id: 'ssh-alias', label: 'Installing SSH alias' },
-        { id: 'ssh-target:cursor', label: 'Installing Cursor SSH target' }
+        { id: 'ssh-alias', label: 'Configuring SSH alias' },
+        { id: 'ssh-target:cursor', label: 'Configuring Cursor' }
       ])
       mkdirSync(dirname(settingsPath), { recursive: true })
       writeFileSync(settingsPath, JSON.stringify({ 'remote.SSH.configFile': sshConfigPath }))
 
+      let report: RemoteAccessInstallReport
       try {
-        await withProcessEnv(env, async () => setupWorkspace(context, alias, {
+        report = await withProcessEnv(env, async () => setupWorkspace(context, alias, {
           progress,
           targets: ['cursor'],
           start: async () => 'setup-container',
-          installSsh: async () => {},
+          installSsh: async () => setupSshResult(alias),
           installTarget: installSshInstallTarget
         }))
       } finally {
@@ -3682,10 +3894,10 @@ describe('CLI execution', () => {
 
       const rendered = output.join('')
       const folderUri = `vscode-remote://ssh-remote+${alias}/workspaces/${encodeURIComponent(context.workspaceBasename)}`
-      assert.ok(rendered.includes(`Cursor settings: ${settingsPath}\n`), scenario.name)
-      assert.ok(rendered.includes(`Cursor remote folder URI: ${folderUri}\n`), scenario.name)
-      assert.ok(rendered.includes(`Cursor open command: cursor --folder-uri '${folderUri}'\n`), scenario.name)
-      assert.match(rendered, /Refresh Cursor Remote Explorer or restart Cursor/, scenario.name)
+      assert.deepStrictEqual(report.apps.map((app) => app.target), ['cursor'], scenario.name)
+      assert.deepStrictEqual(report.failures, [], scenario.name)
+      assert.strictEqual(report.apps[0]?.action.command, `cursor --folder-uri '${folderUri}'`, scenario.name)
+      assert.doesNotMatch(rendered, /Cursor settings:|Cursor remote folder URI:|Cursor open command:/, scenario.name)
       assert.deepStrictEqual(fakeCursorCalls(cursor.logPath), ['--list-extensions'], scenario.name)
     }
   })
