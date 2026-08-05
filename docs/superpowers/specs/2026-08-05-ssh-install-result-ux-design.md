@@ -3,10 +3,11 @@
 ## Summary
 
 Boxdown will replace the unstructured output from `boxdown ssh install` with a
-clear configuration flow, an explicit final outcome, app-specific next actions,
-and compact technical details. The same structured install results will feed the
-existing `boxdown setup` progress experience so ChatGPT, Claude, Cursor, and
-future integrations follow one presentation contract.
+clear configuration flow, an explicit final outcome, and app-specific next
+actions. The same structured install results will feed Boxdown's existing setup
+progress experience so ChatGPT, Claude, Cursor, and future integrations follow
+one presentation contract. Routine technical details move to
+`--verbose` output and `boxdown status` instead of competing with the handoff.
 
 The redesign is intentionally limited to SSH and app installation outcomes. It
 does not introduce a universal CLI event framework or redesign unrelated
@@ -42,10 +43,9 @@ from sharing a stable experience.
 - Give every app integration one consistent, app-specific next-action pattern.
 - Distinguish completed configuration, completed configuration with warnings,
   and incomplete configuration.
-- State honestly that a successful install configures access but does not test
-  the SSH connection.
-- Preserve full, copyable paths and commands without turning the default output
-  into a diagnostic dump.
+- Never imply that successful configuration also tested the SSH connection.
+- Preserve full, copyable commands in the default handoff and full paths in
+  `--verbose` output without turning the default output into a diagnostic dump.
 - Let `setup` and `ssh install` consume the same structured app results.
 - Keep installers focused on state changes instead of terminal presentation.
 - Preserve idempotence and user-owned configuration behavior.
@@ -73,41 +73,40 @@ focused abstraction.
 
 ## User Experience
 
-### Successful Cursor installation
+### Successful Cursor setup
 
 The default interactive result will use the following hierarchy:
 
 ```text
-◆  Configure remote access
-│  ✔ SSH alias configured
-│  ✔ Cursor configured
+◆  Boxdown setup
+│  Workspace: /Users/lirantal/projects/repos/snyk-vulnbench-website
+│  SSH alias: snyk-vulnbench-website-devcontainer
+│  ✔ Preparing SSH identity
+│  ✔ Writing generated devcontainer config
+│  ✔ Starting devcontainer
+│  ✔ Installing SSH alias
+│  ✔ Configuring Cursor
+│
+│  ✔ Setup complete
+│
+│  Next step
+│  Open this project in Cursor:
+│
+│    cursor --folder-uri \
+│      'vscode-remote://ssh-remote+.../workspaces/...'
 └
-
-✔ Configuration complete
-  SSH connection not tested.
-
-Next step
-
-  Open this project in Cursor:
-
-    cursor --folder-uri \
-      'vscode-remote://ssh-remote+.../workspaces/...'
-
-Details
-
-  SSH alias
-    snyk-vulnbench-website-devcontainer
-
-  SSH config
-    /Users/lirantal/.ssh/config
-
-  Cursor settings
-    /Users/lirantal/Library/Application Support/Cursor/User/settings.json
 ```
 
-The output deliberately separates progress, outcome, action, and details. Long
-values start on their own lines so a terminal soft-wrap cannot make them look
-like a continuation of explanatory prose.
+The durable outcome and handoff stay inside the same visual rail as setup. The
+default path answers only two questions: whether setup worked and what the user
+should do next. The settings path and separate remote-folder URI are omitted;
+the URI is already part of the command, and neither path is needed to continue.
+The command starts on its own indented line so terminal wrapping cannot make it
+look like prose.
+
+Standalone `boxdown ssh install` uses the same structure under a `Configure
+remote access` heading and says `Configuration complete` instead of `Setup
+complete`.
 
 ### Completed with warnings
 
@@ -118,21 +117,20 @@ A configuration warning does not become a false failure:
 │  ✔ SSH alias configured
 │  ✔ Cursor configured
 │  ! Cursor Remote SSH extension could not be verified
+│
+│  ! Configuration complete with warnings
+│
+│  Next steps
+│
+│  1. Install or verify Cursor Remote SSH:
+│
+│       cursor --install-extension anysphere.remote-ssh
+│
+│  2. Open this project in Cursor:
+│
+│       cursor --folder-uri \
+│         'vscode-remote://ssh-remote+.../workspaces/...'
 └
-
-! Configuration complete with warnings
-  SSH connection not tested.
-
-Next steps
-
-  1. Install or verify Cursor Remote SSH:
-
-       cursor --install-extension anysphere.remote-ssh
-
-  2. Open this project in Cursor:
-
-       cursor --folder-uri \
-         'vscode-remote://ssh-remote+.../workspaces/...'
 ```
 
 Opening the selected app is normally its primary action. When a warning
@@ -148,24 +146,22 @@ that distinction:
 ◆  Configure remote access
 │  ✔ SSH alias configured
 │  ✖ Cursor configuration failed
+│
+│  ✖ Configuration incomplete
+│  SSH access is configured, but Cursor was not.
+│
+│  Problem
+│  Cursor uses a different SSH config:
+│    /path/to/cursor/config
+│
+│  Boxdown updated:
+│    /Users/lirantal/.ssh/config
+│
+│  Next step
+│  Update Cursor's remote.SSH.configFile, then rerun:
+│
+│    boxdown ssh install --target cursor
 └
-
-✖ Configuration incomplete
-  SSH access is configured, but Cursor was not.
-
-Problem
-
-  Cursor uses a different SSH config:
-    /path/to/cursor/config
-
-  Boxdown updated:
-    /Users/lirantal/.ssh/config
-
-Next step
-
-  Update Cursor's remote.SSH.configFile, then rerun:
-
-    boxdown ssh install --target cursor
 ```
 
 The renderer must not claim that the complete request succeeded when only part
@@ -177,12 +173,17 @@ of it did.
 - Yellow `!` means configuration succeeded but needs attention.
 - Red `✖` means a requested operation failed.
 - Color reinforces the icon and outcome text but never carries meaning alone.
-- The final outcome is visually separate from progress and details.
+- The final outcome is visually separate from transient progress but remains
+  inside the command's managed visual rail in an interactive terminal.
+- Default success output contains no configuration paths or standalone URIs.
+- The primary action is visually prominent: its heading is bold and copyable
+  commands use the CLI's accent color.
 - Long paths, URIs, and commands begin on dedicated indented lines.
 - Prose wraps with a stable hanging indent at the available terminal width.
 - Commands use platform-appropriate continuation syntax when the generated
   command is split across display lines.
-- Values remain complete and copyable; default output does not truncate them.
+- Values remain complete and copyable; neither default nor verbose output
+  truncates them.
 - Tables are not used because they degrade in narrow terminals.
 - Recovery advice appears only when it is relevant.
 - Multiple app actions appear as numbered next steps in target selection order.
@@ -219,11 +220,11 @@ An SSH install result contains:
 - SSH config path;
 - identity path;
 - validation command; and
-- default and verbose detail entries.
+- verbose detail entries.
 
-The validation command is retained for diagnostics, but the default result
-states `SSH connection not tested` instead of presenting validation as the
-primary action.
+The validation command is retained for diagnostics. Default output neither
+claims that a connection was tested nor adds a routine disclaimer that competes
+with the user's next action.
 
 ### App result
 
@@ -235,7 +236,7 @@ An app install result contains:
   preserved;
 - warnings with optional remediation;
 - one primary next action;
-- default and verbose detail entries; and
+- verbose detail entries; and
 - any platform-specific command label or display form.
 
 Compatible preserved state is a success. For example, a user-owned Cursor
@@ -283,7 +284,9 @@ The command orchestrator:
 ### Progress and result rendering
 
 The existing progress reporter continues to show transient work. A focused
-install-result renderer shows durable outcomes and handoff instructions.
+install-result renderer shows durable outcomes and handoff instructions. In an
+interactive terminal it renders those results inside the active command rail
+after the checklist finishes and before the closing `└`.
 
 `boxdown ssh install` uses the full structured flow. `boxdown setup` keeps its
 existing lifecycle checklist but passes the same returned app results to the
@@ -345,15 +348,16 @@ container lifecycle failure.
 
 ### Default interactive
 
-Shows styled progress, the final outcome, ordered next actions, and compact
-details. Compact details include the SSH alias, SSH config path, and selected
-app configuration paths.
+Shows styled progress, the final outcome, and ordered next actions. Successful
+configuration paths, generated URIs that merely repeat command input, backup
+paths, and ownership state are omitted. When no app action exists, the renderer
+omits the `Next step` section instead of inventing one.
 
 ### Verbose
 
-Adds identity paths, backup paths, ownership decisions, generated URIs, and
-lower-level diagnostics. The `ssh install` usage text will explicitly document
-`--verbose` as supported.
+Adds the SSH alias, SSH config and identity paths, app configuration paths,
+backup paths, ownership decisions, generated URIs, and lower-level diagnostics.
+The `ssh install` usage text will explicitly document `--verbose` as supported.
 
 ### Non-TTY and CI
 
@@ -389,7 +393,9 @@ and stable facts instead.
 
 - Normal and narrow terminal widths.
 - ANSI-aware visible-width calculation and hanging indentation.
-- Dedicated-line rendering for paths, URIs, and commands.
+- No successful configuration paths or duplicate standalone URI in default
+  output.
+- Dedicated-line rendering for verbose paths and URIs and default commands.
 - Platform-correct POSIX and PowerShell command display.
 - Color, `NO_COLOR`, non-TTY, and verbose variants.
 - Complete, complete-with-warnings, and incomplete summaries.
@@ -409,6 +415,7 @@ and stable facts instead.
 ### Integration regressions
 
 - `setup` and `ssh install` render identical app warnings and next actions.
+- Interactive setup keeps its final outcome and handoff inside the visual rail.
 - Interactive progress does not duplicate or erase final handoff details.
 - Non-TTY output contains no ANSI or terminal-control sequences.
 - Existing Cursor ownership, config-path validation, and cleanup behavior remain
