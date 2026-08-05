@@ -4,6 +4,7 @@ import { dirname, join, posix, win32 } from 'node:path'
 
 import type { WorkspaceContext } from './paths.ts'
 import { shellQuote, sshConfigQuote } from './shell.ts'
+import type { SshAliasInstallResult } from './ssh-install-result.ts'
 import { ensureHostSshKey } from './ssh-key.ts'
 
 export function defaultSshAlias (workspaceBasename: string): string {
@@ -184,7 +185,7 @@ export function removeSshConfigBlock (existingConfig: string, alias: string): st
   return nextLines.length > 0 ? `${nextLines.join('\n')}\n` : ''
 }
 
-export async function installSshConfig (context: WorkspaceContext, alias: string, options: { quiet?: boolean, configPath?: string } = {}): Promise<void> {
+export async function installSshConfig (context: WorkspaceContext, alias: string, options: { quiet?: boolean, configPath?: string } = {}): Promise<SshAliasInstallResult> {
   validateSshAlias(alias)
   await ensureHostSshKey(context, options.quiet ?? false)
 
@@ -202,8 +203,25 @@ export async function installSshConfig (context: WorkspaceContext, alias: string
   const existingConfig = readFileSync(sshConfigPath, 'utf8')
   const block = buildSshConfigBlock(context, alias)
   const nextConfig = replaceSshConfigBlock(existingConfig, alias, block)
+  const changed = nextConfig !== existingConfig
+  const validationCommand = `ssh ${alias} 'whoami && pwd'`
+  const result: SshAliasInstallResult = {
+    kind: 'ssh',
+    disposition: changed ? 'installed' : 'already-current',
+    summary: changed ? 'SSH alias configured' : 'SSH alias already configured',
+    alias,
+    configPath: sshConfigPath,
+    identityPath: context.sshKeyPath,
+    validationCommand,
+    details: [
+      { label: 'SSH alias', value: alias },
+      { label: 'SSH config', value: sshConfigPath },
+      { label: 'Identity file', value: context.sshKeyPath },
+      { label: 'SSH validation command', value: validationCommand }
+    ]
+  }
 
-  if (nextConfig !== existingConfig) {
+  if (changed) {
     writeFileAtomic(sshConfigPath, nextConfig, 0o600)
     if (!options.quiet) {
       process.stdout.write(`Installed SSH alias: ${alias}\n`)
@@ -217,8 +235,10 @@ export async function installSshConfig (context: WorkspaceContext, alias: string
   if (!options.quiet) {
     process.stdout.write(`SSH config: ${sshConfigPath}\n`)
     process.stdout.write(`Identity file: ${context.sshKeyPath}\n\n`)
-    process.stdout.write(`Validate with:\n  ssh ${alias} 'whoami && pwd'\n`)
+    process.stdout.write(`Validate with:\n  ${validationCommand}\n`)
   }
+
+  return result
 }
 
 export function uninstallSshConfig (alias: string, options: { quiet?: boolean, configPath?: string } = {}): boolean {

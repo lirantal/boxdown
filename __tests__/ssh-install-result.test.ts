@@ -1,7 +1,13 @@
 import assert from 'node:assert/strict'
+import { mkdtempSync } from 'node:fs'
 import { describe, test } from 'node:test'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
+import { createWorkspaceContext } from '../src/paths.ts'
 import { createProgress } from '../src/progress.ts'
+import { installSshConfig } from '../src/ssh-config.ts'
+import { installSshInstallTarget } from '../src/ssh-install-targets.ts'
 
 import {
   formatRemoteAccessCancellation,
@@ -10,6 +16,29 @@ import {
   writeRemoteAccessInstallReport,
   type RemoteAccessInstallReport
 } from '../src/ssh-install-result.ts'
+
+function tempInstallDir (name: string): string {
+  return mkdtempSync(join(tmpdir(), `boxdown-result-${name}-`))
+}
+
+async function withInstallEnvironment<T> (
+  overrides: Record<string, string>,
+  run: () => Promise<T>
+): Promise<T> {
+  const previous = new Map<string, string | undefined>()
+  for (const [key, value] of Object.entries(overrides)) {
+    previous.set(key, process.env[key])
+    process.env[key] = value
+  }
+  try {
+    return await run()
+  } finally {
+    for (const [key, value] of previous) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+  }
+}
 
 function successfulCursorReport (): RemoteAccessInstallReport {
   return {
@@ -172,4 +201,62 @@ describe('remote access install result rendering', () => {
   test('formats cancellation without implying mutation', () => {
     assert.strictEqual(formatRemoteAccessCancellation('SSH install', { color: false }), 'SSH install canceled. No changes made.\n')
   })
+})
+
+test('maps SSH install and idempotent reinstall to structured results', async () => {
+  const workspace = tempInstallDir('ssh-workspace')
+  const sshConfigPath = join(tempInstallDir('ssh-config'), 'config')
+  const context = createWorkspaceContext({
+    workspace,
+    env: {
+      HOME: tempInstallDir('ssh-home'),
+      BOXDOWN_DATA_HOME: tempInstallDir('ssh-data')
+    }
+  })
+  const alias = `${context.workspaceBasename}-devcontainer`
+  const first = await installSshConfig(context, alias, { quiet: true, configPath: sshConfigPath })
+  const second = await installSshConfig(context, alias, { quiet: true, configPath: sshConfigPath })
+
+  assert.strictEqual(first.disposition, 'installed')
+  assert.strictEqual(first.summary, 'SSH alias configured')
+  assert.strictEqual(first.configPath, sshConfigPath)
+  assert.strictEqual(first.identityPath, context.sshKeyPath)
+  assert.strictEqual(first.validationCommand, `ssh ${alias} 'whoami && pwd'`)
+  assert.strictEqual(second.disposition, 'already-current')
+  assert.strictEqual(second.summary, 'SSH alias already configured')
+})
+
+test('maps ChatGPT and Claude installs to the common app contract', async () => {
+  const workspace = tempInstallDir('apps-workspace')
+  const context = createWorkspaceContext({
+    workspace,
+    env: {
+      HOME: tempInstallDir('apps-home'),
+      BOXDOWN_DATA_HOME: tempInstallDir('apps-data')
+    }
+  })
+  const alias = `${context.workspaceBasename}-devcontainer`
+  const chatgptConfigPath = join(tempInstallDir('chatgpt-config'), 'config.json')
+  const chatgptStatePath = join(tempInstallDir('chatgpt-state'), 'state.json')
+  const claudeConfigPath = join(tempInstallDir('claude-config'), 'ssh_configs.json')
+  const appsHome = tempInstallDir('apps-process-home')
+
+  const { chatgpt, claude } = await withInstallEnvironment({
+    HOME: appsHome,
+    BOXDOWN_CODEX_APP_CONFIG: chatgptConfigPath,
+    BOXDOWN_CODEX_GLOBAL_STATE: chatgptStatePath,
+    BOXDOWN_CLAUDE_SSH_CONFIGS: claudeConfigPath
+  }, async () => ({
+    chatgpt: await installSshInstallTarget(context, alias, 'codex', { quiet: true }),
+    claude: await installSshInstallTarget(context, alias, 'claude', { quiet: true })
+  }))
+
+  assert.deepStrictEqual({ target: chatgpt.target, label: chatgpt.appLabel, disposition: chatgpt.disposition }, {
+    target: 'codex', label: 'ChatGPT', disposition: 'installed'
+  })
+  assert.match(chatgpt.action.label, /Restart ChatGPT/)
+  assert.deepStrictEqual({ target: claude.target, label: claude.appLabel, disposition: claude.disposition }, {
+    target: 'claude', label: 'Claude', disposition: 'installed'
+  })
+  assert.match(claude.action.label, /Restart Claude/)
 })

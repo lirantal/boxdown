@@ -5,6 +5,7 @@ import { codexProjectEntryForWorkspace, installCodexAppConfigProject, installCod
 import { installCursorSshTarget, uninstallCursorSshTarget, uninstallCursorWorkspaceTarget, type CursorInstallResult, type CursorUninstallResult } from './cursor-app-config.ts'
 import type { WorkspaceContext } from './paths.ts'
 import { runBuffered } from './process.ts'
+import type { AppInstallResult, InstallWarning } from './ssh-install-result.ts'
 
 export type SshConfigInstallTarget = 'codex' | 'claude' | 'cursor'
 
@@ -20,19 +21,36 @@ export interface SshInstallTargetDefinition {
   description: string
   flag: string
   usesContainerAgentProfile: boolean
-  install: (context: WorkspaceContext, alias: string, options?: SshInstallTargetOptions) => Promise<void> | void
+  install: (context: WorkspaceContext, alias: string, options?: SshInstallTargetOptions) => Promise<AppInstallResult> | AppInstallResult
   uninstall: (context: WorkspaceContext, alias: string, options?: SshInstallTargetOptions) => Promise<void> | void
   uninstallWorkspace: (context: WorkspaceContext, aliases: readonly string[], options?: SshInstallTargetOptions) => Promise<void> | void
 }
 
-function installCodexTarget (context: WorkspaceContext, alias: string, options: SshInstallTargetOptions = {}): void {
+function installCodexTarget (context: WorkspaceContext, alias: string, options: SshInstallTargetOptions = {}): AppInstallResult {
   const entry = codexProjectEntryForWorkspace(context, alias)
   const legacyRemotePath = legacyCodexRemotePathForWorkspace(context)
   const result = installCodexAppConfigProject(entry, { legacyRemotePaths: [legacyRemotePath] })
   const stateResult = installCodexGlobalStateProject(entry, { legacyRemotePaths: [legacyRemotePath] })
+  const changed = result.changed || stateResult.changed
+  const installResult: AppInstallResult = {
+    kind: 'app',
+    target: 'codex',
+    appLabel: 'ChatGPT',
+    disposition: changed ? 'installed' : 'already-current',
+    summary: changed ? 'ChatGPT configured' : 'ChatGPT already configured',
+    warnings: [],
+    action: { label: `Restart ChatGPT, then open the remote project ${entry.label}.` },
+    details: [
+      { label: 'ChatGPT config', value: result.configPath },
+      { label: 'ChatGPT remote project', value: `${entry.label} (${entry.remotePath})` },
+      { label: 'ChatGPT state', value: stateResult.statePath },
+      ...(result.backupPath === undefined ? [] : [{ label: 'ChatGPT config backup', value: result.backupPath }]),
+      ...(stateResult.backupPath === undefined ? [] : [{ label: 'ChatGPT state backup', value: stateResult.backupPath }])
+    ]
+  }
 
   if (options.quiet === true) {
-    return
+    return installResult
   }
 
   process.stdout.write(`\nCodex app config: ${result.configPath}\n`)
@@ -49,6 +67,8 @@ function installCodexTarget (context: WorkspaceContext, alias: string, options: 
   }
 
   process.stdout.write('Restart Codex to apply the remote project entry.\n')
+
+  return installResult
 }
 
 function uninstallCodexTarget (context: WorkspaceContext, alias: string, options: SshInstallTargetOptions = {}): void {
@@ -89,12 +109,26 @@ function uninstallCodexTarget (context: WorkspaceContext, alias: string, options
   process.stdout.write('Restart Codex to apply the remote project removal.\n')
 }
 
-function installClaudeTarget (context: WorkspaceContext, alias: string, options: SshInstallTargetOptions = {}): void {
+function installClaudeTarget (context: WorkspaceContext, alias: string, options: SshInstallTargetOptions = {}): AppInstallResult {
   const entry = claudeSshConfigEntryForWorkspace(context, alias)
   const result = installClaudeSshConfigHost(entry)
+  const installResult: AppInstallResult = {
+    kind: 'app',
+    target: 'claude',
+    appLabel: 'Claude',
+    disposition: result.changed ? 'installed' : 'already-current',
+    summary: result.changed ? 'Claude configured' : 'Claude already configured',
+    warnings: [],
+    action: { label: `Restart Claude, then open the configured SSH remote ${entry.name}.` },
+    details: [
+      { label: 'Claude SSH config', value: result.configPath },
+      { label: 'Claude SSH remote', value: `${entry.name} (${entry.sshHost})` },
+      ...(result.backupPath === undefined ? [] : [{ label: 'Claude SSH config backup', value: result.backupPath }])
+    ]
+  }
 
   if (options.quiet === true) {
-    return
+    return installResult
   }
 
   process.stdout.write(`\nClaude SSH config: ${result.configPath}\n`)
@@ -107,6 +141,8 @@ function installClaudeTarget (context: WorkspaceContext, alias: string, options:
   }
 
   process.stdout.write('Restart Claude to apply the SSH remote entry.\n')
+
+  return installResult
 }
 
 function uninstallClaudeTarget (context: WorkspaceContext, alias: string, options: SshInstallTargetOptions = {}): void {
@@ -170,7 +206,7 @@ function printCursorUninstallResults (results: readonly CursorUninstallResult[])
   }
 }
 
-async function warnAboutCursorRemoteSshPrerequisite (warn?: (message: string) => void): Promise<void> {
+async function cursorRemoteSshPrerequisiteWarnings (): Promise<InstallWarning[]> {
   const result = await runBuffered('cursor', ['--list-extensions'], {
     timeoutMs: 5_000,
     mirrorStdout: false,
@@ -181,13 +217,20 @@ async function warnAboutCursorRemoteSshPrerequisite (warn?: (message: string) =>
     .split(/\r?\n/u)
     .some((extension) => extension.trim().toLowerCase() === 'anysphere.remote-ssh')
 
-  if (installed) return
+  if (installed) return []
 
-  const writeWarning = warn ?? ((message: string) => process.stderr.write(`Warning: ${message}\n`))
+  const remediation = {
+    label: 'Install Cursor Remote SSH:',
+    command: 'cursor --install-extension anysphere.remote-ssh'
+  }
 
   if (result.code === 127) {
-    writeWarning('Cursor CLI was not found; install Cursor and the anysphere.remote-ssh extension before opening the remote workspace.')
-    return
+    return [{
+      message: 'Cursor CLI was not found; install Cursor before opening the remote workspace.',
+      remediation: {
+        label: 'Install Cursor and its Remote SSH extension before opening this project.'
+      }
+    }]
   }
 
   const reason = result.timedOut === true
@@ -195,28 +238,94 @@ async function warnAboutCursorRemoteSshPrerequisite (warn?: (message: string) =>
     : result.code === 0
       ? 'the extension is not listed'
       : `the extension query exited with code ${result.code}`
-  writeWarning(`Could not verify the Cursor Remote SSH extension (anysphere.remote-ssh): ${reason}.`)
-  if (warn === undefined) {
-    process.stderr.write('Install it if needed with: cursor --install-extension anysphere.remote-ssh\n')
-  } else {
-    warn('Install it if needed with: cursor --install-extension anysphere.remote-ssh')
+  return [{
+    message: `Could not verify Cursor Remote SSH: ${reason}.`,
+    remediation
+  }]
+}
+
+function cursorInstallDisposition (result: CursorInstallResult): AppInstallResult['disposition'] {
+  if (result.disposition === 'installed') return 'installed'
+  if (result.disposition === 'already-boxdown-managed') return 'already-current'
+  return 'already-compatible'
+}
+
+function cursorInstallSummary (disposition: AppInstallResult['disposition']): string {
+  if (disposition === 'installed') return 'Cursor configured'
+  if (disposition === 'already-current') return 'Cursor already configured'
+  return 'Cursor already compatible'
+}
+
+function emitCursorWarnings (warnings: readonly InstallWarning[], warn?: (message: string) => void): void {
+  const writeWarning = warn ?? ((message: string) => process.stderr.write(`Warning: ${message}\n`))
+  for (const warning of warnings) {
+    if (warning.message === 'Cursor CLI was not found; install Cursor before opening the remote workspace.') {
+      writeWarning('Cursor CLI was not found; install Cursor and the anysphere.remote-ssh extension before opening the remote workspace.')
+      continue
+    }
+    if (warning.message.startsWith('Could not verify Cursor Remote SSH: ') && warning.remediation?.command !== undefined) {
+      const reason = warning.message.slice('Could not verify Cursor Remote SSH: '.length)
+      writeWarning(`Could not verify the Cursor Remote SSH extension (anysphere.remote-ssh): ${reason}`)
+      writeWarning(`Install it if needed with: ${warning.remediation.command}`)
+      continue
+    }
+    writeWarning(warning.message)
+    if (warning.remediation !== undefined) {
+      writeWarning(warning.remediation.label)
+      if (warning.remediation.command !== undefined) writeWarning(warning.remediation.command)
+    }
   }
 }
 
-async function installCursorTarget (context: WorkspaceContext, alias: string, options: SshInstallTargetOptions = {}): Promise<void> {
+async function installCursorTarget (context: WorkspaceContext, alias: string, options: SshInstallTargetOptions = {}): Promise<AppInstallResult> {
   const result = await installCursorSshTarget(context, alias)
+  const warnings = await cursorRemoteSshPrerequisiteWarnings()
+  const disposition = cursorInstallDisposition(result)
+  const displayLines = result.commandLabel === 'PowerShell'
+    ? [result.command]
+    : [
+        'cursor --folder-uri \\',
+        `  '${result.folderUri}'`
+      ]
+  const installResult: AppInstallResult = {
+    kind: 'app',
+    target: 'cursor',
+    appLabel: 'Cursor',
+    disposition,
+    summary: cursorInstallSummary(disposition),
+    warnings,
+    action: {
+      label: 'Open this project in Cursor:',
+      command: result.command,
+      displayLines,
+      ...(result.commandLabel === undefined ? {} : { commandLabel: result.commandLabel })
+    },
+    details: [
+      { label: 'Cursor settings', value: result.settingsPath },
+      { label: 'Cursor remote folder URI', value: result.folderUri },
+      ...(result.disposition === 'preserved-user-owned'
+        ? [{ label: 'Cursor remote platform mapping', value: 'User-owned Linux mapping preserved' }]
+        : [])
+    ]
+  }
   const writeEssential = options.writeEssential ?? ((message: string) => process.stdout.write(`${message}\n`))
 
   if (options.quiet !== true) {
     process.stdout.write('\n')
     process.stdout.write(cursorDispositionMessage(alias, result))
   }
-  writeEssential(`Cursor settings: ${result.settingsPath}`)
-  writeEssential(`Cursor remote folder URI: ${result.folderUri}`)
-  writeEssential(`Cursor open command${result.commandLabel === undefined ? '' : ` (${result.commandLabel})`}: ${result.command}`)
-  writeEssential('Refresh Cursor Remote Explorer or restart Cursor if the SSH alias is not visible.')
+  if (options.quiet !== true || options.writeEssential !== undefined) {
+    writeEssential(`Cursor settings: ${result.settingsPath}`)
+    writeEssential(`Cursor remote folder URI: ${result.folderUri}`)
+    writeEssential(`Cursor open command${result.commandLabel === undefined ? '' : ` (${result.commandLabel})`}: ${result.command}`)
+    writeEssential('Refresh Cursor Remote Explorer or restart Cursor if the SSH alias is not visible.')
+  }
 
-  await warnAboutCursorRemoteSshPrerequisite(options.warn)
+  if (options.quiet !== true || options.warn !== undefined) {
+    emitCursorWarnings(installResult.warnings, options.warn)
+  }
+
+  return installResult
 }
 
 async function uninstallCursorTarget (context: WorkspaceContext, alias: string, options: SshInstallTargetOptions = {}): Promise<void> {
@@ -306,14 +415,14 @@ export async function installSshInstallTarget (
   alias: string,
   targetValue: SshConfigInstallTarget,
   options: SshInstallTargetOptions = {}
-): Promise<void> {
+): Promise<AppInstallResult> {
   const target = SSH_INSTALL_TARGETS.find((candidate) => candidate.value === targetValue)
 
   if (target === undefined) {
     throw new Error(`Unsupported ssh install target: ${targetValue}`)
   }
 
-  await target.install(context, alias, options)
+  return await target.install(context, alias, options)
 }
 
 export async function uninstallSshInstallTarget (
