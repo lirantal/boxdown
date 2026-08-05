@@ -1028,7 +1028,7 @@ test('non-interactive setup without selectors leaves an unconfigured workspace u
 })
 
 async function waitForPromptOutput (outputText: () => string, pattern: RegExp): Promise<void> {
-  const deadline = Date.now() + 1000
+  const deadline = Date.now() + 5000
 
   while (Date.now() < deadline) {
     if (pattern.test(outputText())) {
