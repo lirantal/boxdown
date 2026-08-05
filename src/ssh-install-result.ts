@@ -148,10 +148,16 @@ function failureTitle (failure: RemoteAccessInstallFailure): string {
 
 function reportActions (report: RemoteAccessInstallReport): ReportAction[] {
   const actions: ReportAction[] = []
+  const failedAppTargets = new Set(
+    report.failures
+      .filter((failure) => failure.scope === 'app' && failure.target !== undefined)
+      .map((failure) => failure.target)
+  )
   for (const failure of report.failures) {
     if (failure.recovery !== undefined) actions.push({ action: failure.recovery })
   }
   for (const app of report.apps) {
+    if (failedAppTargets.has(app.target)) continue
     for (const warning of app.warnings) {
       if (warning.remediation !== undefined) actions.push({ action: warning.remediation, message: warning.message })
     }

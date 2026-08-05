@@ -77,6 +77,31 @@ describe('remote access install result rendering', () => {
     assert.strictEqual(remoteAccessExitCode(report), 1)
   })
 
+  test('omits every action for a failed app target while retaining later successful actions', () => {
+    const report = successfulCursorReport()
+    report.apps[0]?.warnings.push({
+      message: 'Cursor Remote SSH extension is not installed',
+      remediation: { label: 'Install Cursor Remote SSH:', command: 'cursor --install-extension anysphere.remote-ssh' }
+    })
+    report.failures.push({
+      scope: 'app', target: 'cursor', label: 'Cursor', message: 'Cursor uses a different SSH config'
+    })
+    report.apps.push({
+      ...report.apps[0]!,
+      target: 'codex',
+      appLabel: 'Codex',
+      summary: 'Codex configured',
+      warnings: [],
+      action: { label: 'Open this project in Codex:', command: 'codex --remote ssh://demo-devcontainer/workspaces/demo' }
+    })
+
+    const output = formatRemoteAccessInstallReport(report, { outcomeLabel: 'Configuration', interactive: false, columns: 80, verbose: false, color: false })
+
+    assert.doesNotMatch(output, /cursor --install-extension/)
+    assert.doesNotMatch(output, /cursor --folder-uri/)
+    assert.match(output, /codex --remote ssh:\/\/demo-devcontainer\/workspaces\/demo/)
+  })
+
   test('shows technical details only when verbose is requested', () => {
     const normal = formatRemoteAccessInstallReport(successfulCursorReport(), { outcomeLabel: 'Configuration', interactive: false, columns: 80, verbose: false, color: false })
     const verbose = formatRemoteAccessInstallReport(successfulCursorReport(), { outcomeLabel: 'Configuration', interactive: false, columns: 80, verbose: true, color: false })
