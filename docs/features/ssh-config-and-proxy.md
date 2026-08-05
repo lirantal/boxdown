@@ -158,8 +158,9 @@ Boxdown SSH config, or set `BOXDOWN_SSH_CONFIG` to Cursor's existing absolute
 config path; Boxdown never rewrites this user-wide preference. It does not
 expand `~` or environment variables in an explicit `remote.SSH.configFile`.
 
-After configuration, Boxdown prints the raw URI and an open command. For an
-alias `<repo-name>-devcontainer`, the URI is:
+The default result prints the open command with the complete URI embedded in
+it, but does not repeat a standalone URI. `--verbose` adds that standalone URI
+as a diagnostic detail. For an alias `<repo-name>-devcontainer`, the URI is:
 
 ```text
 vscode-remote://ssh-remote+<repo-name>-devcontainer/workspaces/<repo-name>

@@ -1794,6 +1794,8 @@ test('feature docs document Cursor SSH support boundaries', () => {
   assert.match(setupDocs, /Cursor alone.*does not.*agent-profile/is)
   assert.match(sshDocs, /remote\.SSH\.remotePlatform/)
   assert.match(sshDocs, /cursor --folder-uri/)
+  assert.match(sshDocs, /default result.*standalone URI.*verbose/is)
+  assert.doesNotMatch(sshDocs, /prints the raw URI and an open command/)
   assert.match(sshDocs, /anysphere\.remote-ssh/)
   assert.match(sshDocs, /does not.*(?:SQLite|workspaceStorage)/is)
   assert.match(stateDocs, /BOXDOWN_CURSOR_SETTINGS/)
