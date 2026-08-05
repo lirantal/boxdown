@@ -1,5 +1,6 @@
 import { runBuffered, type BufferedCommandOptions, type CommandResult } from './process.ts'
-import { formatPromptEnd, formatPromptTitle, maybeColor, promptRail, selectedMark } from './cli-style.ts'
+import { formatPromptDetailLines, formatPromptEnd, formatPromptTitleLines, maybeColor, promptRail, selectedMark, type CliColor } from './cli-style.ts'
+import { terminalColumns, visibleLength, wrapText } from './terminal-layout.ts'
 
 export type ProgressOutputTarget = 'stdout' | 'stderr'
 export type ProgressMode = 'interactive' | 'detailed' | 'verbose' | 'none'
@@ -16,6 +17,7 @@ export interface ProgressReporterOptions {
   spinnerFrames?: readonly string[]
   spinnerIntervalMs?: number
   color?: boolean
+  columns?: number
 }
 
 export interface ProgressCommandOptions extends Pick<BufferedCommandOptions, 'cwd' | 'env' | 'input'> {
@@ -51,6 +53,7 @@ const DEFAULT_SPINNER_INTERVAL_MS = 120
 interface ActiveSpinner {
   message: string
   frameIndex: number
+  renderedRows: number
   timer?: ReturnType<typeof setInterval>
   tty: boolean
 }
@@ -72,6 +75,11 @@ function writeRaw (target: ProgressOutputTarget, message: string): void {
 function targetIsTTY (target: ProgressOutputTarget): boolean {
   const stream = target === 'stderr' ? process.stderr : process.stdout
   return stream.isTTY === true
+}
+
+function targetColumns (target: ProgressOutputTarget): number | undefined {
+  const stream = target === 'stderr' ? process.stderr : process.stdout
+  return stream.columns
 }
 
 function isCiEnvironment (env: NodeJS.ProcessEnv): boolean {
@@ -106,6 +114,7 @@ export class ProgressReporter {
   readonly #spinnerFrames: readonly string[]
   readonly #spinnerIntervalMs: number
   readonly #color: boolean
+  readonly #columns: number
   #sectionPrinted = false
   #sectionOpen = false
   #spinner: ActiveSpinner | undefined
@@ -126,6 +135,7 @@ export class ProgressReporter {
     this.#spinnerFrames = options.spinnerFrames ?? DEFAULT_SPINNER_FRAMES
     this.#spinnerIntervalMs = options.spinnerIntervalMs ?? DEFAULT_SPINNER_INTERVAL_MS
     this.#color = options.color ?? true
+    this.#columns = terminalColumns(options.columns ?? targetColumns(this.target))
   }
 
   section (title: string): void {
@@ -144,7 +154,7 @@ export class ProgressReporter {
       this.#write(this.target, '')
     }
 
-    this.#write(this.target, formatPromptTitle(title, this.#color))
+    this.#writeLines(formatPromptTitleLines(title, this.#columns, this.#color))
     this.#sectionPrinted = true
     this.#sectionOpen = true
   }
@@ -178,7 +188,11 @@ export class ProgressReporter {
       return
     }
 
-    this.#writeLine(`${promptRail(this.#color)}  ${selectedMark(this.#color)} ${message}`)
+    this.#writeLines(this.#formatWrappedLines(
+      message,
+      `${promptRail(this.#color)}  ${selectedMark(this.#color)} `,
+      `${promptRail(this.#color)}    `
+    ))
   }
 
   detail (message: string): void {
@@ -191,7 +205,7 @@ export class ProgressReporter {
       return
     }
 
-    this.#writeLine(`${promptRail(this.#color)}  ${maybeColor(message, 'dim', this.#color)}`)
+    this.#writeLines(formatPromptDetailLines(message, this.#columns, this.#color))
   }
 
   status (message: string): void {
@@ -207,7 +221,7 @@ export class ProgressReporter {
       return
     }
 
-    this.#writeInteractiveLine(`${promptRail(this.#color)}  ${maybeColor(message, 'dim', this.#color)}`)
+    this.#writeInteractiveLines(formatPromptDetailLines(message, this.#columns, this.#color))
   }
 
   output (message: string): void {
@@ -235,7 +249,11 @@ export class ProgressReporter {
       return
     }
 
-    this.#writeInteractiveLine(`${promptRail(this.#color)}  ${maybeColor('!', 'dim', this.#color)} ${message}`)
+    this.#writeInteractiveLines(this.#formatWrappedLines(
+      message,
+      `${promptRail(this.#color)}  ${maybeColor('!', 'dim', this.#color)} `,
+      `${promptRail(this.#color)}    `
+    ))
   }
 
   marker (message: string): void {
@@ -345,6 +363,7 @@ export class ProgressReporter {
     this.#spinner = {
       message: normalized,
       frameIndex: 0,
+      renderedRows: 0,
       tty: this.#isTTY
     }
 
@@ -357,7 +376,11 @@ export class ProgressReporter {
       return
     }
 
-    this.#writeLine(`${promptRail(this.#color)}  ${maybeColor(this.#spinnerFrames[0] ?? '◒', 'cyan', this.#color)} ${normalized}`)
+    this.#writeLines(this.#formatWrappedLines(
+      normalized,
+      `${promptRail(this.#color)}  ${maybeColor(this.#spinnerFrames[0] ?? '◒', 'cyan', this.#color)} `,
+      `${promptRail(this.#color)}    `
+    ))
   }
 
   tickSpinner (): void {
@@ -391,7 +414,7 @@ export class ProgressReporter {
     }
 
     if (spinner.tty) {
-      this.#clearSpinnerLine()
+      this.#clearSpinnerLines()
     }
 
     this.#spinner = undefined
@@ -413,11 +436,31 @@ export class ProgressReporter {
     return this.mode === 'interactive' || this.mode === 'detailed'
   }
 
+  #formatWrappedLines (
+    message: string,
+    firstPrefix: string,
+    continuationPrefix: string,
+    style?: CliColor
+  ): string[] {
+    return wrapText(
+      message,
+      this.#columns - visibleLength(firstPrefix),
+      this.#columns - visibleLength(continuationPrefix)
+    ).map((line, index) => {
+      const prefix = index === 0 ? firstPrefix : continuationPrefix
+      return `${prefix}${style === undefined ? line : maybeColor(line, style, this.#color)}`
+    })
+  }
+
+  #writeLines (lines: readonly string[]): void {
+    for (const line of lines) this.#writeLine(line)
+  }
+
   #writeLine (message: string): void {
     const spinner = this.#spinner
 
     if (spinner !== undefined && spinner.tty) {
-      this.#clearSpinnerLine()
+      this.#clearSpinnerLines()
       this.#write(this.target, message)
       this.#renderSpinner()
       return
@@ -427,15 +470,22 @@ export class ProgressReporter {
   }
 
   #writeInteractiveLine (message: string): void {
+    this.#writeInteractiveLines([message])
+  }
+
+  #writeInteractiveLines (lines: readonly string[]): void {
     if (this.#isTTY && this.#renderedStepLineCount > 0) {
       this.#writeRaw(this.target, `\u001B[${this.#renderedStepLineCount}A\r\u001B[2K`)
-      this.#write(this.target, message)
+      lines.forEach((line, index) => {
+        if (index > 0) this.#writeRaw(this.target, '\r\u001B[2K')
+        this.#write(this.target, line)
+      })
       this.#renderedStepLineCount = 0
       this.#renderChecklist()
       return
     }
 
-    this.#writeLine(message)
+    this.#writeLines(lines)
   }
 
   #renderSpinner (): void {
@@ -444,12 +494,34 @@ export class ProgressReporter {
       return
     }
 
+    if (spinner.renderedRows > 1) {
+      this.#clearSpinnerLines()
+    } else {
+      spinner.renderedRows = 0
+    }
     const frame = this.#spinnerFrames[spinner.frameIndex % this.#spinnerFrames.length] ?? '◒'
-    this.#writeRaw(this.target, `\r\u001B[2K${promptRail(this.#color)}  ${maybeColor(frame, 'cyan', this.#color)} ${spinner.message}`)
+    const lines = this.#formatWrappedLines(
+      spinner.message,
+      `${promptRail(this.#color)}  ${maybeColor(frame, 'cyan', this.#color)} `,
+      `${promptRail(this.#color)}    `
+    )
+
+    lines.forEach((line, index) => {
+      const newline = index < lines.length - 1 ? '\n' : ''
+      this.#writeRaw(this.target, `\r\u001B[2K${line}${newline}`)
+    })
+    spinner.renderedRows = lines.length
   }
 
-  #clearSpinnerLine (): void {
+  #clearSpinnerLines (): void {
+    const spinner = this.#spinner
+    if (spinner === undefined || spinner.renderedRows === 0) return
+
     this.#writeRaw(this.target, '\r\u001B[2K')
+    for (let row = 1; row < spinner.renderedRows; row += 1) {
+      this.#writeRaw(this.target, '\u001B[1A\r\u001B[2K')
+    }
+    spinner.renderedRows = 0
   }
 
   #updateStep (id: string, state: ProgressStepState): ProgressStep | undefined {
@@ -478,7 +550,7 @@ export class ProgressReporter {
       return
     }
 
-    const lines = this.#steps.map((step) => this.#formatStep(step))
+    const lines = this.#steps.flatMap((step) => this.#formatStepLines(step))
 
     if (this.#isTTY) {
       if (this.#renderedStepLineCount > 0) {
@@ -501,9 +573,13 @@ export class ProgressReporter {
     }
   }
 
-  #formatStep (step: ProgressStep): string {
-    const label = step.state === 'skipped' ? maybeColor(step.label, 'dim', this.#color) : step.label
-    return `${promptRail(this.#color)}  ${this.#stepMark(step.state)} ${label}`
+  #formatStepLines (step: ProgressStep): string[] {
+    return this.#formatWrappedLines(
+      step.label,
+      `${promptRail(this.#color)}  ${this.#stepMark(step.state)} `,
+      `${promptRail(this.#color)}    `,
+      step.state === 'skipped' ? 'dim' : undefined
+    )
   }
 
   #stepMark (state: ProgressStepState): string {

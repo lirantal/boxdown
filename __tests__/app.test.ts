@@ -9136,6 +9136,70 @@ describe('progress output', () => {
     })
   })
 
+  test('wraps interactive progress details and hard-wraps workspace paths under the rail', () => {
+    const lines: string[] = []
+    const progress = createProgress({
+      mode: 'interactive',
+      columns: 24,
+      color: false,
+      write: (_target, message) => lines.push(message)
+    })
+    const path = '/Users/demo/projects/a-very-long-workspace'
+
+    progress.section('Boxdown setup with a long title')
+    progress.detail(`Workspace: ${path}`)
+    progress.item('Writing generated devcontainer configuration')
+    progress.end()
+
+    for (const line of lines) {
+      assert.ok(Array.from(line).length <= 24, line)
+    }
+    assert.ok(lines.filter((line) => line.startsWith('│  ')).length > 3)
+    assert.ok(lines.join('').replace(/[◆│└\s]/gu, '').includes(path))
+  })
+
+  test('redraws wrapped checklist steps using their physical row count', () => {
+    const raw: string[] = []
+    const progress = createProgress({
+      mode: 'interactive',
+      columns: 24,
+      isTTY: true,
+      color: false,
+      spinnerIntervalMs: 60_000,
+      writeRaw: (_target, message) => raw.push(message)
+    })
+
+    progress.setSteps([
+      { id: 'one', label: 'Writing generated devcontainer configuration' },
+      { id: 'two', label: 'Configuring SSH alias' }
+    ])
+    progress.startStep('one')
+
+    const cursorUps = raw.join('').match(/\u001B\[(\d+)A/gu) ?? []
+    assert.ok(cursorUps.some((entry) => Number(entry.match(/\d+/u)?.[0]) > 2))
+    progress.completeStep('one')
+    progress.end()
+  })
+
+  test('clears and redraws every row of a wrapped spinner', () => {
+    const raw: string[] = []
+    const progress = createProgress({
+      mode: 'interactive',
+      columns: 20,
+      isTTY: true,
+      color: false,
+      spinnerFrames: ['x'],
+      spinnerIntervalMs: 60_000,
+      writeRaw: (_target, message) => raw.push(message)
+    })
+
+    progress.startSpinner('Starting a deliberately long operation')
+    progress.tickSpinner()
+    progress.stopSpinner()
+
+    assert.ok(raw.join('').includes('\u001B[1A'))
+  })
+
   test('formats styled progress sections', () => {
     const lines: string[] = []
     const progress = createProgress({
