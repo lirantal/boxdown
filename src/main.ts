@@ -1554,7 +1554,7 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
           await (options.prepareContainerLifecycle ?? prepareContainerLifecycle)(context, alias, progress, options, logger, agentProfile.value)
           progress.startStep('ssh-alias')
           try {
-            await installSshConfig(context, alias, { quiet: true })
+            await installSshConfig(context, alias)
             progress.completeStep('ssh-alias')
           } catch (error) {
             progress.failStep('ssh-alias')
@@ -1601,7 +1601,7 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
           await (options.prepareContainerLifecycle ?? prepareContainerLifecycle)(context, alias, progress, options, logger, agentProfile.value)
           progress.startStep('ssh-alias')
           try {
-            await installSshConfig(context, alias, { quiet: true })
+            await installSshConfig(context, alias)
             progress.completeStep('ssh-alias')
           } catch (error) {
             progress.failStep('ssh-alias')

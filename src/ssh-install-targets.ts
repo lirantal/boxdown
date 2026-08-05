@@ -9,10 +9,8 @@ import type { AppInstallResult, InstallWarning } from './ssh-install-result.ts'
 
 export type SshConfigInstallTarget = 'codex' | 'claude' | 'cursor'
 
-export interface SshInstallTargetOptions {
+export interface SshUninstallTargetOptions {
   quiet?: boolean
-  writeEssential?: (message: string) => void
-  warn?: (message: string) => void
 }
 
 export interface SshInstallTargetDefinition {
@@ -21,12 +19,12 @@ export interface SshInstallTargetDefinition {
   description: string
   flag: string
   usesContainerAgentProfile: boolean
-  install: (context: WorkspaceContext, alias: string, options?: SshInstallTargetOptions) => Promise<AppInstallResult> | AppInstallResult
-  uninstall: (context: WorkspaceContext, alias: string, options?: SshInstallTargetOptions) => Promise<void> | void
-  uninstallWorkspace: (context: WorkspaceContext, aliases: readonly string[], options?: SshInstallTargetOptions) => Promise<void> | void
+  install: (context: WorkspaceContext, alias: string) => Promise<AppInstallResult> | AppInstallResult
+  uninstall: (context: WorkspaceContext, alias: string, options?: SshUninstallTargetOptions) => Promise<void> | void
+  uninstallWorkspace: (context: WorkspaceContext, aliases: readonly string[], options?: SshUninstallTargetOptions) => Promise<void> | void
 }
 
-function installCodexTarget (context: WorkspaceContext, alias: string, options: SshInstallTargetOptions = {}): AppInstallResult {
+function installCodexTarget (context: WorkspaceContext, alias: string): AppInstallResult {
   const entry = codexProjectEntryForWorkspace(context, alias)
   const legacyRemotePath = legacyCodexRemotePathForWorkspace(context)
   const result = installCodexAppConfigProject(entry, { legacyRemotePaths: [legacyRemotePath] })
@@ -49,29 +47,10 @@ function installCodexTarget (context: WorkspaceContext, alias: string, options: 
     ]
   }
 
-  if (options.quiet === true) {
-    return installResult
-  }
-
-  process.stdout.write(`\nCodex app config: ${result.configPath}\n`)
-  process.stdout.write(result.changed
-    ? `Installed Codex remote project: ${entry.label} (${entry.remotePath})\n`
-    : `Codex remote project already up to date: ${entry.label} (${entry.remotePath})\n`)
-
-  if (result.backupPath !== undefined) {
-    process.stdout.write(`Codex app config backup: ${result.backupPath}\n`)
-  }
-
-  if (stateResult.backupPath !== undefined) {
-    process.stdout.write(`Codex app state backup: ${stateResult.backupPath}\n`)
-  }
-
-  process.stdout.write('Restart Codex to apply the remote project entry.\n')
-
   return installResult
 }
 
-function uninstallCodexTarget (context: WorkspaceContext, alias: string, options: SshInstallTargetOptions = {}): void {
+function uninstallCodexTarget (context: WorkspaceContext, alias: string, options: SshUninstallTargetOptions = {}): void {
   const entry = codexProjectEntryForWorkspace(context, alias)
   const legacyRemotePath = legacyCodexRemotePathForWorkspace(context)
   const result = uninstallCodexAppConfigProject(entry, {
@@ -109,7 +88,7 @@ function uninstallCodexTarget (context: WorkspaceContext, alias: string, options
   process.stdout.write('Restart Codex to apply the remote project removal.\n')
 }
 
-function installClaudeTarget (context: WorkspaceContext, alias: string, options: SshInstallTargetOptions = {}): AppInstallResult {
+function installClaudeTarget (context: WorkspaceContext, alias: string): AppInstallResult {
   const entry = claudeSshConfigEntryForWorkspace(context, alias)
   const result = installClaudeSshConfigHost(entry)
   const installResult: AppInstallResult = {
@@ -127,25 +106,10 @@ function installClaudeTarget (context: WorkspaceContext, alias: string, options:
     ]
   }
 
-  if (options.quiet === true) {
-    return installResult
-  }
-
-  process.stdout.write(`\nClaude SSH config: ${result.configPath}\n`)
-  process.stdout.write(result.changed
-    ? `Installed Claude SSH remote: ${entry.name} (${entry.sshHost})\n`
-    : `Claude SSH remote already up to date: ${entry.name} (${entry.sshHost})\n`)
-
-  if (result.backupPath !== undefined) {
-    process.stdout.write(`Claude SSH config backup: ${result.backupPath}\n`)
-  }
-
-  process.stdout.write('Restart Claude to apply the SSH remote entry.\n')
-
   return installResult
 }
 
-function uninstallClaudeTarget (context: WorkspaceContext, alias: string, options: SshInstallTargetOptions = {}): void {
+function uninstallClaudeTarget (context: WorkspaceContext, alias: string, options: SshUninstallTargetOptions = {}): void {
   const entry = claudeSshConfigEntryForWorkspace(context, alias)
   const result = uninstallClaudeSshConfigHost(entry)
 
@@ -163,16 +127,6 @@ function uninstallClaudeTarget (context: WorkspaceContext, alias: string, option
   }
 
   process.stdout.write('Restart Claude to apply the SSH remote removal.\n')
-}
-
-function cursorDispositionMessage (alias: string, result: CursorInstallResult): string {
-  if (result.disposition === 'installed') {
-    return `Installed Cursor Linux platform mapping: ${alias}\n`
-  }
-  if (result.disposition === 'already-boxdown-managed') {
-    return `Cursor Linux platform mapping already managed: ${alias}\n`
-  }
-  return `Preserved user-owned Cursor Linux platform mapping: ${alias}\n`
 }
 
 function cursorUninstallMessage (alias: string, result: CursorUninstallResult): string {
@@ -256,28 +210,7 @@ function cursorInstallSummary (disposition: AppInstallResult['disposition']): st
   return 'Cursor already compatible'
 }
 
-function emitCursorWarnings (warnings: readonly InstallWarning[], warn?: (message: string) => void): void {
-  const writeWarning = warn ?? ((message: string) => process.stderr.write(`Warning: ${message}\n`))
-  for (const warning of warnings) {
-    if (warning.message === 'Cursor CLI was not found; install Cursor before opening the remote workspace.') {
-      writeWarning('Cursor CLI was not found; install Cursor and the anysphere.remote-ssh extension before opening the remote workspace.')
-      continue
-    }
-    if (warning.message.startsWith('Could not verify Cursor Remote SSH: ') && warning.remediation?.command !== undefined) {
-      const reason = warning.message.slice('Could not verify Cursor Remote SSH: '.length)
-      writeWarning(`Could not verify the Cursor Remote SSH extension (anysphere.remote-ssh): ${reason}`)
-      writeWarning(`Install it if needed with: ${warning.remediation.command}`)
-      continue
-    }
-    writeWarning(warning.message)
-    if (warning.remediation !== undefined) {
-      writeWarning(warning.remediation.label)
-      if (warning.remediation.command !== undefined) writeWarning(warning.remediation.command)
-    }
-  }
-}
-
-async function installCursorTarget (context: WorkspaceContext, alias: string, options: SshInstallTargetOptions = {}): Promise<AppInstallResult> {
+async function installCursorTarget (context: WorkspaceContext, alias: string): Promise<AppInstallResult> {
   const result = await installCursorSshTarget(context, alias)
   const warnings = await cursorRemoteSshPrerequisiteWarnings()
   const disposition = cursorInstallDisposition(result)
@@ -308,27 +241,10 @@ async function installCursorTarget (context: WorkspaceContext, alias: string, op
         : [])
     ]
   }
-  const writeEssential = options.writeEssential ?? ((message: string) => process.stdout.write(`${message}\n`))
-
-  if (options.quiet !== true) {
-    process.stdout.write('\n')
-    process.stdout.write(cursorDispositionMessage(alias, result))
-  }
-  if (options.quiet !== true || options.writeEssential !== undefined) {
-    writeEssential(`Cursor settings: ${result.settingsPath}`)
-    writeEssential(`Cursor remote folder URI: ${result.folderUri}`)
-    writeEssential(`Cursor open command${result.commandLabel === undefined ? '' : ` (${result.commandLabel})`}: ${result.command}`)
-    writeEssential('Refresh Cursor Remote Explorer or restart Cursor if the SSH alias is not visible.')
-  }
-
-  if (options.quiet !== true || options.warn !== undefined) {
-    emitCursorWarnings(installResult.warnings, options.warn)
-  }
-
   return installResult
 }
 
-async function uninstallCursorTarget (context: WorkspaceContext, alias: string, options: SshInstallTargetOptions = {}): Promise<void> {
+async function uninstallCursorTarget (context: WorkspaceContext, alias: string, options: SshUninstallTargetOptions = {}): Promise<void> {
   const results = await uninstallCursorSshTarget(context, alias)
   warnAboutCursorCleanupUncertainty(context, results)
   if (options.quiet === true) return
@@ -340,7 +256,7 @@ async function uninstallCursorTarget (context: WorkspaceContext, alias: string, 
   printCursorUninstallResults(results)
 }
 
-async function uninstallCursorWorkspace (context: WorkspaceContext, _aliases: readonly string[], options: SshInstallTargetOptions = {}): Promise<void> {
+async function uninstallCursorWorkspace (context: WorkspaceContext, _aliases: readonly string[], options: SshUninstallTargetOptions = {}): Promise<void> {
   const results = await uninstallCursorWorkspaceTarget(context)
   warnAboutCursorCleanupUncertainty(context, results)
   if (options.quiet === true) return
@@ -413,8 +329,7 @@ export function sshInstallTargetsUseContainerAgentProfile (targets: readonly Ssh
 export async function installSshInstallTarget (
   context: WorkspaceContext,
   alias: string,
-  targetValue: SshConfigInstallTarget,
-  options: SshInstallTargetOptions = {}
+  targetValue: SshConfigInstallTarget
 ): Promise<AppInstallResult> {
   const target = SSH_INSTALL_TARGETS.find((candidate) => candidate.value === targetValue)
 
@@ -422,14 +337,14 @@ export async function installSshInstallTarget (
     throw new Error(`Unsupported ssh install target: ${targetValue}`)
   }
 
-  return await target.install(context, alias, options)
+  return await target.install(context, alias)
 }
 
 export async function uninstallSshInstallTarget (
   context: WorkspaceContext,
   alias: string,
   targetValue: SshConfigInstallTarget,
-  options: SshInstallTargetOptions = {}
+  options: SshUninstallTargetOptions = {}
 ): Promise<void> {
   const target = SSH_INSTALL_TARGETS.find((candidate) => candidate.value === targetValue)
 
@@ -444,7 +359,7 @@ export async function uninstallWorkspaceSshInstallTarget (
   context: WorkspaceContext,
   aliases: readonly string[],
   targetValue: SshConfigInstallTarget,
-  options: SshInstallTargetOptions = {}
+  options: SshUninstallTargetOptions = {}
 ): Promise<void> {
   const target = SSH_INSTALL_TARGETS.find((candidate) => candidate.value === targetValue)
 

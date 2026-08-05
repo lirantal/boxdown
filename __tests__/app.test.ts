@@ -3653,7 +3653,7 @@ describe('CLI execution', () => {
     assert.deepStrictEqual(report.failures, [])
   })
 
-  test('setup workflow uses progress-aware quiet installs', async () => {
+  test('setup workflow uses progress-aware structured installs', async () => {
     const workspace = tempDir('setup-progress-workspace')
     const context = createWorkspaceContext({
       workspace,
@@ -3688,7 +3688,7 @@ describe('CLI execution', () => {
       installSsh: async (receivedContext, receivedAlias, installOptions) => {
         assert.strictEqual(receivedContext, context)
         assert.strictEqual(receivedAlias, alias)
-        assert.deepStrictEqual(installOptions, { quiet: true })
+        assert.strictEqual(installOptions, undefined)
         calls.push('ssh')
         return setupSshResult(alias)
       },
@@ -3696,7 +3696,7 @@ describe('CLI execution', () => {
         assert.strictEqual(receivedContext, context)
         assert.strictEqual(receivedAlias, alias)
         assert.strictEqual(target, 'codex')
-        assert.deepStrictEqual(installOptions, { quiet: true })
+        assert.strictEqual(installOptions, undefined)
         calls.push('codex')
         return setupAppResult('codex')
       }
@@ -3707,7 +3707,7 @@ describe('CLI execution', () => {
     assert.ok(lines.some((line) => line.includes('Configuring ChatGPT app')))
   })
 
-  test('setup workflow uses structured progress and quiet installs in detailed mode', async () => {
+  test('setup workflow uses structured progress and installs in detailed mode', async () => {
     const workspace = tempDir('setup-detailed-progress-workspace')
     const context = createWorkspaceContext({
       workspace,
@@ -3739,13 +3739,13 @@ describe('CLI execution', () => {
         return 'setup-container'
       },
       installSsh: async (_receivedContext, _receivedAlias, installOptions) => {
-        assert.deepStrictEqual(installOptions, { quiet: true })
+        assert.strictEqual(installOptions, undefined)
         calls.push('ssh')
         return setupSshResult(alias)
       },
       installTarget: async (_receivedContext, _receivedAlias, target, installOptions) => {
         assert.strictEqual(target, 'codex')
-        assert.deepStrictEqual(installOptions, { quiet: true })
+        assert.strictEqual(installOptions, undefined)
         calls.push('codex')
         return setupAppResult('codex')
       }
@@ -5416,9 +5416,9 @@ describe('CLI execution', () => {
     writeFileSync(context.generatedConfigPath, '{}\n')
     writeWorkspaceMetadata(context, recordedAlias)
     writeFileSync(env.BOXDOWN_SSH_CONFIG, 'Host github.com\n  User git\n')
-    await installSshConfig(context, defaultAlias, { quiet: true, configPath: env.BOXDOWN_SSH_CONFIG })
-    await installSshConfig(context, recordedAlias, { quiet: true, configPath: env.BOXDOWN_SSH_CONFIG })
-    await installSshConfig(context, providedAlias, { quiet: true, configPath: env.BOXDOWN_SSH_CONFIG })
+    await installSshConfig(context, defaultAlias, { configPath: env.BOXDOWN_SSH_CONFIG })
+    await installSshConfig(context, recordedAlias, { configPath: env.BOXDOWN_SSH_CONFIG })
+    await installSshConfig(context, providedAlias, { configPath: env.BOXDOWN_SSH_CONFIG })
     installCodexAppConfigProject(codexProjectEntryForWorkspace(context, defaultAlias), { configPath: env.BOXDOWN_CODEX_APP_CONFIG })
     installCodexAppConfigProject(codexProjectEntryForWorkspace(context, recordedAlias), { configPath: env.BOXDOWN_CODEX_APP_CONFIG })
     installCodexAppConfigProject(codexProjectEntryForWorkspace(context, providedAlias), { configPath: env.BOXDOWN_CODEX_APP_CONFIG })
@@ -12494,7 +12494,7 @@ describe('SSH config generation', () => {
     assert.throws(() => removeSshConfigBlock(overlapping, alias), /overlapping/)
 
     writeFileSync(sshConfigPath, overlapping)
-    await assert.rejects(async () => installSshConfig(context, alias, { quiet: true, configPath: sshConfigPath }), /overlapping/)
+    await assert.rejects(async () => installSshConfig(context, alias, { configPath: sshConfigPath }), /overlapping/)
     assert.throws(() => uninstallSshConfig(alias, { quiet: true, configPath: sshConfigPath }), /overlapping/)
     assert.strictEqual(readFileSync(sshConfigPath, 'utf8'), overlapping)
   })
@@ -12568,7 +12568,7 @@ describe('SSH config generation', () => {
     const alias = defaultSshAlias(context.workspaceBasename)
     const sshConfigPath = join(tempDir('ssh-uninstall-config'), 'config')
 
-    await installSshConfig(context, alias, { quiet: true, configPath: sshConfigPath })
+    await installSshConfig(context, alias, { configPath: sshConfigPath })
 
     assert.strictEqual(uninstallSshConfig(alias, { quiet: true, configPath: sshConfigPath }), true)
     assert.strictEqual(readFileSync(sshConfigPath, 'utf8'), '')
@@ -13404,8 +13404,8 @@ describe('Codex app config injection', () => {
     const sshConfigPath = join(tempDir('codex-idempotent-ssh'), 'config')
     const codexConfigPath = join(tempDir('codex-idempotent-app'), 'config.json')
 
-    await installSshConfig(context, alias, { quiet: true, configPath: sshConfigPath })
-    await installSshConfig(context, alias, { quiet: true, configPath: sshConfigPath })
+    await installSshConfig(context, alias, { configPath: sshConfigPath })
+    await installSshConfig(context, alias, { configPath: sshConfigPath })
     installCodexAppConfigProject(codexProjectEntryForWorkspace(context, alias), { configPath: codexConfigPath })
     installCodexAppConfigProject(codexProjectEntryForWorkspace(context, alias), { configPath: codexConfigPath })
 

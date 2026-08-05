@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync } from 'node:fs'
+import { chmodSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { describe, test } from 'node:test'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -23,6 +23,20 @@ import {
 
 function tempInstallDir (name: string): string {
   return mkdtempSync(join(tmpdir(), `boxdown-result-${name}-`))
+}
+
+function installedCursorCli (): string {
+  const binDir = tempInstallDir('cursor-bin')
+  const cursorPath = join(binDir, 'cursor')
+  writeFileSync(cursorPath, '#!/usr/bin/env bash\nprintf "%s\\n" "anysphere.remote-ssh"\n')
+  chmodSync(cursorPath, 0o755)
+  return binDir
+}
+
+function captureTerminalText (chunks: string[], chunk: string | Uint8Array): boolean {
+  const text = String(chunk)
+  if (/^[\t\n\r -~]*$/u.test(text)) chunks.push(text)
+  return true
 }
 
 async function withInstallEnvironment<T> (
@@ -249,8 +263,8 @@ test('maps SSH install and idempotent reinstall to structured results', async ()
     }
   })
   const alias = `${context.workspaceBasename}-devcontainer`
-  const first = await installSshConfig(context, alias, { quiet: true, configPath: sshConfigPath })
-  const second = await installSshConfig(context, alias, { quiet: true, configPath: sshConfigPath })
+  const first = await installSshConfig(context, alias, { configPath: sshConfigPath })
+  const second = await installSshConfig(context, alias, { configPath: sshConfigPath })
 
   assert.strictEqual(first.disposition, 'installed')
   assert.strictEqual(first.summary, 'SSH alias configured')
@@ -259,6 +273,59 @@ test('maps SSH install and idempotent reinstall to structured results', async ()
   assert.strictEqual(first.validationCommand, `ssh ${alias} 'whoami && pwd'`)
   assert.strictEqual(second.disposition, 'already-current')
   assert.strictEqual(second.summary, 'SSH alias already configured')
+})
+
+test('keeps direct SSH and app installs presentation-free', async () => {
+  const workspace = tempInstallDir('silent-installs-workspace')
+  const context = createWorkspaceContext({
+    workspace,
+    env: {
+      HOME: tempInstallDir('silent-installs-home'),
+      BOXDOWN_DATA_HOME: tempInstallDir('silent-installs-data')
+    }
+  })
+  const alias = `${context.workspaceBasename}-devcontainer`
+  const sshConfigPath = join(tempInstallDir('silent-installs-ssh'), 'config')
+  const cursorBinDir = installedCursorCli()
+  const stdout: string[] = []
+  const stderr: string[] = []
+  const originalStdoutWrite = process.stdout.write
+  const originalStderrWrite = process.stderr.write
+
+  await withInstallEnvironment({
+    HOME: tempInstallDir('silent-installs-apps-home'),
+    BOXDOWN_CODEX_APP_CONFIG: join(tempInstallDir('silent-installs-codex'), 'config.json'),
+    BOXDOWN_CODEX_GLOBAL_STATE: join(tempInstallDir('silent-installs-codex-state'), 'state.json'),
+    BOXDOWN_CLAUDE_SSH_CONFIGS: join(tempInstallDir('silent-installs-claude'), 'ssh_configs.json'),
+    BOXDOWN_CURSOR_SETTINGS: join(tempInstallDir('silent-installs-cursor'), 'settings.json'),
+    BOXDOWN_HOST_PATH_PREFIX: cursorBinDir
+  }, async () => {
+    process.stdout.write = ((chunk: string | Uint8Array) => {
+      return captureTerminalText(stdout, chunk)
+    }) as typeof process.stdout.write
+    process.stderr.write = ((chunk: string | Uint8Array) => {
+      return captureTerminalText(stderr, chunk)
+    }) as typeof process.stderr.write
+
+    try {
+      const ssh = await installSshConfig(context, alias, { configPath: sshConfigPath })
+      const chatgpt = await installSshInstallTarget(context, alias, 'codex')
+      const claude = await installSshInstallTarget(context, alias, 'claude')
+      const cursor = await installSshInstallTarget(context, alias, 'cursor')
+
+      assert.strictEqual(ssh.kind, 'ssh')
+      assert.strictEqual(chatgpt.kind, 'app')
+      assert.strictEqual(claude.kind, 'app')
+      assert.strictEqual(cursor.kind, 'app')
+      assert.deepStrictEqual(cursor.warnings, [])
+    } finally {
+      process.stdout.write = originalStdoutWrite
+      process.stderr.write = originalStderrWrite
+    }
+  })
+
+  assert.deepStrictEqual(stdout, [])
+  assert.deepStrictEqual(stderr, [])
 })
 
 test('maps ChatGPT and Claude installs to the common app contract', async () => {
@@ -282,8 +349,8 @@ test('maps ChatGPT and Claude installs to the common app contract', async () => 
     BOXDOWN_CODEX_GLOBAL_STATE: chatgptStatePath,
     BOXDOWN_CLAUDE_SSH_CONFIGS: claudeConfigPath
   }, async () => ({
-    chatgpt: await installSshInstallTarget(context, alias, 'codex', { quiet: true }),
-    claude: await installSshInstallTarget(context, alias, 'claude', { quiet: true })
+    chatgpt: await installSshInstallTarget(context, alias, 'codex'),
+    claude: await installSshInstallTarget(context, alias, 'claude')
   }))
 
   assert.deepStrictEqual({ target: chatgpt.target, label: chatgpt.appLabel, disposition: chatgpt.disposition }, {

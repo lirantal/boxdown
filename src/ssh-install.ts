@@ -50,7 +50,7 @@ export async function installRemoteAccess (
 
   progress?.startStep('ssh-alias')
   try {
-    report.ssh = await installSsh(context, alias, { quiet: true })
+    report.ssh = await installSsh(context, alias)
     progress?.completeStep('ssh-alias')
   } catch (error) {
     progress?.failStep('ssh-alias')
@@ -79,7 +79,7 @@ export async function installRemoteAccess (
     const stepId = `ssh-target:${target}`
     progress?.startStep(stepId)
     try {
-      report.apps.push(await installTarget(context, alias, target, { quiet: true }))
+      report.apps.push(await installTarget(context, alias, target))
       progress?.completeStep(stepId)
     } catch (error) {
       progress?.failStep(stepId)

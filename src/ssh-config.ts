@@ -185,9 +185,9 @@ export function removeSshConfigBlock (existingConfig: string, alias: string): st
   return nextLines.length > 0 ? `${nextLines.join('\n')}\n` : ''
 }
 
-export async function installSshConfig (context: WorkspaceContext, alias: string, options: { quiet?: boolean, configPath?: string } = {}): Promise<SshAliasInstallResult> {
+export async function installSshConfig (context: WorkspaceContext, alias: string, options: { configPath?: string } = {}): Promise<SshAliasInstallResult> {
   validateSshAlias(alias)
-  await ensureHostSshKey(context, options.quiet ?? false)
+  await ensureHostSshKey(context, true)
 
   const sshConfigPath = options.configPath ?? defaultSshConfigPath()
   const sshConfigDir = dirname(sshConfigPath)
@@ -223,20 +223,9 @@ export async function installSshConfig (context: WorkspaceContext, alias: string
 
   if (changed) {
     writeFileAtomic(sshConfigPath, nextConfig, 0o600)
-    if (!options.quiet) {
-      process.stdout.write(`Installed SSH alias: ${alias}\n`)
-    }
-  } else if (!options.quiet) {
-    process.stdout.write(`SSH alias already up to date: ${alias}\n`)
   }
 
   chmodSync(sshConfigPath, 0o600)
-
-  if (!options.quiet) {
-    process.stdout.write(`SSH config: ${sshConfigPath}\n`)
-    process.stdout.write(`Identity file: ${context.sshKeyPath}\n\n`)
-    process.stdout.write(`Validate with:\n  ${validationCommand}\n`)
-  }
 
   return result
 }
