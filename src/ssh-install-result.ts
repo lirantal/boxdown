@@ -85,51 +85,72 @@ export interface WriteRemoteAccessInstallReportOptions extends Omit<FormatRemote
 
 interface ReportAction {
   action: InstallAction
-  message?: string
 }
 
 function visibleLength (value: string): number {
   return value.replace(/\u001B\[[0-?]*[ -/]*[@-~]/gu, '').length
 }
 
-function wrapWords (value: string, width: number): string[] {
+function wrapWithPrefixes (
+  value: string,
+  firstPrefix: string,
+  continuationPrefix: string,
+  columns: number,
+  styleLine: (line: string) => string = (line) => line
+): string[] {
   const words = value.trim().split(/\s+/u).filter(Boolean)
   if (words.length === 0) return []
 
   const lines: string[] = []
   let line = ''
+  let prefix = firstPrefix
   for (const word of words) {
     const candidate = line.length === 0 ? word : `${line} ${word}`
-    if (line.length > 0 && visibleLength(candidate) > width) {
-      lines.push(line)
+    if (line.length > 0 && visibleLength(prefix) + visibleLength(candidate) > columns) {
+      lines.push(`${prefix}${styleLine(line)}`)
+      prefix = continuationPrefix
       line = word
     } else {
       line = candidate
     }
   }
-  if (line.length > 0) lines.push(line)
+  if (line.length > 0) lines.push(`${prefix}${styleLine(line)}`)
   return lines
 }
 
 function indentedProse (value: string, indent: string, columns: number): string[] {
-  const lines = wrapWords(value, Math.max(1, columns - visibleLength(indent)))
-  return lines.map((line, index) => index === 0 ? line : `${indent}${line}`)
+  return wrapWithPrefixes(value, '', indent, columns)
 }
 
-function actionLines (action: InstallAction, indent: string, useDisplayLines: boolean): string[] {
-  const lines = [`${indent}${action.label}`]
-  if (action.commandLabel !== undefined) lines.push(`${indent}${action.commandLabel}`)
+function actionLines (
+  action: InstallAction,
+  firstPrefix: string,
+  continuationPrefix: string,
+  valueIndent: string,
+  useDisplayLines: boolean,
+  columns: number,
+  colorEnabled: boolean
+): string[] {
+  const lines = wrapWithPrefixes(action.label, firstPrefix, continuationPrefix, columns)
+  if (action.commandLabel !== undefined) {
+    lines.push(...wrapWithPrefixes(action.commandLabel, valueIndent, `${valueIndent}  `, columns))
+  }
 
   const commandLines = useDisplayLines
     ? action.displayLines ?? (action.command === undefined ? [] : [action.command])
     : action.command === undefined ? action.displayLines ?? [] : [action.command]
-  for (const line of commandLines) lines.push(`${indent}  ${line}`)
+  for (const line of commandLines) {
+    lines.push(`${valueIndent}${styled(line, 'cyan', colorEnabled)}`)
+  }
   return lines
 }
 
-function detailLines (details: readonly InstallDetail[], verbose: boolean): string[] {
+function detailLines (details: readonly InstallDetail[], verbose: boolean, columns: number): string[] {
   if (!verbose) return []
-  return details.map((detail) => `${detail.label}: ${detail.value}`)
+  return details.flatMap((detail) => [
+    ...wrapWithPrefixes(`${detail.label}:`, '', '  ', columns),
+    `  ${detail.value}`
+  ])
 }
 
 function statusMark (status: 'success' | 'warning' | 'failure' | 'skipped', enabled: boolean): string {
@@ -140,6 +161,21 @@ function statusMark (status: 'success' | 'warning' | 'failure' | 'skipped', enab
 
 function styled (value: string, style: CliColor, enabled: boolean): string {
   return maybeColor(value, style, enabled)
+}
+
+function statusLines (
+  status: 'success' | 'warning' | 'failure' | 'skipped',
+  message: string,
+  options: Pick<FormatRemoteAccessInstallReportOptions, 'columns' | 'color'>,
+  messageStyle?: CliColor
+): string[] {
+  return wrapWithPrefixes(
+    message,
+    `${statusMark(status, options.color)} `,
+    '  ',
+    options.columns,
+    (line) => messageStyle === undefined ? line : styled(line, messageStyle, options.color)
+  )
 }
 
 function resultLabel (label: string): string {
@@ -165,7 +201,7 @@ function reportActions (report: RemoteAccessInstallReport): ReportAction[] {
   for (const app of report.apps) {
     if (failedAppTargets.has(app.target)) continue
     for (const warning of app.warnings) {
-      if (warning.remediation !== undefined) actions.push({ action: warning.remediation, message: warning.message })
+      if (warning.remediation !== undefined) actions.push({ action: warning.remediation })
     }
     actions.push({ action: app.action })
   }
@@ -187,9 +223,9 @@ export function formatRemoteAccessInstallReport (
   if (options.interactive) lines.push('')
 
   if (!options.interactive) {
-    if (report.ssh !== undefined) lines.push(`${statusMark('success', options.color)} ${report.ssh.summary}`)
-    for (const app of report.apps) lines.push(`${statusMark(app.warnings.length > 0 ? 'warning' : 'success', options.color)} ${app.summary}`)
-    for (const skipped of report.skipped) lines.push(`${statusMark('skipped', options.color)} ${resultLabel(skipped.label)} skipped`)
+    if (report.ssh !== undefined) lines.push(...statusLines('success', report.ssh.summary, options))
+    for (const app of report.apps) lines.push(...statusLines(app.warnings.length > 0 ? 'warning' : 'success', app.summary, options))
+    for (const skipped of report.skipped) lines.push(...statusLines('skipped', `${resultLabel(skipped.label)} skipped`, options))
     if (lines.length > 0) lines.push('')
   }
 
@@ -198,7 +234,7 @@ export function formatRemoteAccessInstallReport (
     ? `${options.outcomeLabel} incomplete`
     : hasWarnings ? `${options.outcomeLabel} complete with warnings` : `${options.outcomeLabel} complete`
   const outcomeStyle: CliColor = outcomeStatus === 'success' ? 'green' : outcomeStatus === 'warning' ? 'yellow' : 'red'
-  lines.push(`${statusMark(outcomeStatus, options.color)} ${styled(outcomeText, outcomeStyle, options.color)}`)
+  lines.push(...statusLines(outcomeStatus, outcomeText, options, outcomeStyle))
 
   for (const notice of report.notices) {
     lines.push(...indentedProse(notice.message, '  ', options.columns))
@@ -207,37 +243,42 @@ export function formatRemoteAccessInstallReport (
   if (report.notices.length > 0 && (hasFailures || report.skipped.length > 0 || reportActions(report).length > 0 || options.verbose)) lines.push('')
 
   for (const failure of report.failures) {
-    lines.push(`${statusMark('failure', options.color)} ${failureTitle(failure)}`)
+    lines.push(...statusLines('failure', failureTitle(failure), options))
     lines.push(...indentedProse(failure.message, '  ', options.columns))
   }
   for (const skipped of report.skipped) {
-    lines.push(`${statusMark('skipped', options.color)} ${resultLabel(skipped.label)} skipped`)
+    lines.push(...statusLines('skipped', `${resultLabel(skipped.label)} skipped`, options))
     lines.push(...indentedProse(skipped.reason, '  ', options.columns))
+  }
+  for (const app of report.apps) {
+    for (const warning of app.warnings) {
+      lines.push(...statusLines('warning', warning.message, options))
+    }
   }
 
   const actions = reportActions(report)
-  if ((hasFailures || report.skipped.length > 0) && actions.length > 0) lines.push('')
+  if ((hasFailures || hasWarnings || report.skipped.length > 0) && actions.length > 0) lines.push('')
   if (actions.length > 0) {
     lines.push(styled(actions.length === 1 ? 'Next step' : 'Next steps', 'bold', options.color))
     for (const [index, entry] of actions.entries()) {
-      const prefix = actions.length === 1 ? '' : `${index + 1}. `
-      if (entry.message !== undefined) lines.push(...indentedProse(entry.message, '  ', options.columns))
-      const action = prefix.length === 0
-        ? actionLines(entry.action, '', options.interactive)
-        : actionLines({ ...entry.action, label: `${prefix}${entry.action.label}` }, '  ', options.interactive)
-      const commandStart = entry.action.commandLabel === undefined ? 1 : 2
-      lines.push(...action.map((line, lineIndex) => {
-        if (lineIndex === 0) return line
-        const leading = actions.length === 1 ? '  ' : '    '
-        const content = line.trimStart()
-        return `${leading}${lineIndex >= commandStart ? styled(content, 'cyan', options.color) : content}`
-      }))
+      const firstPrefix = actions.length === 1 ? '' : `  ${index + 1}. `
+      const continuationPrefix = ' '.repeat(visibleLength(firstPrefix) + (actions.length === 1 ? 2 : 0))
+      const valueIndent = actions.length === 1 ? '  ' : '    '
+      lines.push(...actionLines(
+        entry.action,
+        firstPrefix,
+        continuationPrefix,
+        valueIndent,
+        options.interactive,
+        options.columns,
+        options.color
+      ))
     }
   }
 
   const details = [
-    ...(report.ssh === undefined ? [] : detailLines(report.ssh.details, options.verbose)),
-    ...report.apps.flatMap((app) => detailLines(app.details, options.verbose))
+    ...(report.ssh === undefined ? [] : detailLines(report.ssh.details, options.verbose, options.columns)),
+    ...report.apps.flatMap((app) => detailLines(app.details, options.verbose, options.columns))
   ]
   if (details.length > 0) {
     if (actions.length > 0) lines.push('')
@@ -265,10 +306,11 @@ export function writeRemoteAccessInstallReport (
     : options.progress.mode === 'interactive'
   const env = options.env ?? process.env
   const color = interactive && env.NO_COLOR === undefined
+  const railWidth = options.progress?.mode === 'interactive' ? visibleLength('│  ') : 0
   const formatted = formatRemoteAccessInstallReport(report, {
     outcomeLabel: options.outcomeLabel,
     interactive,
-    columns: output.columns ?? 80,
+    columns: Math.max(1, (output.columns ?? 80) - railWidth),
     verbose: options.verbose,
     color
   })

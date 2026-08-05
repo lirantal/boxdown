@@ -4,6 +4,7 @@ import { describe, test } from 'node:test'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
+import { color } from '../src/cli-style.ts'
 import { createWorkspaceContext } from '../src/paths.ts'
 import { createProgress, type ProgressReporter } from '../src/progress.ts'
 import { installSshConfig } from '../src/ssh-config.ts'
@@ -120,11 +121,25 @@ describe('remote access install result rendering', () => {
     assert.doesNotMatch(output, /Identity file/)
   })
 
+  test('renders a warning without remediation as an explicit warning row and keeps exit zero', () => {
+    const report = successfulCursorReport()
+    report.apps[0]?.warnings.push({ message: 'Cursor Remote SSH extension could not be verified' })
+
+    const output = formatRemoteAccessInstallReport(report, { outcomeLabel: 'Configuration', interactive: true, columns: 80, verbose: false, color: true })
+
+    assert.ok(output.includes(`${color('!', 'yellow')} Cursor Remote SSH extension could not be verified`))
+    assert.strictEqual(output.split('Cursor Remote SSH extension could not be verified').length - 1, 1)
+    assert.strictEqual(remoteAccessExitCode(report), 0)
+  })
+
   test('renders warning remediation before the app action and keeps exit zero', () => {
     const report = successfulCursorReport()
-    report.apps[0]?.warnings.push({ message: 'Cursor Remote SSH extension is not installed', remediation: { label: 'Install Cursor Remote SSH:', command: 'cursor --install-extension anysphere.remote-ssh' } })
+    const warning = 'Cursor Remote SSH extension is not installed'
+    report.apps[0]?.warnings.push({ message: warning, remediation: { label: 'Install Cursor Remote SSH:', command: 'cursor --install-extension anysphere.remote-ssh' } })
     const output = formatRemoteAccessInstallReport(report, { outcomeLabel: 'Configuration', interactive: false, columns: 80, verbose: false, color: false })
     assert.match(output, /Configuration complete with warnings/)
+    assert.match(output, /! Cursor Remote SSH extension is not installed/)
+    assert.strictEqual(output.split(warning).length - 1, 1)
     assert.ok(output.indexOf('cursor --install-extension') < output.indexOf('cursor --folder-uri'))
     assert.strictEqual(remoteAccessExitCode(report), 0)
   })
@@ -175,6 +190,7 @@ describe('remote access install result rendering', () => {
 
     const output = formatRemoteAccessInstallReport(report, { outcomeLabel: 'Configuration', interactive: false, columns: 80, verbose: false, color: false })
 
+    assert.strictEqual(output.split('Cursor Remote SSH extension is not installed').length - 1, 1)
     assert.doesNotMatch(output, /cursor --install-extension/)
     assert.doesNotMatch(output, /cursor --folder-uri/)
     assert.match(output, /codex --remote ssh:\/\/demo-devcontainer\/workspaces\/demo/)
@@ -190,6 +206,18 @@ describe('remote access install result rendering', () => {
     assert.match(verbose, /Identity file/)
     assert.match(verbose, /Cursor settings/)
     assert.match(verbose, /Cursor remote folder URI/)
+  })
+
+  test('renders verbose detail labels above dedicated intact value lines', () => {
+    const report = successfulCursorReport()
+    const longPath = '/Users/demo/Library/Application Support/Cursor/User/a-deliberately-long-settings-file-name-that-must-remain-intact.json'
+    report.apps[0]?.details.splice(0, 1, { label: 'Cursor settings', value: longPath })
+
+    const output = formatRemoteAccessInstallReport(report, { outcomeLabel: 'Configuration', interactive: true, columns: 32, verbose: true, color: false })
+
+    assert.ok(output.includes(`Cursor settings:\n  ${longPath}\n`))
+    assert.doesNotMatch(output, /Cursor settings: \/Users/u)
+    assert.ok(output.split('\n').includes(`  ${longPath}`))
   })
 
   test('wraps prose but never truncates a dedicated long value', () => {
@@ -217,6 +245,33 @@ describe('remote access install result rendering', () => {
     assert.match(plain, /│ {4}cursor --folder-uri/)
     assert.ok(plain.trimEnd().endsWith('└'))
     assert.doesNotMatch(lines.join('\n'), /\u001B\[/)
+  })
+
+  test('fits wrappable report lines inside the rail and hangs wrapped action labels', () => {
+    const columns = 32
+    const report = successfulCursorReport()
+    report.notices.push({ message: 'No optional app integrations were selected in this interactive terminal.' })
+    const app = report.apps[0]
+    assert.notStrictEqual(app, undefined)
+    if (app === undefined) return
+    app.action = {
+      ...app.action,
+      label: 'Open this deliberately long project in Cursor after checking prerequisites:'
+    }
+    app.details[1] = {
+      label: 'Cursor remote folder URI diagnostic detail',
+      value: 'vscode-remote://ssh-remote+demo-devcontainer/workspaces/demo'
+    }
+    const lines: string[] = []
+    const output = { isTTY: true, columns, write: () => true } as unknown as NodeJS.WritableStream & { isTTY: boolean, columns: number }
+    const progress = createProgress({ mode: 'interactive', isTTY: false, color: false, write: (_target, message) => lines.push(message) })
+
+    writeRemoteAccessInstallReport(report, { outcomeLabel: 'Setup', verbose: true, output, progress, env: { NO_COLOR: '1' } })
+
+    const intactValueLines = lines.filter((line) => /│ {4}\/|cursor --folder-uri|vscode-remote:\/\//u.test(line))
+    const wrappableLines = lines.filter((line) => !intactValueLines.includes(line))
+    assert.ok(wrappableLines.every((line) => line.length <= columns), wrappableLines.map((line) => `${line.length}: ${line}`).join('\n'))
+    assert.match(lines.join('\n'), /│ {2}Open this deliberately long\n│ {4}project in Cursor after\n│ {4}checking prerequisites:/)
   })
 
   test('uses color only for interactive output when color is enabled', () => {

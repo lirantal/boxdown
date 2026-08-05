@@ -22,8 +22,8 @@ export function selectedMark (enabled = true): string {
   return maybeColor('■', 'green', enabled)
 }
 
-export function emptyMark (isFocused: boolean): string {
-  return color('□', isFocused ? 'cyan' : 'dim')
+export function emptyMark (isFocused: boolean, enabled = true): string {
+  return maybeColor('□', isFocused ? 'cyan' : 'dim', enabled)
 }
 
 export function promptRail (enabled = true): string {
@@ -38,10 +38,10 @@ export function formatPromptEnd (enabled = true): string {
   return maybeColor('└', 'cyan', enabled)
 }
 
-export function formatPromptLabel (label: string, isFocused: boolean): string {
-  return color(label, isFocused ? 'bold' : 'dim')
+export function formatPromptLabel (label: string, isFocused: boolean, enabled = true): string {
+  return maybeColor(label, isFocused ? 'bold' : 'dim', enabled)
 }
 
-export function formatPromptDetailLine (detail: string): string {
-  return `${promptRail()}  ${color(detail, 'dim')}`
+export function formatPromptDetailLine (detail: string, enabled = true): string {
+  return `${promptRail(enabled)}  ${maybeColor(detail, 'dim', enabled)}`
 }

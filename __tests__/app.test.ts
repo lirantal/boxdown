@@ -1792,6 +1792,7 @@ test('feature docs document Cursor SSH support boundaries', () => {
 
   assert.match(setupDocs, /boxdown setup --target cursor/)
   assert.match(setupDocs, /Cursor alone.*does not.*agent-profile/is)
+  assert.match(setupDocs, /default.*complete.*open command.*standalone URI.*--verbose/is)
   assert.match(sshDocs, /remote\.SSH\.remotePlatform/)
   assert.match(sshDocs, /cursor --folder-uri/)
   assert.match(sshDocs, /default result.*standalone URI.*verbose/is)
@@ -2083,6 +2084,26 @@ describe('interactive install target prompt', () => {
     assert.match(outputText(), /\u001B\[36m│\u001B\[0m {2}\u001B\[32m■\u001B\[0m \u001B\[1mCodex\u001B\[0m/)
   })
 
+  test('NO_COLOR removes SGR styling but keeps raw prompt cursor control', async () => {
+    const { input, output, outputText } = fakePromptStreams()
+    const resultPromise = promptMultiSelect({
+      title: 'Install optional SSH targets?',
+      choices: [codexPromptChoice],
+      skipLabel: 'Skip optional targets',
+      input,
+      output,
+      env: { CI: 'false', NO_COLOR: '1' }
+    })
+
+    input.write('\r')
+
+    assert.deepStrictEqual(await resultPromise, { status: 'skipped', values: [] })
+    assert.doesNotMatch(outputText(), /\u001B\[[0-9;]*m/u)
+    assert.match(outputText(), /\u001B\[\?25l/u)
+    assert.match(outputText(), /\u001B\[2K/u)
+    assert.match(outputText(), /\u001B\[\?25h/u)
+  })
+
   test('redraws raw-mode long choices over wrapped terminal rows', async () => {
     const { input, output, outputText } = fakePromptStreams({ columns: 32 })
     const resultPromise = promptMultiSelect({
@@ -2225,6 +2246,24 @@ describe('interactive install target prompt', () => {
       status: 'selected',
       values: ['codex']
     })
+  })
+
+  test('NO_COLOR removes SGR styling from the line-mode target prompt', async () => {
+    const { input, output, outputText } = fakePromptStreams({ rawMode: false })
+    const resultPromise = promptMultiSelect({
+      title: 'Install optional SSH targets?',
+      choices: [codexPromptChoice],
+      skipLabel: 'Skip optional targets',
+      input,
+      output,
+      env: { CI: 'false', NO_COLOR: '1' }
+    })
+
+    input.write('1\n')
+
+    assert.deepStrictEqual(await resultPromise, { status: 'selected', values: ['codex'] })
+    assert.doesNotMatch(outputText(), /\u001B\[[0-9;]*m/u)
+    assert.doesNotMatch(outputText(), /\u001B\[/u)
   })
 
   test('skips without blocking when input is not interactive', async () => {
@@ -2682,7 +2721,7 @@ describe('CLI execution', () => {
     const output = terminal.text()
     assert.strictEqual(code, 1)
     assert.deepStrictEqual(targetCalls, ['codex', 'cursor'])
-    assert.match(output, /! Configuring ChatGPT app/)
+    assert.match(output, /✖ Configuring ChatGPT app/)
     assert.match(output, /✔ Configuring Cursor/)
     assert.match(output, /Setup incomplete/)
     assert.match(output, /boxdown ssh install --target codex/)
@@ -9074,9 +9113,30 @@ describe('progress output', () => {
     assert.ok(rendered.includes(`${color('◒', 'cyan')} Starting devcontainer`))
     assert.ok(rendered.includes(`${color('◐', 'cyan')} Starting devcontainer`))
     assert.ok(rendered.includes(`${color('✔', 'green')} Starting devcontainer`))
-    assert.ok(rendered.includes(`${color('!', 'dim')} Installing SSH alias`))
+    assert.ok(rendered.includes(`${color('✖', 'red')} Installing SSH alias`))
     assert.ok(rendered.includes(`${color('□', 'dim')} ${color('Installing SSH alias', 'dim')}`))
     assert.match(rendered, /\u001B\[3A/)
+  })
+
+  test('renders failed checklist steps with a red cross or a plain cross', () => {
+    for (const colorEnabled of [true, false]) {
+      const raw: string[] = []
+      const progress = createProgress({
+        isTTY: true,
+        color: colorEnabled,
+        spinnerIntervalMs: 60_000,
+        writeRaw: (_target, message) => raw.push(message)
+      })
+
+      progress.setSteps([{ id: 'install', label: 'Installing SSH alias' }])
+      progress.failStep('install')
+      progress.end()
+
+      const rendered = raw.join('')
+      const expected = colorEnabled ? color('✖', 'red') : '✖'
+      assert.ok(rendered.includes(`${expected} Installing SSH alias`), rendered)
+      if (!colorEnabled) assert.doesNotMatch(rendered, /\u001B\[[0-9;]*m/u)
+    }
   })
 
   test('captures raw command output while surfacing progress markers', async () => {
@@ -9239,7 +9299,7 @@ describe('progress output', () => {
       `stdout:${formatPromptTitle('Boxdown setup')}`,
       `stdout:${formatPromptEnd()}`
     ])
-    assert.ok(rendered.includes(`${color('!', 'dim')} Running failing command`))
+    assert.ok(rendered.includes(`${color('✖', 'red')} Running failing command`))
     assert.match(failure, /demo command failed with exit code 9\./)
     assert.match(failure, /stderr tail/)
     assert.match(failure, /stdout tail/)

@@ -117,8 +117,10 @@ boxdown ssh install --target claude
 ```
 
 When `--target cursor` is provided, Boxdown configures Cursor's public Remote
-SSH settings for the same alias and prints the URI plus the command to open
-`/workspaces/<repo-name>`. It does not launch Cursor; run the printed command
+SSH settings for the same alias. The default result prints the complete
+open command for `/workspaces/<repo-name>` with the URI embedded in it; it does
+not repeat the standalone URI. `boxdown setup --verbose` adds that URI as a
+diagnostic detail. Boxdown does not launch Cursor; run the printed command
 yourself. See [SSH config and proxy workflow](./ssh-config-and-proxy.md#cursor-target)
 for prerequisites, commands, and cleanup behavior.
 

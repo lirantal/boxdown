@@ -517,7 +517,7 @@ export class ProgressReporter {
     }
 
     if (state === 'failed') {
-      return maybeColor('!', 'dim', this.#color)
+      return maybeColor('✖', 'red', this.#color)
     }
 
     return maybeColor('□', 'dim', this.#color)

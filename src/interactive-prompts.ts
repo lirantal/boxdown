@@ -1,6 +1,6 @@
 import { createInterface } from 'node:readline'
 
-import { color, emptyMark, formatPromptDetailLine, formatPromptEnd, formatPromptLabel, formatPromptTitle, promptRail, selectedMark, type CliColor } from './cli-style.ts'
+import { color, emptyMark, formatPromptDetailLine, formatPromptEnd, formatPromptLabel, formatPromptTitle, maybeColor, promptRail, selectedMark, type CliColor } from './cli-style.ts'
 
 export interface MultiSelectDescriptionSegment {
   text: string
@@ -142,13 +142,14 @@ function renderPromptLines (
 function formatChoiceLine <T extends string> (
   choice: MultiSelectChoice<T>,
   isFocused: boolean,
-  isSelected: boolean
+  isSelected: boolean,
+  colorEnabled: boolean
 ): string {
-  const mark = isSelected ? selectedMark() : emptyMark(isFocused)
+  const mark = isSelected ? selectedMark(colorEnabled) : emptyMark(isFocused, colorEnabled)
   const description = isFocused && choice.focusedDescription !== undefined
-    ? `${color(' - ', 'dim')}${choice.focusedDescription.map((segment) => color(segment.text, segment.color)).join('')}`
-    : color(` - ${choice.description}`, 'dim')
-  return `${promptRail()}  ${mark} ${formatPromptLabel(choice.label, isFocused)}${description}`
+    ? `${maybeColor(' - ', 'dim', colorEnabled)}${choice.focusedDescription.map((segment) => maybeColor(segment.text, segment.color, colorEnabled)).join('')}`
+    : maybeColor(` - ${choice.description}`, 'dim', colorEnabled)
+  return `${promptRail(colorEnabled)}  ${mark} ${formatPromptLabel(choice.label, isFocused, colorEnabled)}${description}`
 }
 
 function wrapPromptDescription (description: string, maxWidth: number): string[] {
@@ -190,9 +191,9 @@ function formatSelectChoiceLines <T extends string> (
   ]
 }
 
-function formatSkipLine (skipLabel: string, isFocused: boolean, selectedCount: number): string {
-  const mark = selectedCount === 0 ? selectedMark() : emptyMark(isFocused)
-  return `${promptRail()}  ${mark} ${formatPromptLabel(skipLabel, isFocused)}`
+function formatSkipLine (skipLabel: string, isFocused: boolean, selectedCount: number, colorEnabled: boolean): string {
+  const mark = selectedCount === 0 ? selectedMark(colorEnabled) : emptyMark(isFocused, colorEnabled)
+  return `${promptRail(colorEnabled)}  ${mark} ${formatPromptLabel(skipLabel, isFocused, colorEnabled)}`
 }
 
 function formatConfirmLine (
@@ -395,19 +396,19 @@ async function promptLineSelect <T extends string> (
 }
 
 async function promptLineMultiSelect <T extends string> (
-  options: Required<Pick<MultiSelectPromptOptions<T>, 'title' | 'choices' | 'skipLabel' | 'summaryLabel' | 'input' | 'output'>> & {initialValues: readonly T[]}
+  options: Required<Pick<MultiSelectPromptOptions<T>, 'title' | 'choices' | 'skipLabel' | 'summaryLabel' | 'input' | 'output'>> & {initialValues: readonly T[], colorEnabled: boolean}
 ): Promise<MultiSelectPromptResult<T>> {
-  options.output.write(`${formatPromptTitle(options.title)}\n`)
+  options.output.write(`${formatPromptTitle(options.title, options.colorEnabled)}\n`)
 
   options.choices.forEach((choice, index) => {
     const current = options.initialValues.includes(choice.value) ? ' (selected)' : ''
-    options.output.write(`${promptRail()}  ${index + 1}) ${choice.label}${current} - ${choice.description}\n`)
+    options.output.write(`${promptRail(options.colorEnabled)}  ${index + 1}) ${choice.label}${current} - ${choice.description}\n`)
   })
 
-  options.output.write(`${promptRail()}  0) ${options.skipLabel}\n`)
+  options.output.write(`${promptRail(options.colorEnabled)}  0) ${options.skipLabel}\n`)
 
   while (true) {
-    const answer = await askLine(options.input, options.output, `${promptRail()}  `)
+    const answer = await askLine(options.input, options.output, `${promptRail(options.colorEnabled)}  `)
 
     if (answer === undefined) {
       return { status: 'cancelled', values: [] }
@@ -417,11 +418,11 @@ async function promptLineMultiSelect <T extends string> (
 
     if ('values' in parsed) {
       const result = resultFromValues(parsed.values)
-      options.output.write(`${formatPromptEnd()}\n${formatMultiSelectFinalLine(result, options.choices, options.summaryLabel)}\n`)
+      options.output.write(`${formatPromptEnd(options.colorEnabled)}\n${formatMultiSelectFinalLine(result, options.choices, options.summaryLabel)}\n`)
       return result
     }
 
-    options.output.write(`${promptRail()}  ${parsed.error}\n`)
+    options.output.write(`${promptRail(options.colorEnabled)}  ${parsed.error}\n`)
   }
 }
 
@@ -528,7 +529,7 @@ function promptRawSelect <T extends string> (
 }
 
 function promptRawMultiSelect <T extends string> (
-  options: Required<Pick<MultiSelectPromptOptions<T>, 'title' | 'choices' | 'skipLabel' | 'summaryLabel' | 'input' | 'output'>> & {initialValues: readonly T[]}
+  options: Required<Pick<MultiSelectPromptOptions<T>, 'title' | 'choices' | 'skipLabel' | 'summaryLabel' | 'input' | 'output'>> & {initialValues: readonly T[], colorEnabled: boolean}
 ): Promise<MultiSelectPromptResult<T>> {
   return new Promise((resolve) => {
     const selected = new Set<T>(options.initialValues)
@@ -539,15 +540,16 @@ function promptRawMultiSelect <T extends string> (
 
     function lines (): string[] {
       return [
-        formatPromptTitle(options.title),
-        promptRail(),
+        formatPromptTitle(options.title, options.colorEnabled),
+        promptRail(options.colorEnabled),
         ...options.choices.map((choice, index) => formatChoiceLine(
           choice,
           focusedIndex === index,
-          selected.has(choice.value)
+          selected.has(choice.value),
+          options.colorEnabled
         )),
-        formatSkipLine(options.skipLabel, focusedIndex === options.choices.length, selected.size),
-        formatPromptEnd()
+        formatSkipLine(options.skipLabel, focusedIndex === options.choices.length, selected.size, options.colorEnabled),
+        formatPromptEnd(options.colorEnabled)
       ]
     }
 
@@ -710,6 +712,7 @@ export async function promptMultiSelect <T extends string> (
   const env = options.env ?? process.env
   const summaryLabel = options.summaryLabel ?? 'Selection'
   const initialValues = options.initialValues ?? []
+  const colorEnabled = env.NO_COLOR === undefined
 
   for (const value of initialValues) {
     if (!options.choices.some((choice) => choice.value === value)) {
@@ -729,7 +732,8 @@ export async function promptMultiSelect <T extends string> (
       summaryLabel,
       input,
       output,
-      initialValues
+      initialValues,
+      colorEnabled
     })
   }
 
@@ -741,7 +745,8 @@ export async function promptMultiSelect <T extends string> (
       summaryLabel,
       input,
       output,
-      initialValues
+      initialValues,
+      colorEnabled
     })
   } catch {
     return promptLineMultiSelect({
@@ -751,7 +756,8 @@ export async function promptMultiSelect <T extends string> (
       summaryLabel,
       input,
       output,
-      initialValues
+      initialValues,
+      colorEnabled
     })
   }
 }
