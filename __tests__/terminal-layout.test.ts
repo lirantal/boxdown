@@ -36,6 +36,13 @@ describe('terminal layout', () => {
     )
   })
 
+  test('styles wrapped content without styling its prefixes', () => {
+    assert.deepStrictEqual(
+      wrapWithPrefixes('alpha beta', '> ', '  ', 8, (line) => `[${line}]`),
+      ['> [alpha]', '  [beta]']
+    )
+  })
+
   test('preserves styles across word and hard-wrap boundaries', () => {
     const lines = wrapTextSegments([
       { text: '(running)', style: 'green' },

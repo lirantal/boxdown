@@ -1,6 +1,7 @@
 import { maybeColor, type CliColor } from './cli-style.ts'
 import type { ProgressReporter } from './progress.ts'
 import type { SshConfigInstallTarget } from './ssh-install-targets.ts'
+import { visibleLength, wrapWithPrefixes } from './terminal-layout.ts'
 
 export type InstallDisposition = 'installed' | 'already-current' | 'already-compatible'
 
@@ -85,37 +86,6 @@ export interface WriteRemoteAccessInstallReportOptions extends Omit<FormatRemote
 
 interface ReportAction {
   action: InstallAction
-}
-
-function visibleLength (value: string): number {
-  return value.replace(/\u001B\[[0-?]*[ -/]*[@-~]/gu, '').length
-}
-
-function wrapWithPrefixes (
-  value: string,
-  firstPrefix: string,
-  continuationPrefix: string,
-  columns: number,
-  styleLine: (line: string) => string = (line) => line
-): string[] {
-  const words = value.trim().split(/\s+/u).filter(Boolean)
-  if (words.length === 0) return []
-
-  const lines: string[] = []
-  let line = ''
-  let prefix = firstPrefix
-  for (const word of words) {
-    const candidate = line.length === 0 ? word : `${line} ${word}`
-    if (line.length > 0 && visibleLength(prefix) + visibleLength(candidate) > columns) {
-      lines.push(`${prefix}${styleLine(line)}`)
-      prefix = continuationPrefix
-      line = word
-    } else {
-      line = candidate
-    }
-  }
-  if (line.length > 0) lines.push(`${prefix}${styleLine(line)}`)
-  return lines
 }
 
 function indentedProse (value: string, indent: string, columns: number): string[] {

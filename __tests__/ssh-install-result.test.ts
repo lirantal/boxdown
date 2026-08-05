@@ -228,6 +228,15 @@ describe('remote access install result rendering', () => {
     assert.match(output, /cursor --folder-uri \\/)
     assert.match(output, /vscode-remote:\/\/ssh-remote\+demo-devcontainer\/workspaces\/demo/)
     assert.doesNotMatch(output, /Cursor settings/)
+
+    const plain = output.replace(/\u001B\[[0-?]*[ -/]*[@-~]/gu, '')
+    for (const line of plain.trimEnd().split('\n')) {
+      if (!line.includes('vscode-remote://')) assert.ok(line.length <= 32, line)
+    }
+    assert.match(
+      plain.replace(/\s/gu, ''),
+      /Nooptionalappintegrationswereselected/
+    )
   })
 
   test('appends the outcome and handoff inside the active progress rail', () => {

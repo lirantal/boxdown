@@ -103,7 +103,8 @@ export function wrapWithPrefixes (
   value: string,
   firstPrefix: string,
   continuationPrefix: string,
-  columns: number
+  columns: number,
+  styleLine: (line: string) => string = (line) => line
 ): string[] {
   const lines = wrapText(
     value,
@@ -112,6 +113,6 @@ export function wrapWithPrefixes (
   )
 
   return lines.map((line, index) => (
-    `${index === 0 ? firstPrefix : continuationPrefix}${line}`
+    `${index === 0 ? firstPrefix : continuationPrefix}${styleLine(line)}`
   ))
 }
