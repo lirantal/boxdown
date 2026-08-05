@@ -14,24 +14,28 @@ export function color (value: string, colorName: CliColor): string {
   return `${ansi[colorName]}${value}${ansi.reset}`
 }
 
-export function selectedMark (): string {
-  return color('■', 'green')
+export function maybeColor (value: string, colorName: CliColor, enabled: boolean): string {
+  return enabled ? color(value, colorName) : value
+}
+
+export function selectedMark (enabled = true): string {
+  return maybeColor('■', 'green', enabled)
 }
 
 export function emptyMark (isFocused: boolean): string {
   return color('□', isFocused ? 'cyan' : 'dim')
 }
 
-export function promptRail (): string {
-  return color('│', 'cyan')
+export function promptRail (enabled = true): string {
+  return maybeColor('│', 'cyan', enabled)
 }
 
-export function formatPromptTitle (title: string): string {
-  return `${color('◆', 'cyan')}  ${color(title, 'bold')}`
+export function formatPromptTitle (title: string, enabled = true): string {
+  return `${maybeColor('◆', 'cyan', enabled)}  ${maybeColor(title, 'bold', enabled)}`
 }
 
-export function formatPromptEnd (): string {
-  return color('└', 'cyan')
+export function formatPromptEnd (enabled = true): string {
+  return maybeColor('└', 'cyan', enabled)
 }
 
 export function formatPromptLabel (label: string, isFocused: boolean): string {

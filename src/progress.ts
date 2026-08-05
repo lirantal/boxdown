@@ -1,5 +1,5 @@
 import { runBuffered, type BufferedCommandOptions, type CommandResult } from './process.ts'
-import { color, formatPromptEnd, formatPromptTitle, promptRail, selectedMark } from './cli-style.ts'
+import { formatPromptEnd, formatPromptTitle, maybeColor, promptRail, selectedMark } from './cli-style.ts'
 
 export type ProgressOutputTarget = 'stdout' | 'stderr'
 export type ProgressMode = 'interactive' | 'detailed' | 'verbose' | 'none'
@@ -15,6 +15,7 @@ export interface ProgressReporterOptions {
   isTTY?: boolean
   spinnerFrames?: readonly string[]
   spinnerIntervalMs?: number
+  color?: boolean
 }
 
 export interface ProgressCommandOptions extends Pick<BufferedCommandOptions, 'cwd' | 'env' | 'input'> {
@@ -104,6 +105,7 @@ export class ProgressReporter {
   readonly #isTTY: boolean
   readonly #spinnerFrames: readonly string[]
   readonly #spinnerIntervalMs: number
+  readonly #color: boolean
   #sectionPrinted = false
   #sectionOpen = false
   #spinner: ActiveSpinner | undefined
@@ -123,6 +125,7 @@ export class ProgressReporter {
     this.#isTTY = options.isTTY ?? targetIsTTY(this.target)
     this.#spinnerFrames = options.spinnerFrames ?? DEFAULT_SPINNER_FRAMES
     this.#spinnerIntervalMs = options.spinnerIntervalMs ?? DEFAULT_SPINNER_INTERVAL_MS
+    this.#color = options.color ?? true
   }
 
   section (title: string): void {
@@ -141,7 +144,7 @@ export class ProgressReporter {
       this.#write(this.target, '')
     }
 
-    this.#write(this.target, formatPromptTitle(title))
+    this.#write(this.target, formatPromptTitle(title, this.#color))
     this.#sectionPrinted = true
     this.#sectionOpen = true
   }
@@ -160,7 +163,7 @@ export class ProgressReporter {
       return
     }
 
-    this.#write(this.target, formatPromptEnd())
+    this.#write(this.target, formatPromptEnd(this.#color))
     this.#sectionOpen = false
   }
 
@@ -175,7 +178,7 @@ export class ProgressReporter {
       return
     }
 
-    this.#writeLine(`${promptRail()}  ${selectedMark()} ${message}`)
+    this.#writeLine(`${promptRail(this.#color)}  ${selectedMark(this.#color)} ${message}`)
   }
 
   detail (message: string): void {
@@ -188,7 +191,7 @@ export class ProgressReporter {
       return
     }
 
-    this.#writeLine(`${promptRail()}  ${color(message, 'dim')}`)
+    this.#writeLine(`${promptRail(this.#color)}  ${maybeColor(message, 'dim', this.#color)}`)
   }
 
   status (message: string): void {
@@ -204,7 +207,7 @@ export class ProgressReporter {
       return
     }
 
-    this.#writeInteractiveLine(`${promptRail()}  ${color(message, 'dim')}`)
+    this.#writeInteractiveLine(`${promptRail(this.#color)}  ${maybeColor(message, 'dim', this.#color)}`)
   }
 
   output (message: string): void {
@@ -232,7 +235,7 @@ export class ProgressReporter {
       return
     }
 
-    this.#writeInteractiveLine(`${promptRail()}  ${color('!', 'dim')} ${message}`)
+    this.#writeInteractiveLine(`${promptRail(this.#color)}  ${maybeColor('!', 'dim', this.#color)} ${message}`)
   }
 
   marker (message: string): void {
@@ -302,6 +305,27 @@ export class ProgressReporter {
     return this.#steps.some((step) => step.id === id)
   }
 
+  appendResult (lines: readonly string[], options: { color: boolean }): void {
+    if (this.mode === 'none') return
+
+    if (this.#steps.some((step) => step.state === 'pending' || step.state === 'running')) {
+      throw new Error('Cannot append a result before all progress steps reach a terminal state.')
+    }
+
+    this.stopSpinner()
+    this.#stopStepTimer()
+    this.#renderedStepLineCount = 0
+
+    for (const line of lines) {
+      if (this.mode === 'interactive') {
+        const rail = promptRail(options.color && this.#color)
+        this.#write(this.target, line.length === 0 ? rail : `${rail}  ${line}`)
+      } else {
+        this.#write(this.target, line)
+      }
+    }
+  }
+
   startSpinner (message: string): void {
     if (!this.#isStructured()) {
       return
@@ -333,7 +357,7 @@ export class ProgressReporter {
       return
     }
 
-    this.#writeLine(`${promptRail()}  ${color(this.#spinnerFrames[0] ?? '◒', 'cyan')} ${normalized}`)
+    this.#writeLine(`${promptRail(this.#color)}  ${maybeColor(this.#spinnerFrames[0] ?? '◒', 'cyan', this.#color)} ${normalized}`)
   }
 
   tickSpinner (): void {
@@ -421,7 +445,7 @@ export class ProgressReporter {
     }
 
     const frame = this.#spinnerFrames[spinner.frameIndex % this.#spinnerFrames.length] ?? '◒'
-    this.#writeRaw(this.target, `\r\u001B[2K${promptRail()}  ${color(frame, 'cyan')} ${spinner.message}`)
+    this.#writeRaw(this.target, `\r\u001B[2K${promptRail(this.#color)}  ${maybeColor(frame, 'cyan', this.#color)} ${spinner.message}`)
   }
 
   #clearSpinnerLine (): void {
@@ -478,25 +502,25 @@ export class ProgressReporter {
   }
 
   #formatStep (step: ProgressStep): string {
-    const label = step.state === 'skipped' ? color(step.label, 'dim') : step.label
-    return `${promptRail()}  ${this.#stepMark(step.state)} ${label}`
+    const label = step.state === 'skipped' ? maybeColor(step.label, 'dim', this.#color) : step.label
+    return `${promptRail(this.#color)}  ${this.#stepMark(step.state)} ${label}`
   }
 
   #stepMark (state: ProgressStepState): string {
     if (state === 'running') {
       const frame = this.#spinnerFrames[this.#stepFrameIndex % this.#spinnerFrames.length] ?? '◐'
-      return color(frame, 'cyan')
+      return maybeColor(frame, 'cyan', this.#color)
     }
 
     if (state === 'complete') {
-      return color('✔', 'green')
+      return maybeColor('✔', 'green', this.#color)
     }
 
     if (state === 'failed') {
-      return color('!', 'dim')
+      return maybeColor('!', 'dim', this.#color)
     }
 
-    return color('□', 'dim')
+    return maybeColor('□', 'dim', this.#color)
   }
 
   #startStepTimer (): void {
