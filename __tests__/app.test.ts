@@ -5969,7 +5969,7 @@ describe('CLI execution', () => {
       }, async () => withCwd(unknown, async () => runCli(['purge'], {
         promptInput: input,
         promptOutput: output,
-        env: { ...process.env, CI: 'false' }
+        env: { ...process.env, CI: 'false', NO_COLOR: undefined }
       })))
 
       await waitForPromptOutput(outputText, /Purge Boxdown workspaces\?/)
@@ -6051,7 +6051,7 @@ describe('CLI execution', () => {
     const codePromise = withProcessEnv(env, async () => withCwd(unknown, async () => runCli(['purge'], {
       promptInput: input,
       promptOutput: output,
-      env: { ...process.env, CI: 'false' }
+      env: { ...process.env, CI: 'false', NO_COLOR: undefined }
     })))
 
     await waitForPromptOutput(outputText, /Purge Boxdown workspaces\?/)
