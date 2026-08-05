@@ -1,5 +1,21 @@
 # boxdown
 
+## 4.3.0
+
+### Minor Changes
+
+- [`5a449be`](https://github.com/lirantal/boxdown/commit/5a449bef4739eb25fe6af7da7bd42088adba563e) Thanks [@lirantal](https://github.com/lirantal)! - Add Cursor Remote SSH setup, handoff, ownership, and safe cleanup support.
+
+### Patch Changes
+
+- [`a398de2`](https://github.com/lirantal/boxdown/commit/a398de23b80b2cb345af40ab3e8e285a93610b2a) Thanks [@lirantal](https://github.com/lirantal)! - Make SSH and app installation results easier to scan with explicit outcomes,
+  ordered next steps, narrow-terminal formatting, and consistent ChatGPT,
+  Claude, and Cursor handoff instructions.
+
+- [`03f5c8b`](https://github.com/lirantal/boxdown/commit/03f5c8b033e66f79bf9e1380e9a28648d22a457c) Thanks [@lirantal](https://github.com/lirantal)! - Retain Docker images shared by other workspace containers during purge, and
+  recover setup from Docker Desktop's stale view of recreated Boxdown mount
+  paths.
+
 ## 4.2.0
 
 ### Minor Changes
