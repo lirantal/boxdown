@@ -17,7 +17,7 @@ import { AGENT_PROFILES, agentProfileMarker, isAgentProfile, parseAgentProfileMa
 import { color, formatPromptEnd, formatPromptTitle, promptRail, selectedMark } from '../src/cli-style.ts'
 import { buildGeneratedDevcontainerConfig, publishContainerPortFromConfig, readGeneratedAgentProfile, sourcePathIsInside, writeGeneratedDevcontainerConfig } from '../src/config.ts'
 import { BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_AGENTS_DIR, BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CLAUDE_CREDENTIALS_PATH, BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CODEX_AUTH_PATH, BOXDOWN_CONTAINER_AGENTS_DIR, BOXDOWN_CONTAINER_CLAUDE_CONFIG_PATH, BOXDOWN_CONTAINER_CLAUDE_CREDENTIALS_PATH, BOXDOWN_CONTAINER_CLAUDE_DIR, BOXDOWN_CONTAINER_CODEX_AUTH_PATH, BOXDOWN_CONTAINER_CODEX_DIR, BOXDOWN_CONTAINER_DEVCONTAINER_DIR, BOXDOWN_CONTAINER_GITCONFIG_PATH, BOXDOWN_CONTAINER_HOST_GITCONFIG_DIR, BOXDOWN_CONTAINER_SECRET_ENV_BOOTSTRAP, BOXDOWN_CONTAINER_SECRET_ENV_DIR, BOXDOWN_CONTAINER_TOOLCHAIN_PLAN_PATH, BOXDOWN_CONTAINER_TOOLCHAIN_RESULTS_DIR, BOXDOWN_CONTAINER_TOOLCHAINS_DIR, DEVCONTAINER_CLI_VERSION } from '../src/constants.ts'
-import { codingAgentDevcontainerExecArgs, inspectContainerAgentProfile, isPublishedBoxdownImage, parseDockerInspectImage, sshdProxyDockerArgs, sshTunnelArgs, startDevcontainer } from '../src/devcontainer.ts'
+import { codingAgentDevcontainerExecArgs, findDockerImageConsumers, inspectContainerAgentProfile, isPublishedBoxdownImage, parseDockerInspectImage, removeDockerImageIfUnused, sshdProxyDockerArgs, sshTunnelArgs, startDevcontainer, type DockerCommandRunner } from '../src/devcontainer.ts'
 import { resolveDevcontainerCli } from '../src/devcontainer-cli.ts'
 import { doctorHasFailures, formatDoctorText, runDoctorChecks } from '../src/doctor.ts'
 import { parseSshPublicKey, reportGitSigningPlan, resolveConfiguredSshSigningKey, resolveGitSigningPlan, selectGitSigningKey, type GitSigningPlan, type GitSigningReason } from '../src/git-signing.ts'
@@ -146,6 +146,18 @@ async function withFakeDocker<T> (workspaces: FakeDockerWorkspace[], run: (logPa
     '    done < "${BOXDOWN_FAKE_DOCKER_STATE}"',
     '    exit 0',
     '  fi',
+    '  if [[ "$filter" == ancestor=* ]]; then',
+    '    if [ "${BOXDOWN_FAKE_DOCKER_ANCESTOR_EXIT_CODE:-0}" != "0" ]; then',
+    '      exit "${BOXDOWN_FAKE_DOCKER_ANCESTOR_EXIT_CODE}"',
+    '    fi',
+    '    image_id="${filter#ancestor=}"',
+    '    while IFS="$(printf \'\\t\')" read -r folder id container_state remove_exit_code recorded_image_id image_name inspect_exit_code image_remove_exit_code agent_profile_marker; do',
+    '      if [ "$recorded_image_id" = "$image_id" ]; then',
+    '        printf \'%s\\n\' "$id"',
+    '      fi',
+    '    done < "${BOXDOWN_FAKE_DOCKER_STATE}"',
+    '    exit 0',
+    '  fi',
     '  workspace="${filter#label=devcontainer.local_folder=}"',
     '  if [ "$workspace" = "$filter" ]; then',
     '    exit 0',
@@ -178,7 +190,11 @@ async function withFakeDocker<T> (workspaces: FakeDockerWorkspace[], run: (logPa
     '      if [ "${inspect_exit_code:-0}" != "0" ]; then',
     '        exit "$inspect_exit_code"',
     '      fi',
-    '      printf \'"%s"|"%s"\\n\' "${image_id:-sha256:${container_id}-image}" "${image_name:-boxdown-test:${container_id}}"',
+    "      if [[ \"$*\" == *'{{json .Id}}|{{json .Name}}|{{json .Image}}'* ]]; then",
+    "        printf '\"%s\"|\"/%s\"|\"%s\"\\n' \"$container_id\" \"$container_id\" \"${image_id:-sha256:${container_id}-image}\"",
+    '      else',
+    "        printf '\"%s\"|\"%s\"\\n' \"${image_id:-sha256:${container_id}-image}\" \"${image_name:-boxdown-test:${container_id}}\"",
+    '      fi',
     '      exit 0',
     '    fi',
     '  done < "${BOXDOWN_FAKE_DOCKER_STATE}"',
@@ -250,6 +266,130 @@ function fakeDockerCalls (logPath: string): string[] {
 
   return readFileSync(logPath, 'utf8').trim().split(/\r?\n/).filter((line) => line.length > 0)
 }
+
+function sequenceDockerRunner (
+  results: Array<{ code: number, stdout: string, stderr: string }>,
+  calls: string[][]
+): DockerCommandRunner {
+  return async (args) => {
+    calls.push(args)
+    const result = results.shift()
+    assert.ok(result !== undefined, `Unexpected Docker call: ${args.join(' ')}`)
+    return result
+  }
+}
+
+test('finds only containers using the exact Docker image ID', async () => {
+  const calls: string[][] = []
+  const runCommand = sequenceDockerRunner([
+    { code: 0, stdout: 'exact-container\ndescendant-container\n', stderr: '' },
+    {
+      code: 0,
+      stdout: '"exact-container"|"/exact-name"|"sha256:shared"\n',
+      stderr: ''
+    },
+    {
+      code: 0,
+      stdout: '"descendant-container"|"/descendant-name"|"sha256:child"\n',
+      stderr: ''
+    }
+  ], calls)
+
+  assert.deepStrictEqual(await findDockerImageConsumers('sha256:shared', {
+    excludeContainerIds: ['excluded-container'],
+    runCommand
+  }), [
+    { id: 'exact-container', name: 'exact-name' }
+  ])
+  assert.deepStrictEqual(calls[0], [
+    'ps', '-aq', '--filter', 'ancestor=sha256:shared'
+  ])
+})
+
+test('removes an unused Docker image without force', async () => {
+  const calls: string[][] = []
+  const result = await removeDockerImageIfUnused('sha256:unused', {
+    runCommand: sequenceDockerRunner([
+      { code: 0, stdout: '', stderr: '' },
+      { code: 0, stdout: 'Deleted: sha256:unused\n', stderr: '' }
+    ], calls)
+  })
+
+  assert.deepStrictEqual(result, { status: 'removed' })
+  assert.deepStrictEqual(calls[1], ['image', 'rm', 'sha256:unused'])
+})
+
+test('retains a Docker image already used by another container', async () => {
+  const calls: string[][] = []
+  const result = await removeDockerImageIfUnused('sha256:shared', {
+    runCommand: sequenceDockerRunner([
+      { code: 0, stdout: 'consumer-1\n', stderr: '' },
+      { code: 0, stdout: '"consumer-1"|"/peer"|"sha256:shared"\n', stderr: '' }
+    ], calls)
+  })
+
+  assert.deepStrictEqual(result, {
+    status: 'retained-in-use',
+    consumers: [{ id: 'consumer-1', name: 'peer' }]
+  })
+  assert.strictEqual(calls.some(args => args[0] === 'image'), false)
+})
+
+test('classifies a race-time image consumer after removal fails', async () => {
+  const calls: string[][] = []
+  const result = await removeDockerImageIfUnused('sha256:raced', {
+    runCommand: sequenceDockerRunner([
+      { code: 0, stdout: '', stderr: '' },
+      { code: 1, stdout: '', stderr: 'conflict' },
+      { code: 0, stdout: 'late-container\n', stderr: '' },
+      { code: 0, stdout: '"late-container"|"/late-peer"|"sha256:raced"\n', stderr: '' }
+    ], calls)
+  })
+
+  assert.deepStrictEqual(result, {
+    status: 'retained-in-use',
+    consumers: [{ id: 'late-container', name: 'late-peer' }]
+  })
+})
+
+test('does not attempt image removal when usage discovery fails', async () => {
+  const calls: string[][] = []
+  await assert.rejects(
+    removeDockerImageIfUnused('sha256:unknown', {
+      runCommand: sequenceDockerRunner([
+        { code: 1, stdout: '', stderr: 'daemon error' }
+      ], calls)
+    }),
+    /Could not find Docker containers using image sha256:unknown/
+  )
+  assert.strictEqual(calls.some(args => args[0] === 'image'), false)
+})
+
+test('treats an already absent unused Docker image as success', async () => {
+  const calls: string[][] = []
+  const result = await removeDockerImageIfUnused('sha256:absent', {
+    runCommand: sequenceDockerRunner([
+      { code: 0, stdout: '', stderr: '' },
+      { code: 1, stdout: '', stderr: 'Error: No such image: sha256:absent' }
+    ], calls)
+  })
+
+  assert.deepStrictEqual(result, { status: 'absent' })
+})
+
+test('fails an unrelated Docker image-removal error with no consumers', async () => {
+  const calls: string[][] = []
+  await assert.rejects(
+    removeDockerImageIfUnused('sha256:broken', {
+      runCommand: sequenceDockerRunner([
+        { code: 0, stdout: '', stderr: '' },
+        { code: 1, stdout: '', stderr: 'unexpected daemon failure' },
+        { code: 0, stdout: '', stderr: '' }
+      ], calls)
+    }),
+    /Could not remove Docker image sha256:broken/
+  )
+})
 
 function fakeCursorCli (extensions = 'anysphere.remote-ssh', exitCode = 0): {
   env: NodeJS.ProcessEnv
@@ -4645,7 +4785,7 @@ describe('CLI execution', () => {
         const text = formatPurgePlanText(await createPurgePlan(context, { alias: 'provided-devcontainer' }))
 
         assert.match(text, /Docker container: purge-plan-container \(running\)/)
-        assert.match(text, /Docker image used by this workspace: boxdown-plan:latest \(sha256:purge-plan-image\)/)
+        assert.match(text, /Docker image if still unused during removal: boxdown-plan:latest \(sha256:purge-plan-image\)/)
         assert.doesNotMatch(text, /Recorded Docker image used by this workspace: boxdown-stale:latest/)
         assert.match(text, /Docker volumes attached only to that container/)
         assert.ok(text.includes(`SSH connection: provided-devcontainer, recorded-devcontainer, ${defaultSshAlias(context.workspaceBasename)}`))
@@ -4655,6 +4795,71 @@ describe('CLI execution', () => {
         assert.ok(text.includes(context.workspaceRuntimeDir))
         assert.ok(text.includes(`Your repository and files: ${context.workspaceFolder}`))
         assert.match(text, /Other Docker containers, images, volumes, and Boxdown workspaces/)
+      })
+    })
+  })
+
+  test('purge plan retains an image known to be shared by another workspace', async () => {
+    const workspace = tempDir('purge-plan-shared-workspace')
+    const peerWorkspace = tempDir('purge-plan-shared-peer')
+    const env = {
+      HOME: tempDir('purge-plan-shared-home'),
+      BOXDOWN_CACHE_HOME: tempDir('purge-plan-shared-cache'),
+      BOXDOWN_DATA_HOME: tempDir('purge-plan-shared-data'),
+      BOXDOWN_RUNTIME_HOME: tempDir('purge-plan-shared-runtime')
+    }
+    const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+
+    writeWorkspaceMetadata(context, defaultSshAlias(context.workspaceBasename))
+
+    await withFakeDocker([
+      {
+        workspace,
+        id: 'purge-plan-container',
+        imageId: 'sha256:purge-plan-image',
+        imageName: 'boxdown-plan:latest'
+      },
+      {
+        workspace: peerWorkspace,
+        id: 'purge-plan-peer',
+        containerState: 'exited',
+        imageId: 'sha256:purge-plan-image',
+        imageName: 'boxdown-plan:latest'
+      }
+    ], async (_logPath, dockerEnv) => {
+      await withProcessEnv({ ...dockerEnv, ...env }, async () => {
+        const text = formatPurgePlanText(await createPurgePlan(context))
+
+        assert.match(text, /Shared Docker image retained: boxdown-plan:latest \(sha256:purge-plan-image\) \(used by: purge-plan-peer\)/)
+        assert.doesNotMatch(text, /Docker image if still unused during removal/)
+      })
+    })
+  })
+
+  test('purge plan reports when image usage could not be checked', async () => {
+    const workspace = tempDir('purge-plan-usage-failure-workspace')
+    const env = {
+      HOME: tempDir('purge-plan-usage-failure-home'),
+      BOXDOWN_CACHE_HOME: tempDir('purge-plan-usage-failure-cache'),
+      BOXDOWN_DATA_HOME: tempDir('purge-plan-usage-failure-data'),
+      BOXDOWN_RUNTIME_HOME: tempDir('purge-plan-usage-failure-runtime')
+    }
+    const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+
+    await withFakeDocker([{
+      workspace,
+      id: 'purge-plan-usage-failure-container',
+      imageId: 'sha256:purge-plan-usage-failure',
+      imageName: 'boxdown-usage-failure:latest'
+    }], async (_logPath, dockerEnv) => {
+      await withProcessEnv({
+        ...dockerEnv,
+        ...env,
+        BOXDOWN_FAKE_DOCKER_ANCESTOR_EXIT_CODE: '42'
+      }, async () => {
+        const text = formatPurgePlanText(await createPurgePlan(context))
+
+        assert.match(text, /Docker image usage could not be checked; purge will verify before removal/)
       })
     })
   })
@@ -4739,7 +4944,7 @@ describe('CLI execution', () => {
       await waitForPromptOutput(outputText, /Purge Boxdown workspace\?/)
       assert.match(outputText(), /This will remove:/)
       assert.match(outputText(), /Docker container: purge-preview-prompt-container \(running\)/)
-      assert.match(outputText(), /Docker image used by this workspace: boxdown-preview:latest \(sha256:purge-preview-prompt-image\)/)
+      assert.match(outputText(), /Docker image if still unused during removal: boxdown-preview:latest \(sha256:purge-preview-prompt-image\)/)
       assert.ok(outputText().includes(context.workspaceCacheDir))
       assert.ok(outputText().includes(context.workspaceDataDir))
       assert.ok(outputText().includes(context.workspaceRuntimeDir))
@@ -4749,7 +4954,7 @@ describe('CLI execution', () => {
       input.write('\r')
 
       assert.strictEqual(await codePromise, 1)
-      assert.ok(!fakeDockerCalls(logPath).some((line) => line.startsWith('rm -f') || line.startsWith('image rm -f')))
+      assert.ok(!fakeDockerCalls(logPath).some((line) => line.startsWith('rm -f') || line.startsWith('image rm ')))
       assert.strictEqual(existsSync(context.workspaceCacheDir), true)
       assert.strictEqual(existsSync(context.workspaceDataDir), true)
       assert.strictEqual(existsSync(context.workspaceRuntimeDir), true)
@@ -4784,7 +4989,7 @@ describe('CLI execution', () => {
       assert.strictEqual(result.code, 0)
       assert.ok(result.stdout.includes(`Purge plan: ${context.workspaceFolder}`))
       assert.match(result.stdout, /Docker container: purge-preview-ci-container \(running\)/)
-      assert.match(result.stdout, /Docker image used by this workspace: boxdown-preview-ci:latest \(sha256:purge-preview-ci-image\)/)
+      assert.match(result.stdout, /Docker image if still unused during removal: boxdown-preview-ci:latest \(sha256:purge-preview-ci-image\)/)
       assert.ok(result.stdout.includes(context.workspaceCacheDir))
       assert.doesNotMatch(result.stdout, /\u001B/)
       assert.doesNotMatch(result.stdout, /Purge Boxdown workspace\?/)
@@ -4874,7 +5079,7 @@ describe('CLI execution', () => {
       assert.strictEqual(result.code, 0)
       assert.ok(calls.includes('inspect --format {{json .Image}}|{{json .Config.Image}} purge-container'))
       assert.ok(calls.includes('rm -f -v purge-container'))
-      assert.ok(calls.includes('image rm -f sha256:purge-image'))
+      assert.ok(calls.includes('image rm sha256:purge-image'))
       assert.strictEqual(existsSync(context.workspaceFolder), true)
       assert.strictEqual(existsSync(context.workspaceCacheDir), false)
       assert.strictEqual(existsSync(context.workspaceDataDir), false)
@@ -4921,6 +5126,80 @@ describe('CLI execution', () => {
     })
   })
 
+  test('purge retains an image shared by another Boxdown workspace', async () => {
+    const targetWorkspace = tempDir('purge-shared-target')
+    const peerWorkspace = tempDir('purge-shared-peer')
+    const env = {
+      HOME: tempDir('purge-shared-home'),
+      BOXDOWN_CACHE_HOME: tempDir('purge-shared-cache'),
+      BOXDOWN_DATA_HOME: tempDir('purge-shared-data'),
+      BOXDOWN_RUNTIME_HOME: tempDir('purge-shared-runtime'),
+      BOXDOWN_SSH_CONFIG: join(tempDir('purge-shared-ssh'), 'config')
+    }
+    const context = createWorkspaceContext({
+      workspace: targetWorkspace,
+      env,
+      assetsDevcontainerDir
+    })
+    writeWorkspaceMetadata(context, defaultSshAlias(context.workspaceBasename))
+
+    await withFakeDocker([
+      {
+        workspace: targetWorkspace,
+        id: 'target-container',
+        imageId: 'sha256:shared',
+        imageName: 'boxdown-shared:latest'
+      },
+      {
+        workspace: peerWorkspace,
+        id: 'peer-container',
+        containerState: 'exited',
+        imageId: 'sha256:shared',
+        imageName: 'boxdown-shared:latest'
+      }
+    ], async (logPath, dockerEnv) => {
+      const result = runCliProcess(['purge', '--workspace', targetWorkspace], {
+        ...dockerEnv,
+        ...env
+      })
+      const calls = fakeDockerCalls(logPath)
+
+      assert.strictEqual(result.code, 0)
+      assert.match(result.stdout, /Retained shared Docker image: .*sha256:shared.*used by: peer-container/)
+      assert.ok(calls.includes('rm -f -v target-container'))
+      assert.strictEqual(calls.some(call => call === 'image rm sha256:shared'), false)
+    })
+  })
+
+  test('purge skips image removal when target container removal fails', async () => {
+    const workspace = tempDir('purge-container-failure')
+    const env = {
+      HOME: tempDir('purge-container-failure-home'),
+      BOXDOWN_CACHE_HOME: tempDir('purge-container-failure-cache'),
+      BOXDOWN_DATA_HOME: tempDir('purge-container-failure-data'),
+      BOXDOWN_SSH_CONFIG: join(tempDir('purge-container-failure-ssh'), 'config')
+    }
+    const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+    writeWorkspaceMetadata(context, defaultSshAlias(context.workspaceBasename))
+
+    await withFakeDocker([{
+      workspace,
+      id: 'failed-target-container',
+      removeExitCode: 37,
+      imageId: 'sha256:retained-after-container-failure'
+    }], async (logPath, dockerEnv) => {
+      const result = runCliProcess(['purge', '--workspace', workspace], {
+        ...dockerEnv,
+        ...env
+      })
+      const calls = fakeDockerCalls(logPath)
+
+      assert.strictEqual(result.code, 1)
+      assert.match(result.stdout, /Retained Docker image after failed container removal/)
+      assert.strictEqual(calls.some(call => call.startsWith('image rm ')), false)
+    })
+  })
+
   test('retains Cursor ownership data when complete integration cleanup times out', async () => {
     const workspace = tempDir('purge-cursor-lock-workspace')
     const env = {
@@ -4964,7 +5243,7 @@ describe('CLI execution', () => {
       assert.strictEqual(result.code, 1)
       assert.match(result.stderr, /Failed Cursor workspace integration cleanup/)
       assert.ok(calls.includes('rm -f -v purge-cursor-lock-container'))
-      assert.ok(calls.includes('image rm -f sha256:purge-cursor-lock-image'))
+      assert.ok(calls.includes('image rm sha256:purge-cursor-lock-image'))
       assert.strictEqual(existsSync(context.workspaceCacheDir), false)
       assert.strictEqual(existsSync(context.workspaceDataDir), true)
       assert.strictEqual(existsSync(cursorIntegrationPath(context)), true)
@@ -4998,7 +5277,7 @@ describe('CLI execution', () => {
       assert.strictEqual(result.code, 0)
       assert.ok(calls.some((line) => line.startsWith('ps -a ')))
       assert.ok(!calls.some((line) => line.startsWith('rm -f')))
-      assert.ok(calls.includes('image rm -f sha256:recorded-image'))
+      assert.ok(calls.includes('image rm sha256:recorded-image'))
       assert.strictEqual(existsSync(context.workspaceCacheDir), false)
       assert.strictEqual(existsSync(context.workspaceDataDir), false)
     })
@@ -5527,7 +5806,6 @@ describe('CLI execution', () => {
         workspace,
         id: 'failing-container',
         imageId: 'sha256:failing-image',
-        removeExitCode: 37,
         imageRemoveExitCode: 41
       }
     ], async (logPath, dockerEnv) => {
@@ -5539,8 +5817,7 @@ describe('CLI execution', () => {
 
       assert.strictEqual(result.code, 1)
       assert.ok(calls.includes('rm -f -v failing-container'))
-      assert.ok(calls.includes('image rm -f sha256:failing-image'))
-      assert.match(result.stderr, /Failed Docker container failing-container: Could not remove Docker container failing-container/)
+      assert.ok(calls.includes('image rm sha256:failing-image'))
       assert.match(result.stderr, /Failed Docker image sha256:failing-image/)
       assert.strictEqual(existsSync(context.workspaceCacheDir), false)
       assert.strictEqual(existsSync(context.workspaceDataDir), false)
@@ -5657,7 +5934,7 @@ describe('CLI execution', () => {
       assert.strictEqual(code, 1)
       assert.ok(calls.some((line) => line.startsWith('ps -a --filter label=devcontainer.local_folder=')))
       assert.ok(calls.some((line) => line.startsWith('inspect --format {{json .Image}}|{{json .Config.Image}}')))
-      assert.ok(!calls.some((line) => line.startsWith('rm -f') || line.startsWith('image rm -f')))
+      assert.ok(!calls.some((line) => line.startsWith('rm -f') || line.startsWith('image rm ')))
       assert.strictEqual(existsSync(context.workspaceCacheDir), true)
       assert.strictEqual(existsSync(context.workspaceDataDir), true)
       assert.strictEqual(existsSync(context.workspaceLogPath), false)
@@ -5704,7 +5981,7 @@ describe('CLI execution', () => {
 
       assert.strictEqual(code, 0)
       assert.ok(calls.includes('rm -f -v purge-prompt-confirm-container'))
-      assert.ok(calls.includes('image rm -f sha256:purge-prompt-confirm-image'))
+      assert.ok(calls.includes('image rm sha256:purge-prompt-confirm-image'))
       assert.strictEqual(existsSync(context.workspaceCacheDir), false)
       assert.strictEqual(existsSync(context.workspaceDataDir), false)
       assert.strictEqual(existsSync(context.workspaceLogPath), false)

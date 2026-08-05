@@ -9,7 +9,7 @@ import { reportGitSigningPlan, resolveGitSigningPlan } from './git-signing.ts'
 import type { WorkspaceCommandLogger } from './logging.ts'
 import { recordLegacyImageMigrationNotice, recordWorkspaceDockerImage } from './metadata.ts'
 import type { WorkspaceContext } from './paths.ts'
-import { runBuffered, runInteractive } from './process.ts'
+import { runBuffered, runInteractive, type CommandResult } from './process.ts'
 import { assertProgressCommandSucceeded, type ProgressReporter, runProgressCommand } from './progress.ts'
 import { interactiveCommandScript, interactiveShellEnvArgs, interactiveShellScript } from './shell.ts'
 import { ensureHostSshKey } from './ssh-key.ts'
@@ -47,6 +47,21 @@ export interface DockerImageInfo {
   id: string
   name?: string
 }
+
+export interface DockerImageConsumer {
+  id: string
+  name: string
+}
+
+export type DockerImageRemovalResult =
+  | { status: 'removed' }
+  | { status: 'absent' }
+  | { status: 'retained-in-use', consumers: DockerImageConsumer[] }
+
+export type DockerCommandRunner = (
+  args: string[],
+  logger?: WorkspaceCommandLogger
+) => Promise<CommandResult>
 
 export function isPublishedBoxdownImage (image?: DockerImageInfo): boolean {
   return /^ghcr\.io\/lirantal\/boxdown:\S+$/.test(image?.name ?? '')
@@ -287,24 +302,113 @@ function dockerImageMissing (stderr: string): boolean {
   return /No such image/i.test(stderr) || /not found/i.test(stderr)
 }
 
-export async function removeDockerImage (imageId: string, options: { logger?: WorkspaceCommandLogger } = {}): Promise<boolean> {
-  const result = await runBuffered('docker', ['image', 'rm', '-f', imageId], {
-    logger: options.logger,
+const runDockerCommand: DockerCommandRunner = async (args, logger) => {
+  return await runBuffered('docker', args, {
+    logger,
     mirrorStdout: false,
     mirrorStderr: false
   })
+}
 
-  if (result.code !== 0) {
-    if (dockerImageMissing(result.stderr)) {
-      process.stdout.write(`Docker image already absent: ${imageId}\n`)
-      return false
+function parseDockerImageConsumer (
+  output: string,
+  containerId: string
+): DockerImageConsumer & { imageId: string } {
+  const [rawId, rawName, rawImageId] = output.trim().split('|')
+
+  try {
+    const id: unknown = JSON.parse(rawId ?? '')
+    const name: unknown = JSON.parse(rawName ?? '')
+    const imageId: unknown = JSON.parse(rawImageId ?? '')
+
+    if (
+      typeof id !== 'string' || id.length === 0 ||
+      typeof name !== 'string' || name.length === 0 ||
+      typeof imageId !== 'string' || imageId.length === 0
+    ) {
+      throw new Error('Docker inspect fields were incomplete')
     }
 
-    throw new Error(`Could not remove Docker image ${imageId}`)
+    return {
+      id,
+      name: name.replace(/^\//, ''),
+      imageId
+    }
+  } catch (error) {
+    throw new Error(`Could not parse Docker image usage for container ${containerId}`, { cause: error })
+  }
+}
+
+export async function findDockerImageConsumers (
+  imageId: string,
+  options: {
+    excludeContainerIds?: readonly string[]
+    logger?: WorkspaceCommandLogger
+    runCommand?: DockerCommandRunner
+  } = {}
+): Promise<DockerImageConsumer[]> {
+  const runCommand = options.runCommand ?? runDockerCommand
+  const candidates = await runCommand([
+    'ps', '-aq', '--filter', `ancestor=${imageId}`
+  ], options.logger)
+
+  if (candidates.code !== 0) {
+    throw new Error(`Could not find Docker containers using image ${imageId}`)
   }
 
-  process.stdout.write(`Removed Docker image: ${imageId}\n`)
-  return true
+  const excluded = new Set(options.excludeContainerIds ?? [])
+  const consumers: DockerImageConsumer[] = []
+
+  for (const containerId of candidates.stdout.split(/\r?\n/).filter(Boolean)) {
+    if (excluded.has(containerId)) continue
+
+    const inspected = await runCommand([
+      'inspect',
+      '--format',
+      '{{json .Id}}|{{json .Name}}|{{json .Image}}',
+      containerId
+    ], options.logger)
+
+    if (inspected.code !== 0) {
+      throw new Error(`Could not inspect Docker image usage for container ${containerId}`)
+    }
+
+    const candidate = parseDockerImageConsumer(inspected.stdout, containerId)
+    if (candidate.imageId === imageId) {
+      consumers.push({ id: candidate.id, name: candidate.name })
+    }
+  }
+
+  return consumers
+}
+
+export async function removeDockerImageIfUnused (
+  imageId: string,
+  options: {
+    excludeContainerIds?: readonly string[]
+    logger?: WorkspaceCommandLogger
+    runCommand?: DockerCommandRunner
+  } = {}
+): Promise<DockerImageRemovalResult> {
+  const runCommand = options.runCommand ?? runDockerCommand
+  const consumerOptions = { ...options, runCommand }
+  const consumers = await findDockerImageConsumers(imageId, consumerOptions)
+
+  if (consumers.length > 0) {
+    return { status: 'retained-in-use', consumers }
+  }
+
+  const result = await runCommand(['image', 'rm', imageId], options.logger)
+
+  if (result.code === 0) return { status: 'removed' }
+  if (dockerImageMissing(result.stderr)) return { status: 'absent' }
+
+  const lateConsumers = await findDockerImageConsumers(imageId, consumerOptions)
+  if (lateConsumers.length > 0) {
+    return { status: 'retained-in-use', consumers: lateConsumers }
+  }
+
+  throw new Error(`Could not remove Docker image ${imageId}`)
 }
 
 function agentProfileMismatchMessage (agentProfile: AgentProfile): string {
