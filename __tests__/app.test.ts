@@ -5283,6 +5283,42 @@ describe('CLI execution', () => {
     })
   })
 
+  test('purge retains a recorded image shared by an absent workspace container', async () => {
+    const workspace = tempDir('purge-recorded-shared-image-workspace')
+    const peerWorkspace = tempDir('purge-recorded-shared-image-peer')
+    const env = {
+      HOME: tempDir('purge-recorded-shared-image-home'),
+      BOXDOWN_CACHE_HOME: tempDir('purge-recorded-shared-image-cache'),
+      BOXDOWN_DATA_HOME: tempDir('purge-recorded-shared-image-data'),
+      BOXDOWN_SSH_CONFIG: join(tempDir('purge-recorded-shared-image-ssh'), 'config')
+    }
+    const context = createWorkspaceContext({ workspace, env, assetsDevcontainerDir })
+
+    writeWorkspaceMetadata(context, defaultSshAlias(context.workspaceBasename))
+    recordWorkspaceDockerImage(context, {
+      id: 'sha256:recorded-shared-image',
+      name: 'recorded-shared:latest'
+    })
+
+    await withFakeDocker([{
+      workspace: peerWorkspace,
+      id: 'recorded-shared-peer',
+      containerState: 'exited',
+      imageId: 'sha256:recorded-shared-image',
+      imageName: 'recorded-shared:latest'
+    }], async (logPath, dockerEnv) => {
+      const result = runCliProcess(['purge', '--workspace', workspace], {
+        ...dockerEnv,
+        ...env
+      })
+      const calls = fakeDockerCalls(logPath)
+
+      assert.strictEqual(result.code, 0)
+      assert.match(result.stdout, /Retained shared Docker image: .*sha256:recorded-shared-image.*used by: recorded-shared-peer/)
+      assert.strictEqual(calls.some(call => call.startsWith('image rm ')), false)
+    })
+  })
+
   test('purge resolves workspace selector from recorded SSH alias', async () => {
     const workspace = tempDir('purge-alias-selector-workspace')
     const env = {
