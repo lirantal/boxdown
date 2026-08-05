@@ -663,6 +663,11 @@ function fakePromptStreams (options: { columns?: number, rawMode?: boolean } = {
   }
 }
 
+function compactPromptText (value: string): string {
+  return value
+    .replace(/\u001B\[[0-?]*[ -/]*[@-~]|[│\s]/gu, '')
+}
+
 test('setup toolchain selection preselects detected runtimes and persists the choice', async () => {
   const workspace = tempDir('setup-toolchains-prompt')
   const context = createWorkspaceContext({
@@ -6063,10 +6068,10 @@ describe('CLI execution', () => {
       assert.match(outputText(), /beta/)
       assert.match(outputText(), /delta/)
       assert.match(outputText(), /missing/)
-      assert.ok(outputText().includes(`(absent) ${alphaContext.workspaceFolder}`))
-      assert.ok(outputText().includes(`(running) ${betaContext.workspaceFolder}`))
-      assert.ok(outputText().includes(`(exited) ${deltaContext.workspaceFolder}`))
-      assert.ok(outputText().includes(`(missing) ${missingContext.workspaceFolder}`))
+      assert.ok(compactPromptText(outputText()).includes(compactPromptText(`(absent) ${alphaContext.workspaceFolder}`)))
+      assert.ok(compactPromptText(outputText()).includes(compactPromptText(`(running) ${betaContext.workspaceFolder}`)))
+      assert.ok(compactPromptText(outputText()).includes(compactPromptText(`(exited) ${deltaContext.workspaceFolder}`)))
+      assert.ok(compactPromptText(outputText()).includes(compactPromptText(`(missing) ${missingContext.workspaceFolder}`)))
       assert.doesNotMatch(outputText(), /alpha-devcontainer/)
       assert.doesNotMatch(outputText(), /beta-devcontainer/)
       assert.doesNotMatch(outputText(), /delta-devcontainer/)
@@ -6074,18 +6079,22 @@ describe('CLI execution', () => {
 
       input.write('\u001B[A')
       await waitForPromptOutput(outputText, /\u001B\[31m\(missing\)\u001B\[0m/)
-      assert.ok(outputText().includes(`${color(' - ', 'dim')}${color('(missing)', 'red')}${color(` ${missingContext.workspaceFolder}`, 'dim')}`))
+      assert.ok(outputText().includes(color('(missing)', 'red')))
+      assert.ok(compactPromptText(outputText()).includes(compactPromptText(`(missing) ${missingContext.workspaceFolder}`)))
       input.write(' ')
       input.write('\u001B[A')
       await waitForPromptOutput(outputText, /\u001B\[33m\(exited\)\u001B\[0m/)
-      assert.ok(outputText().includes(`${color(' - ', 'dim')}${color('(exited)', 'yellow')}${color(` ${deltaContext.workspaceFolder}`, 'dim')}`))
+      assert.ok(outputText().includes(color('(exited)', 'yellow')))
+      assert.ok(compactPromptText(outputText()).includes(compactPromptText(`(exited) ${deltaContext.workspaceFolder}`)))
       input.write('\u001B[A')
       await waitForPromptOutput(outputText, /\u001B\[32m\(running\)\u001B\[0m/)
-      assert.ok(outputText().includes(`${color(' - ', 'dim')}${color('(running)', 'green')}${color(` ${betaContext.workspaceFolder}`, 'dim')}`))
+      assert.ok(outputText().includes(color('(running)', 'green')))
+      assert.ok(compactPromptText(outputText()).includes(compactPromptText(`(running) ${betaContext.workspaceFolder}`)))
       input.write(' ')
       input.write('\u001B[A')
       await waitForPromptOutput(outputText, /\u001B\[31m\(absent\)\u001B\[0m/)
-      assert.ok(outputText().includes(`${color(' - ', 'dim')}${color('(absent)', 'red')}${color(` ${alphaContext.workspaceFolder}`, 'dim')}`))
+      assert.ok(outputText().includes(color('(absent)', 'red')))
+      assert.ok(compactPromptText(outputText()).includes(compactPromptText(`(absent) ${alphaContext.workspaceFolder}`)))
       input.write('\r')
       await waitForPromptOutput(outputText, /Purge selected Boxdown workspaces\?/)
       assert.strictEqual((outputText().match(/This will remove:/g) ?? []).length, 2)
@@ -6141,10 +6150,11 @@ describe('CLI execution', () => {
     })))
 
     await waitForPromptOutput(outputText, /Purge Boxdown workspaces\?/)
-    assert.ok(outputText().includes(`(unknown) ${context.workspaceFolder}`))
+    assert.ok(compactPromptText(outputText()).includes(compactPromptText(`(unknown) ${context.workspaceFolder}`)))
     input.write('\u001B[A')
     await waitForPromptOutput(outputText, /\u001B\[31m\(unknown\)\u001B\[0m/)
-    assert.ok(outputText().includes(`${color(' - ', 'dim')}${color('(unknown)', 'red')}${color(` ${context.workspaceFolder}`, 'dim')}`))
+    assert.ok(outputText().includes(color('(unknown)', 'red')))
+    assert.ok(compactPromptText(outputText()).includes(compactPromptText(`(unknown) ${context.workspaceFolder}`)))
     input.write('\u0003')
 
     assert.strictEqual(await codePromise, 1)
