@@ -5,9 +5,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 import { createWorkspaceContext } from '../src/paths.ts'
-import { createProgress } from '../src/progress.ts'
+import { createProgress, type ProgressReporter } from '../src/progress.ts'
 import { installSshConfig } from '../src/ssh-config.ts'
 import { installSshInstallTarget } from '../src/ssh-install-targets.ts'
+import { installRemoteAccess, remoteAccessProgressSteps } from '../src/ssh-install.ts'
+import type { WorkspaceContext } from '../src/paths.ts'
+import type { AppInstallResult, SshAliasInstallResult } from '../src/ssh-install-result.ts'
+import type { SshConfigInstallTarget } from '../src/ssh-install-targets.ts'
 
 import {
   formatRemoteAccessCancellation,
@@ -65,6 +69,24 @@ function successfulCursorReport (): RemoteAccessInstallReport {
       ]
     }],
     failures: [], skipped: [], notices: []
+  }
+}
+
+const coordinatorContext = {} as WorkspaceContext
+const coordinatorAlias = 'demo-devcontainer'
+const coordinatorSshResult: SshAliasInstallResult = successfulCursorReport().ssh as SshAliasInstallResult
+
+function appResultFor (target: SshConfigInstallTarget): AppInstallResult {
+  const appLabel = target === 'codex' ? 'ChatGPT' : target === 'claude' ? 'Claude' : 'Cursor'
+  return {
+    kind: 'app',
+    target,
+    appLabel,
+    disposition: 'installed',
+    summary: `${appLabel} configured`,
+    warnings: [],
+    action: { label: `Open ${appLabel}.` },
+    details: []
   }
 }
 
@@ -259,4 +281,89 @@ test('maps ChatGPT and Claude installs to the common app contract', async () => 
     target: 'claude', label: 'Claude', disposition: 'installed'
   })
   assert.match(claude.action.label, /Restart Claude/)
+})
+
+describe('remote access installation coordination', () => {
+  test('skips every app when SSH installation fails', async () => {
+    const targetCalls: string[] = []
+    const report = await installRemoteAccess(coordinatorContext, coordinatorAlias, ['codex', 'cursor'], {
+      installSsh: async () => { throw new Error('SSH config is not writable') },
+      installTarget: async (_context, _alias, target) => {
+        targetCalls.push(target)
+        throw new Error('must not run')
+      }
+    })
+
+    assert.deepStrictEqual(targetCalls, [])
+    assert.deepStrictEqual(report.failures.map((failure) => failure.scope), ['ssh'])
+    assert.deepStrictEqual(report.skipped.map((skipped) => skipped.target), ['codex', 'cursor'])
+    assert.strictEqual(report.failures[0]?.message, 'SSH config is not writable')
+    assert.doesNotMatch(report.failures[0]?.message ?? '', /^Error:/)
+    assert.strictEqual(remoteAccessExitCode(report), 1)
+  })
+
+  test('continues after one app fails and preserves target order', async () => {
+    const targetCalls: string[] = []
+    const report = await installRemoteAccess(coordinatorContext, coordinatorAlias, ['codex', 'claude', 'cursor'], {
+      installSsh: async () => coordinatorSshResult,
+      installTarget: async (_context, _alias, target) => {
+        targetCalls.push(target)
+        if (target === 'codex') throw new Error('invalid ChatGPT config')
+        return appResultFor(target)
+      }
+    })
+
+    assert.deepStrictEqual(targetCalls, ['codex', 'claude', 'cursor'])
+    assert.deepStrictEqual(report.failures.map((failure) => failure.target), ['codex'])
+    assert.deepStrictEqual(report.apps.map((app) => app.target), ['claude', 'cursor'])
+    assert.strictEqual(remoteAccessExitCode(report), 1)
+  })
+
+  test('defines progress steps in target order', () => {
+    assert.deepStrictEqual(remoteAccessProgressSteps(['cursor', 'codex']), [
+      { id: 'ssh-alias', label: 'Configuring SSH alias' },
+      { id: 'ssh-target:cursor', label: 'Configuring Cursor' },
+      { id: 'ssh-target:codex', label: 'Configuring ChatGPT app' }
+    ])
+  })
+
+  test('reports successful, failed, and skipped dependency progress events', async () => {
+    const events: string[] = []
+    const progress: Pick<ProgressReporter, 'startStep' | 'completeStep' | 'failStep' | 'skipStep'> = {
+      startStep: (id: string) => events.push(`start:${id}`),
+      completeStep: (id: string) => events.push(`complete:${id}`),
+      failStep: (id: string) => events.push(`fail:${id}`),
+      skipStep: (id: string) => events.push(`skip:${id}`)
+    }
+
+    await installRemoteAccess(coordinatorContext, coordinatorAlias, ['codex', 'claude', 'cursor'], {
+      progress: progress as ProgressReporter,
+      installSsh: async () => coordinatorSshResult,
+      installTarget: async (_context, _alias, target) => {
+        if (target === 'codex') throw new Error('bad ChatGPT config')
+        return appResultFor(target)
+      }
+    })
+    await installRemoteAccess(coordinatorContext, coordinatorAlias, ['codex', 'claude', 'cursor'], {
+      progress: progress as ProgressReporter,
+      installSsh: async () => { throw new Error('bad SSH config') },
+      installTarget: async () => { throw new Error('must not run') }
+    })
+
+    assert.deepStrictEqual(events, [
+      'start:ssh-alias',
+      'complete:ssh-alias',
+      'start:ssh-target:codex',
+      'fail:ssh-target:codex',
+      'start:ssh-target:claude',
+      'complete:ssh-target:claude',
+      'start:ssh-target:cursor',
+      'complete:ssh-target:cursor',
+      'start:ssh-alias',
+      'fail:ssh-alias',
+      'skip:ssh-target:codex',
+      'skip:ssh-target:claude',
+      'skip:ssh-target:cursor'
+    ])
+  })
 })
