@@ -1494,7 +1494,10 @@ describe('CLI parsing', () => {
     assert.match(USAGE, /stop\s+Stop the workspace devcontainer/)
     assert.match(USAGE, /down\s+Remove the workspace devcontainer/)
     assert.match(USAGE, /boxdown down \[--workspace <path>\]\.\.\./)
-    assert.match(USAGE, /purge\s+Remove the workspace devcontainer, exact Docker/)
+    assert.match(
+      USAGE,
+      /purge\s+Remove the workspace devcontainer, its Docker image\s+when unused/
+    )
     assert.match(USAGE, /boxdown purge \[--workspace <path\|ssh-alias\|repo>\] \[--alias <name>\]/)
     assert.match(USAGE, /--workspace <path>\s+Target project directory[\s\S]*Repeatable with down\. With purge, also accepts PATH,/)
     assert.match(USAGE, /SSH ALIAS, or an unambiguous REPO from boxdown list\./)

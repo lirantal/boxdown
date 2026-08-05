@@ -117,8 +117,8 @@ Commands:
   stop                      Stop the workspace devcontainer if it is running.
   down                      Remove the workspace devcontainer. Keeps Boxdown
                             cache, generated config, data, and SSH keys.
-  purge                     Remove the workspace devcontainer, exact Docker
-                            image, managed SSH/app config, and Boxdown
+  purge                     Remove the workspace devcontainer, its Docker image
+                            when unused, managed SSH/app config, and Boxdown
                             cache/data for this workspace. Prompts for
                             tracked workspaces from untracked directories.
   doctor                    Check required host tools and Boxdown assets.

@@ -104,11 +104,15 @@ disable or enable log persistence. Foreground interactive shell, agent, and
 tunnel session bytes are not tee'd into the log.
 
 `purge` removes the workspace Docker container and its attached anonymous
-volumes, force-removes the exact Docker image ID Boxdown can inspect or has
-recorded for the workspace, removes Boxdown-managed SSH/Codex/Claude/Cursor entries
-for the computed, recorded, and provided aliases, and deletes the workspace's
-Boxdown cache/data directories, including the per-workspace command log. It
-does not delete the target repository directory or files inside it.
+volumes. It removes the exact inspected or recorded Docker image only when no
+other running or stopped container references that image ID. A shared image is
+retained as a normal successful outcome and purge names its remaining container
+consumers. Image removal never uses force.
+
+It also removes Boxdown-managed SSH/Codex/Claude/Cursor entries for the
+computed, recorded, and provided aliases, and deletes the workspace's Boxdown
+cache/data directories, including the per-workspace command log. It does not
+delete the target repository directory or files inside it.
 
 Purge continues Docker, runtime, and cache cleanup after any complete target
 integration cleanup failure, but retains workspace data when integration cleanup
@@ -118,10 +122,11 @@ Docker step does not itself retain workspace data.
 Before an interactive confirmation, Boxdown shows a resource-level removal
 plan. It names the Docker container and image when available, the managed SSH
 and app connections, and the exact generated-configuration, workspace-data,
-and temporary-runtime paths. The plan also states what remains untouched: the
-repository, Git history and original host Git configuration, other Docker
-resources, and other Boxdown workspaces. It never prints secret, private-key,
-or log contents.
+and temporary-runtime paths. Shared images appear under retained resources, and
+apparently unused images are described conditionally. The plan also states what
+remains untouched: the repository, Git history and original host Git
+configuration, other Docker resources, and other Boxdown workspaces. It never
+prints secret, private-key, or log contents.
 
 The plan is a read-only snapshot collected immediately before confirmation.
 Boxdown checks Docker resources again when deletion starts, so a resource that
@@ -203,8 +208,11 @@ Docker can bind-mount the workspace, Boxdown assets, and Boxdown runtime-state
 paths. The probe never pulls an image or starts container code.
 
 Known bind-mount/share failures are errors with the affected host path and
-Docker Desktop remediation guidance. If Docker has no local image or the probe
-cannot complete for another reason, doctor reports a warning instead.
+Docker Desktop remediation guidance. For an existing Boxdown-managed child that
+Docker Desktop incorrectly reports as missing, doctor performs a one-time
+stable-parent refresh. Permission and file-sharing failures are not retried. If
+Docker has no local image or the probe cannot complete for another reason,
+doctor reports a warning instead.
 
 `boxdown setup` runs the required doctor checks before it prompts, writes
 workspace metadata, creates SSH keys, generates devcontainer configuration, or

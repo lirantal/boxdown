@@ -59,8 +59,10 @@ Each touched workspace also records inventory metadata at:
 `boxdown list` reads these metadata files as its source of truth, then enriches
 entries with best-effort Docker state.
 
-Metadata may also record the last inspected Docker image ID for the workspace so
-`boxdown purge` can remove that exact image even after the container is gone.
+Metadata may also record the last inspected Docker image ID and name for the
+workspace. `boxdown purge` uses that record after the workspace container is
+gone, but removes the image only when no other container references the exact
+ID.
 
 ## Cursor SSH Integration State
 
