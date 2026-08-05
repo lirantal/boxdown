@@ -50,6 +50,60 @@ alias. The menu supports selecting multiple targets or skipping all optional
 targets. In non-interactive contexts, Boxdown skips optional targets instead of
 blocking and prints the explicit `--target` form for scripts.
 
+## Installation Results and Next Steps
+
+`boxdown ssh install` ends with one of three results:
+
+- **Configuration complete** — every requested configuration write succeeded.
+- **Configuration complete with warnings** — configuration succeeded, but an
+  optional prerequisite or follow-up condition needs attention.
+- **Configuration incomplete** — one or more requested writes failed.
+
+A successful result means Boxdown wrote or verified the requested
+configuration. It does not mean Boxdown tested the SSH connection. Boxdown does
+not launch the selected app; follow the app-specific command or restart action
+under **Next step**.
+
+Successful and warning results exit with code `0`; an incomplete result exits
+with code `1`. When a warning has a remedy, it is listed before that app's
+handoff. A failed app does not get an open or restart action; use its recovery
+instruction and rerun the command.
+
+In a normal interactive success, the completed checklist, outcome, and handoff
+stay in the same Boxdown rail:
+
+```text
+┌ Configure remote access
+│  □ Configuring Cursor
+│  ✔ Configuration complete
+│  Next step
+│  Open this project in Cursor:
+│    cursor --folder-uri \
+│      'vscode-remote://ssh-remote+<repo-name>-devcontainer/workspaces/<repo-name>'
+└
+```
+
+The plain result keeps routine paths out of the way: it shows the outcome and
+app-specific next actions. Use `boxdown ssh install --verbose` for identity,
+backup, ownership, URI, and diagnostic details; `boxdown status` also exposes
+workspace state. Prose wraps to fit a narrow terminal, but commands and URIs
+are not truncated. On POSIX terminals, Cursor's long open command may be shown
+as a shell continuation; on Windows it is labeled as a PowerShell command.
+
+The next action is target-specific:
+
+- `--target codex`: restart ChatGPT, then open the remote project.
+- `--target claude`: restart Claude, then open the configured SSH remote.
+- `--target cursor`: run the printed `cursor --folder-uri` command. Resolve any
+  Cursor Remote SSH prerequisite warning first, then refresh Remote Explorer or
+  restart Cursor if necessary.
+
+To test the SSH connection explicitly after a complete result, run:
+
+```sh
+ssh <repo-name>-devcontainer 'whoami && pwd'
+```
+
 `boxdown ssh uninstall` has two cleanup modes:
 
 | Invocation | SSH alias block | Removed integrations |
@@ -147,11 +201,11 @@ the data root creates an independent ownership universe that cannot prove or
 clean the earlier records. If a new alias is not visible after settings change,
 refresh Cursor Remote Explorer or restart Cursor.
 
-## Codex App Target
+## ChatGPT App Target (`codex`)
 
-Selecting Codex from the interactive prompt or running
+Selecting ChatGPT from the interactive prompt or running
 `boxdown ssh install --target codex` keeps the normal SSH install flow and also
-writes a Codex app remote project entry for the same alias. `--target` is
+writes a ChatGPT app remote project entry for the same alias. `--target` is
 repeatable so future optional SSH install targets can be combined in one
 install command.
 
@@ -163,7 +217,7 @@ The Codex app config is written to:
 
 `BOXDOWN_CODEX_APP_CONFIG` overrides this path for tests and local development.
 
-The generated Codex entry points at the canonical container workspace path:
+The generated ChatGPT entry points at the canonical container workspace path:
 
 ```json
 {
@@ -178,16 +232,16 @@ The generated Codex entry points at the canonical container workspace path:
 ```
 
 Boxdown merges by SSH alias and normalized remote path, so repeated installs
-update the existing Codex project instead of duplicating it. If an older
-Boxdown install registered `/home/node/<repo-name>`, the next Codex target
-install migrates that entry to `/workspaces/<repo-name>`. Existing known Codex
-config keys are preserved, but unknown keys are not written back because
-Codex's app config parser is strict.
+update the existing ChatGPT project instead of duplicating it. If an older
+Boxdown install registered `/home/node/<repo-name>`, the next `codex` target
+install migrates that entry to `/workspaces/<repo-name>`. Existing known
+ChatGPT config keys are preserved, but unknown keys are not written back
+because the app config parser is strict.
 
-Boxdown normalizes matching Codex sidebar state for the same SSH alias when it
-installs the Codex target. Restart Codex after installing the target so Codex
+Boxdown normalizes matching ChatGPT sidebar state for the same SSH alias when it
+installs the `codex` target. Restart ChatGPT after installing the target so it
 applies the app config, discovers the SSH alias from normal OpenSSH config, and
-creates or updates its sidebar project entry.
+creates or updates its sidebar project entry. Boxdown does not start ChatGPT.
 
 ## Claude App Target
 
@@ -225,7 +279,7 @@ The generated Claude entry mirrors the desktop app's SSH remote shape:
 
 Boxdown merges by `sshHost`, preserves an existing Claude remote ID, and adds
 the alias to `trustedHosts`. Restart Claude after installing the target so the
-app applies the SSH remote entry.
+app applies the SSH remote entry. Boxdown does not start Claude.
 
 ## Proxy Flow
 

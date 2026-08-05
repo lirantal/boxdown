@@ -74,6 +74,20 @@ the workspace container is already running.
 5. Run `devcontainer up --workspace-folder <repo> --override-config <config>`.
 6. Install or update the Boxdown-managed SSH alias and selected app targets.
 
+When setup finishes its SSH and app configuration, the final result is
+action-first: **Setup complete**, **Setup complete with warnings**, or **Setup
+incomplete**. Complete means every requested configuration write succeeded;
+warnings mean those writes succeeded but an optional prerequisite or follow-up
+needs attention; incomplete means one or more requested writes failed. This
+does not test an SSH connection or launch an app. Follow the app-specific
+instruction under **Next step** instead.
+
+Default successful interactive output shows the outcome and app-specific next
+actions, not routine configuration paths. Run `boxdown setup --verbose` to add
+identity, backup, ownership, URI, and diagnostic details; `boxdown status` also
+reports workspace state. Commands and URIs are kept intact on narrow terminals
+while prose wraps.
+
 `setup` prints concise progress by default. In an interactive terminal,
 `--verbose` shows a detailed lifecycle trace without streaming raw child
 output. In CI or non-interactive output, Boxdown streams raw Docker, Dev
@@ -88,8 +102,8 @@ Boxdown also appends the managed setup output to the workspace command log at:
 The log is written in every mode. Interactive `--verbose` prints its concrete
 path when setup completes.
 
-When `--target codex` is provided, Boxdown writes the Codex app config entry for
-the same alias and container-side project path used by:
+When `--target codex` is provided, Boxdown writes the ChatGPT app config entry
+for the same alias and container-side project path used by:
 
 ```sh
 boxdown ssh install --target codex
@@ -103,10 +117,10 @@ boxdown ssh install --target claude
 ```
 
 When `--target cursor` is provided, Boxdown configures Cursor's public Remote
-SSH settings for the same alias and prints the URI plus the command that opens
-`/workspaces/<repo-name>`. It does not launch Cursor. See [SSH config and proxy
-workflow](./ssh-config-and-proxy.md#cursor-target) for prerequisites, commands,
-and cleanup behavior.
+SSH settings for the same alias and prints the URI plus the command to open
+`/workspaces/<repo-name>`. It does not launch Cursor; run the printed command
+yourself. See [SSH config and proxy workflow](./ssh-config-and-proxy.md#cursor-target)
+for prerequisites, commands, and cleanup behavior.
 
 When no target is provided, Boxdown uses the same optional target prompt as
 `boxdown ssh install`. In non-interactive shells, setup skips target

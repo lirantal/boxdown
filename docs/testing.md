@@ -23,6 +23,10 @@ Unit tests should avoid starting Docker. Prefer pure tests for:
 - SSH config block creation and idempotent replacement.
 - SSH install target parsing and prompt behavior, including explicit target
   flags, prompt selection, prompt skip/cancel, and non-TTY fallback.
+- SSH installation-result formatting: complete, warning, and incomplete
+  outcomes; warning remediation before an app handoff; exit code `0` for
+  warnings and `1` for failed writes; `--verbose`-only technical details; and
+  narrow-terminal wrapping without truncating commands or URIs.
 - Setup agent-profile selection, including single-choice raw and line input,
   cancellation before state writes, and non-interactive fallback.
 - Codex app/global-state target installation, legacy path migration,
@@ -88,6 +92,20 @@ The plain `ssh install` command should show the optional target selector when
 run in an interactive terminal. The explicit `--target codex`, `--target
 claude`, and `--target cursor` commands verify scriptable target installation,
 and the `CI=1` command verifies the non-interactive skip path without blocking.
+For a normal interactive success, confirm the completed checklist, final
+outcome, and app-specific **Next step** appear inside one Boxdown rail. Check a
+terminal narrower than 80 columns: prose may wrap, but the Cursor command and
+URI must remain complete. Re-run the same command to confirm an idempotent
+result without duplicate app configuration. Exercise a multi-target install in
+which one target fails: the outcome must be incomplete with exit code `1`, show
+the failed target's recovery, and retain next actions for other successful
+targets. Also check a warning-only Cursor prerequisite result: it must exit
+`0`, list the remediation before the open command, and never launch Cursor or
+install its extension.
+
+An installation outcome does not validate SSH connectivity. Run the explicit
+`ssh <repo-name>-devcontainer 'whoami && pwd'` command separately when that
+connection check is part of the acceptance test.
 
 The first `setup --target codex` command should show the profile selector. The
 `setup --target codex --agent-profile auth` command is fully explicit, and the

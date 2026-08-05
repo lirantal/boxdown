@@ -258,9 +258,20 @@ Validate the SSH alias with:
 ssh <repo-name>-devcontainer 'whoami && pwd'
 ```
 
-Use the same alias in Cursor, Claude, Codex, or any SSH-capable tool.
+Use the same alias in Cursor, Claude, ChatGPT, or any SSH-capable tool.
 
-To also add the project to Codex's remote project sidebar or Claude's SSH
+`boxdown ssh install` ends with a clear configuration outcome and the next
+manual action for each selected app. **Configuration complete** means every
+requested configuration write succeeded; **Configuration complete with
+warnings** means the writes succeeded but an optional prerequisite or follow-up
+needs attention; **Configuration incomplete** means one or more requested
+writes failed. A successful result confirms configuration writes or
+verification only: it does not test an SSH connection and never launches an
+app. Follow the app-specific command or restart instruction under **Next
+step**. Run with `--verbose` for configuration paths and diagnostic details, or
+use `boxdown status` to find the workspace state.
+
+To also add the project to ChatGPT's remote project sidebar or Claude's SSH
 remote list, pass one or more targets during setup or select them from the
 lower-level SSH prompt:
 
@@ -278,10 +289,13 @@ npx boxdown ssh install --target claude
 npx boxdown ssh install --target cursor
 ```
 
-Restart the target app after installing it so it applies the updated remote
-project config. Cursor output includes a `cursor --folder-uri` command; refresh
-Cursor Remote Explorer or restart Cursor if the alias is not immediately
-visible. Boxdown does not launch Cursor or install its extensions.
+Restart the selected app after installing it so it applies the updated remote
+project config. For the `codex` target, restart ChatGPT and open the remote
+project; for Claude, restart Claude and open the configured SSH remote. Cursor
+output includes a `cursor --folder-uri` command; run that command yourself,
+then refresh Cursor Remote Explorer or restart Cursor if the alias is not
+immediately visible. Boxdown does not launch any selected app or install Cursor
+extensions.
 
 From the target project directory, forward a dev server running inside the
 container to your host browser:

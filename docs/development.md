@@ -28,6 +28,14 @@ pnpm run start -- ssh install --workspace /path/to/project
 The published binary is `boxdown`, but local development goes through
 `tsx src/bin/cli.ts` via `pnpm run start`.
 
+When developing SSH or app installation output, use the printed **Next step**
+as the manual handoff. Boxdown writes configuration but does not launch
+ChatGPT, Claude, or Cursor, and a complete configuration result does not test
+the SSH connection. Use `--verbose` when you need identity, backup, ownership,
+URI, or diagnostic details; normal output intentionally keeps those details out
+of the success path. Check the result formatter at a terminal width below 80
+columns: prose can wrap, but commands and URIs must stay intact.
+
 ## Build
 
 ```sh
@@ -61,7 +69,11 @@ pnpm run start -- setup --workspace ~/projects/repos/example --target cursor
 In an interactive terminal, `ssh install` asks whether to install optional SSH
 targets. Add `--target codex`, `--target claude`, or `--target cursor` when
 testing an app target explicitly, or set `CI=1` when you want to exercise the
-non-interactive skip path.
+non-interactive skip path. Verify the three result states: complete and
+complete-with-warnings return `0`; incomplete returns `1`. Re-run a successful
+multi-target command to verify idempotency, and simulate a single target failure
+to ensure it produces recovery guidance without hiding next actions for other
+successful targets.
 
 Setting up a real container writes Boxdown state under user cache/data
 directories and may pull images or install the Dev Containers CLI.
