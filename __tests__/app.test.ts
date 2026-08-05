@@ -1532,6 +1532,7 @@ describe('CLI parsing', () => {
     assert.ok(!usageLines.some((line) => line.startsWith('  cc')))
     assert.ok(!usageLines.some((line) => line.startsWith('  install-ssh-config')))
     assert.match(USAGE, /ssh install\s+Install or update an SSH host alias/)
+    assert.match(USAGE, /boxdown ssh install \[--workspace <path>\] \[--alias <name>\] \[--target <name>\]\.\.\. \[--verbose\]/)
     assert.match(USAGE, /ssh uninstall\s+Remove Boxdown's managed SSH host alias/)
     assert.doesNotMatch(USAGE, /ssh-config/)
     assert.match(USAGE, /--target <name>\s+Optional SSH integration target/)
@@ -3991,8 +3992,14 @@ describe('CLI execution', () => {
     const codexConfig = parseCodexAppConfig(JSON.parse(readFileSync(codexConfigPath, 'utf8')))
 
     assert.strictEqual(result.code, 0)
-    assert.match(result.stdout, /Installed SSH alias:/)
-    assert.match(result.stdout, /Installed Codex remote project:/)
+    assert.match(result.stdout, /SSH alias configured/)
+    assert.match(result.stdout, /Configuration complete/)
+    assert.match(result.stdout, /Next step/)
+    assert.match(result.stdout, /Restart ChatGPT/)
+    assert.doesNotMatch(result.stdout, /SSH connection not tested/)
+    assert.doesNotMatch(result.stdout, /ChatGPT config:/)
+    assert.doesNotMatch(result.stdout, /Identity file/)
+    assert.doesNotMatch(result.stdout, /\u001B\[/)
     assert.strictEqual(existsSync(sshConfigPath), true)
     assert.strictEqual(codexConfig.remoteConnections.length, 1)
     assert.strictEqual(codexConfig.remoteConnections[0]?.projects[0]?.label, realpathSync(workspace).split('/').at(-1))
@@ -4042,8 +4049,14 @@ describe('CLI execution', () => {
     const workspaceName = realpathSync(workspace).split('/').at(-1) ?? 'workspace'
 
     assert.strictEqual(result.code, 0)
-    assert.match(result.stdout, /Installed SSH alias:/)
-    assert.match(result.stdout, /Installed Claude SSH remote:/)
+    assert.match(result.stdout, /SSH alias configured/)
+    assert.match(result.stdout, /Configuration complete/)
+    assert.match(result.stdout, /Next step/)
+    assert.match(result.stdout, /Restart Claude/)
+    assert.doesNotMatch(result.stdout, /SSH connection not tested/)
+    assert.doesNotMatch(result.stdout, /Claude SSH config/)
+    assert.doesNotMatch(result.stdout, /Identity file/)
+    assert.doesNotMatch(result.stdout, /\u001B\[/)
     assert.strictEqual(existsSync(sshConfigPath), true)
     assert.deepStrictEqual(claudeConfig.configs.map((config) => ({
       name: config.name,
@@ -4081,12 +4094,17 @@ describe('CLI execution', () => {
     const folderUri = `vscode-remote://ssh-remote+${alias}/workspaces/${encodeURIComponent(workspaceName)}`
 
     assert.strictEqual(result.code, 0)
+    assert.match(result.stdout, /SSH alias configured/)
+    assert.match(result.stdout, /Configuration complete/)
+    assert.match(result.stdout, /Next step/)
+    assert.match(result.stdout, /Open this project in Cursor/)
+    assert.doesNotMatch(result.stdout, /SSH connection not tested/)
+    assert.doesNotMatch(result.stdout, /Cursor settings/)
+    assert.doesNotMatch(result.stdout, /Identity file/)
+    assert.doesNotMatch(result.stdout, /\u001B\[/)
     assert.deepStrictEqual(cursorRemotePlatforms(cursorSettingsPath), { [alias]: 'linux' })
-    assert.ok(result.stdout.includes(`Cursor settings: ${cursorSettingsPath}\n`))
-    assert.match(result.stdout, /Installed Cursor Linux platform mapping:/)
     assert.ok(result.stdout.includes(folderUri))
     assert.ok(result.stdout.includes(`cursor --folder-uri '${folderUri}'`))
-    assert.match(result.stdout, /Refresh Cursor Remote Explorer or restart Cursor/)
     assert.deepStrictEqual(fakeCursorCalls(cursor.logPath), ['--list-extensions'])
   })
 
@@ -4112,18 +4130,153 @@ describe('CLI execution', () => {
         BOXDOWN_SSH_CONFIG: sshConfigPath,
         BOXDOWN_CURSOR_SETTINGS: cursorSettingsPath
       })
-      const combined = `${result.stdout}\n${result.stderr}`
-
       assert.strictEqual(result.code, 0, entry.name)
       assert.strictEqual(existsSync(cursorSettingsPath), true, entry.name)
-      assert.match(combined, /Warning:.*anysphere\.remote-ssh/iu, entry.name)
-      assert.match(combined, /cursor --install-extension anysphere\.remote-ssh/u, entry.name)
-      assert.match(result.stderr, /Warning:.*anysphere\.remote-ssh/iu, entry.name)
-      assert.match(result.stderr, /cursor --install-extension anysphere\.remote-ssh/u, entry.name)
-      assert.doesNotMatch(result.stdout, /cursor --install-extension anysphere\.remote-ssh/u, entry.name)
-      assert.doesNotMatch(combined, /private\.(?:probe|failed)-output/u, entry.name)
+      assert.match(result.stdout, /Configuration complete with warnings/, entry.name)
+      assert.match(result.stdout, /Could not verify Cursor Remote SSH/, entry.name)
+      assert.match(result.stdout, /cursor --install-extension anysphere\.remote-ssh/u, entry.name)
+      assert.strictEqual(result.stderr, '', entry.name)
+      assert.doesNotMatch(result.stdout, /private\.(?:probe|failed)-output/u, entry.name)
       assert.deepStrictEqual(fakeCursorCalls(cursor.logPath), ['--list-extensions'], entry.name)
     }
+  })
+
+  test('ssh install reports already configured state on rerun', () => {
+    const workspace = tempDir('cli-idempotent-workspace')
+    const sshConfigPath = join(tempDir('cli-idempotent-ssh'), 'config')
+    const cursorSettingsPath = join(tempDir('cli-idempotent-cursor-settings'), 'settings.json')
+    const cursor = fakeCursorCli('anysphere.remote-ssh')
+    mkdirSync(dirname(cursorSettingsPath), { recursive: true })
+    writeFileSync(cursorSettingsPath, JSON.stringify({ 'remote.SSH.configFile': sshConfigPath }))
+    const args = ['ssh', 'install', '--workspace', workspace, '--target', 'cursor']
+    const env = {
+      ...process.env,
+      ...cursor.env,
+      HOME: tempDir('cli-idempotent-home'),
+      BOXDOWN_CACHE_HOME: tempDir('cli-idempotent-cache'),
+      BOXDOWN_DATA_HOME: tempDir('cli-idempotent-data'),
+      BOXDOWN_SSH_CONFIG: sshConfigPath,
+      BOXDOWN_CURSOR_SETTINGS: cursorSettingsPath
+    }
+
+    const first = runCliProcess(args, env)
+    const second = runCliProcess(args, env)
+
+    assert.strictEqual(first.code, 0)
+    assert.strictEqual(second.code, 0)
+    assert.match(second.stdout, /SSH alias already configured/)
+    assert.match(second.stdout, /Cursor already configured|Cursor already compatible/)
+    assert.match(second.stdout, /Configuration complete/)
+  })
+
+  test('ssh install verbose output includes diagnostic details', () => {
+    const workspace = tempDir('cli-verbose-workspace')
+    const sshConfigPath = join(tempDir('cli-verbose-ssh'), 'config')
+    const cursorSettingsPath = join(tempDir('cli-verbose-cursor-settings'), 'settings.json')
+    const cursor = fakeCursorCli('anysphere.remote-ssh')
+    mkdirSync(dirname(cursorSettingsPath), { recursive: true })
+    writeFileSync(cursorSettingsPath, JSON.stringify({ 'remote.SSH.configFile': sshConfigPath }))
+    const result = runCliProcess(['ssh', 'install', '--workspace', workspace, '--target', 'cursor', '--verbose'], {
+      ...process.env,
+      ...cursor.env,
+      HOME: tempDir('cli-verbose-home'),
+      BOXDOWN_CACHE_HOME: tempDir('cli-verbose-cache'),
+      BOXDOWN_DATA_HOME: tempDir('cli-verbose-data'),
+      BOXDOWN_SSH_CONFIG: sshConfigPath,
+      BOXDOWN_CURSOR_SETTINGS: cursorSettingsPath
+    })
+
+    assert.strictEqual(result.code, 0)
+    assert.match(result.stdout, /SSH config/)
+    assert.match(result.stdout, /Identity file/)
+    assert.match(result.stdout, /Cursor settings/)
+    assert.match(result.stdout, /Cursor remote folder URI/)
+  })
+
+  test('ssh install preserves a compatible user-owned Cursor mapping', () => {
+    const workspace = tempDir('cli-cursor-compatible-workspace')
+    const workspaceName = realpathSync(workspace).split('/').at(-1) ?? 'workspace'
+    const alias = `${workspaceName}-devcontainer`
+    const sshConfigPath = join(tempDir('cli-cursor-compatible-ssh'), 'config')
+    const cursorSettingsPath = join(tempDir('cli-cursor-compatible-settings'), 'settings.json')
+    const cursor = fakeCursorCli('anysphere.remote-ssh')
+    const originalSettings = `{\n  "remote.SSH.configFile": ${JSON.stringify(sshConfigPath)},\n  "remote.SSH.remotePlatform": {\n    ${JSON.stringify(alias)}: "linux"\n  }\n}\n`
+    mkdirSync(dirname(cursorSettingsPath), { recursive: true })
+    writeFileSync(cursorSettingsPath, originalSettings)
+
+    const result = runCliProcess(['ssh', 'install', '--workspace', workspace, '--target', 'cursor'], {
+      ...process.env,
+      ...cursor.env,
+      HOME: tempDir('cli-cursor-compatible-home'),
+      BOXDOWN_CACHE_HOME: tempDir('cli-cursor-compatible-cache'),
+      BOXDOWN_DATA_HOME: tempDir('cli-cursor-compatible-data'),
+      BOXDOWN_SSH_CONFIG: sshConfigPath,
+      BOXDOWN_CURSOR_SETTINGS: cursorSettingsPath
+    })
+
+    assert.strictEqual(result.code, 0)
+    assert.match(result.stdout, /Cursor already compatible/)
+    assert.match(result.stdout, /Configuration complete/)
+    assert.strictEqual(readFileSync(cursorSettingsPath, 'utf8'), originalSettings)
+  })
+
+  test('ssh install continues selected app configuration after a partial failure', () => {
+    const workspace = tempDir('cli-partial-failure-workspace')
+    const sshConfigPath = join(tempDir('cli-partial-failure-ssh'), 'config')
+    const codexConfigPath = join(tempDir('cli-partial-failure-codex'), 'config.json')
+    const claudeConfigPath = join(tempDir('cli-partial-failure-claude'), 'ssh_configs.json')
+    mkdirSync(dirname(codexConfigPath), { recursive: true })
+    writeFileSync(codexConfigPath, '{ invalid json')
+
+    const result = runCliProcess([
+      'ssh', 'install', '--workspace', workspace, '--target', 'codex', '--target', 'claude'
+    ], {
+      ...process.env,
+      HOME: tempDir('cli-partial-failure-home'),
+      BOXDOWN_CACHE_HOME: tempDir('cli-partial-failure-cache'),
+      BOXDOWN_DATA_HOME: tempDir('cli-partial-failure-data'),
+      BOXDOWN_SSH_CONFIG: sshConfigPath,
+      BOXDOWN_CODEX_APP_CONFIG: codexConfigPath,
+      BOXDOWN_CLAUDE_SSH_CONFIGS: claudeConfigPath
+    })
+
+    assert.strictEqual(result.code, 1)
+    assert.match(result.stdout, /SSH alias configured/)
+    assert.match(result.stdout, /ChatGPT configuration failed/)
+    assert.match(result.stdout, /Claude configured/)
+    assert.match(result.stdout, /Configuration incomplete/)
+    assert.doesNotMatch(result.stdout, /Restart ChatGPT/)
+    assert.match(result.stdout, /boxdown ssh install --target codex/)
+    assert.match(result.stdout, /Restart Claude/)
+    assert.strictEqual(existsSync(claudeConfigPath), true)
+  })
+
+  test('ssh install skips selected apps after SSH alias configuration fails', () => {
+    const workspace = tempDir('cli-core-failure-workspace')
+    const sshConfigPath = join(tempDir('cli-core-failure-ssh'), 'config-directory')
+    const codexConfigPath = join(tempDir('cli-core-failure-codex'), 'config.json')
+    const claudeConfigPath = join(tempDir('cli-core-failure-claude'), 'ssh_configs.json')
+    mkdirSync(sshConfigPath)
+
+    const result = runCliProcess([
+      'ssh', 'install', '--workspace', workspace, '--target', 'codex', '--target', 'claude'
+    ], {
+      ...process.env,
+      HOME: tempDir('cli-core-failure-home'),
+      BOXDOWN_CACHE_HOME: tempDir('cli-core-failure-cache'),
+      BOXDOWN_DATA_HOME: tempDir('cli-core-failure-data'),
+      BOXDOWN_SSH_CONFIG: sshConfigPath,
+      BOXDOWN_CODEX_APP_CONFIG: codexConfigPath,
+      BOXDOWN_CLAUDE_SSH_CONFIGS: claudeConfigPath
+    })
+
+    assert.strictEqual(result.code, 1)
+    assert.match(result.stdout, /SSH alias failed/)
+    assert.match(result.stdout, /ChatGPT skipped/)
+    assert.match(result.stdout, /Claude skipped/)
+    assert.match(result.stdout, /Configuration incomplete/)
+    assert.strictEqual(existsSync(codexConfigPath), false)
+    assert.strictEqual(existsSync(claudeConfigPath), false)
   })
 
   test('targeted Cursor uninstall preserves the SSH alias and removes only that mapping', () => {
@@ -4697,7 +4850,8 @@ describe('CLI execution', () => {
     })
 
     assert.strictEqual(result.code, 0)
-    assert.match(result.stdout, /No optional SSH install targets selected/)
+    assert.match(result.stdout, /No optional app integrations were selected/)
+    assert.match(result.stdout, /boxdown ssh install with\s+--target codex, --target claude, or --target cursor/)
     assert.strictEqual(existsSync(sshConfigPath), true)
     assert.strictEqual(existsSync(codexConfigPath), false)
   })
@@ -4748,26 +4902,39 @@ describe('CLI execution', () => {
     const codexConfigPath = join(tempDir('cli-prompt-cancel-app'), 'config.json')
     const dataDir = tempDir('cli-prompt-cancel-data')
     const { input, output } = fakePromptStreams()
+    const originalStderrWrite = process.stderr.write
+    let stderr = ''
 
-    const code = await withProcessEnv({
-      HOME: tempDir('cli-prompt-cancel-home'),
-      BOXDOWN_CACHE_HOME: tempDir('cli-prompt-cancel-cache'),
-      BOXDOWN_DATA_HOME: dataDir,
-      BOXDOWN_SSH_CONFIG: sshConfigPath,
-      BOXDOWN_CODEX_APP_CONFIG: codexConfigPath
-    }, async () => {
-      const runPromise = runCli(['ssh', 'install', '--workspace', workspace], {
-        promptInput: input,
-        promptOutput: output,
-        env: { ...process.env, CI: 'false' }
+    process.stderr.write = ((chunk: string | Uint8Array) => {
+      stderr += chunk.toString()
+      return true
+    }) as typeof process.stderr.write
+
+    let code: number
+    try {
+      code = await withProcessEnv({
+        HOME: tempDir('cli-prompt-cancel-home'),
+        BOXDOWN_CACHE_HOME: tempDir('cli-prompt-cancel-cache'),
+        BOXDOWN_DATA_HOME: dataDir,
+        BOXDOWN_SSH_CONFIG: sshConfigPath,
+        BOXDOWN_CODEX_APP_CONFIG: codexConfigPath
+      }, async () => {
+        const runPromise = runCli(['ssh', 'install', '--workspace', workspace], {
+          promptInput: input,
+          promptOutput: output,
+          env: { ...process.env, CI: 'false' }
+        })
+
+        input.write('\u0003')
+
+        return runPromise
       })
-
-      input.write('\u0003')
-
-      return runPromise
-    })
+    } finally {
+      process.stderr.write = originalStderrWrite
+    }
 
     assert.strictEqual(code, 1)
+    assert.match(stderr, /SSH install canceled\. No changes made\./)
     assert.strictEqual(existsSync(sshConfigPath), false)
     assert.strictEqual(existsSync(codexConfigPath), false)
     assert.deepStrictEqual(listWorkspaceMetadata(dataDir), [])

@@ -116,11 +116,13 @@ function indentedProse (value: string, indent: string, columns: number): string[
   return lines.map((line, index) => index === 0 ? line : `${indent}${line}`)
 }
 
-function actionLines (action: InstallAction, indent: string): string[] {
+function actionLines (action: InstallAction, indent: string, useDisplayLines: boolean): string[] {
   const lines = [`${indent}${action.label}`]
   if (action.commandLabel !== undefined) lines.push(`${indent}${action.commandLabel}`)
 
-  const commandLines = action.displayLines ?? (action.command === undefined ? [] : [action.command])
+  const commandLines = useDisplayLines
+    ? action.displayLines ?? (action.command === undefined ? [] : [action.command])
+    : action.command === undefined ? action.displayLines ?? [] : [action.command]
   for (const line of commandLines) lines.push(`${indent}  ${line}`)
   return lines
 }
@@ -140,9 +142,13 @@ function styled (value: string, style: CliColor, enabled: boolean): string {
   return maybeColor(value, style, enabled)
 }
 
+function resultLabel (label: string): string {
+  return label.endsWith(' app') ? label.slice(0, -' app'.length) : label
+}
+
 function failureTitle (failure: RemoteAccessInstallFailure): string {
   return failure.scope === 'app'
-    ? `${failure.label} configuration failed`
+    ? `${resultLabel(failure.label)} configuration failed`
     : `${failure.label} failed`
 }
 
@@ -183,7 +189,7 @@ export function formatRemoteAccessInstallReport (
   if (!options.interactive) {
     if (report.ssh !== undefined) lines.push(`${statusMark('success', options.color)} ${report.ssh.summary}`)
     for (const app of report.apps) lines.push(`${statusMark(app.warnings.length > 0 ? 'warning' : 'success', options.color)} ${app.summary}`)
-    for (const skipped of report.skipped) lines.push(`${statusMark('skipped', options.color)} ${skipped.label} skipped`)
+    for (const skipped of report.skipped) lines.push(`${statusMark('skipped', options.color)} ${resultLabel(skipped.label)} skipped`)
     if (lines.length > 0) lines.push('')
   }
 
@@ -205,7 +211,7 @@ export function formatRemoteAccessInstallReport (
     lines.push(...indentedProse(failure.message, '  ', options.columns))
   }
   for (const skipped of report.skipped) {
-    lines.push(`${statusMark('skipped', options.color)} ${skipped.label} skipped`)
+    lines.push(`${statusMark('skipped', options.color)} ${resultLabel(skipped.label)} skipped`)
     lines.push(...indentedProse(skipped.reason, '  ', options.columns))
   }
 
@@ -217,8 +223,8 @@ export function formatRemoteAccessInstallReport (
       const prefix = actions.length === 1 ? '' : `${index + 1}. `
       if (entry.message !== undefined) lines.push(...indentedProse(entry.message, '  ', options.columns))
       const action = prefix.length === 0
-        ? actionLines(entry.action, '')
-        : actionLines({ ...entry.action, label: `${prefix}${entry.action.label}` }, '  ')
+        ? actionLines(entry.action, '', options.interactive)
+        : actionLines({ ...entry.action, label: `${prefix}${entry.action.label}` }, '  ', options.interactive)
       const commandStart = entry.action.commandLabel === undefined ? 1 : 2
       lines.push(...action.map((line, lineIndex) => {
         if (lineIndex === 0) return line

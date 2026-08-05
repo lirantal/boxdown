@@ -18,7 +18,9 @@ import { createPurgePlan, formatPurgePlanDetails, formatPurgePlanText, purgeWork
 import { resolveSetupAgentProfile } from './setup-agent-profile.ts'
 import { formatDetectedToolchainsSummary, formatSelectedToolchainsSummary, resolveSetupToolchains } from './setup-toolchains.ts'
 import { defaultSshAlias, installSshConfig, uninstallSshConfig, validateSshAlias } from './ssh-config.ts'
-import { dedupeSshInstallTargets, installSshInstallTarget, isSshConfigInstallTarget, SSH_INSTALL_TARGETS, sshInstallTargetFlagHintsText, supportedSshInstallTargetsText, uninstallSshInstallTarget, uninstallWorkspaceSshInstallTarget, type SshConfigInstallTarget } from './ssh-install-targets.ts'
+import { installRemoteAccess, remoteAccessProgressSteps } from './ssh-install.ts'
+import { formatRemoteAccessCancellation, remoteAccessExitCode, writeRemoteAccessInstallReport, type RemoteAccessInstallNotice } from './ssh-install-result.ts'
+import { dedupeSshInstallTargets, installSshInstallTarget, isSshConfigInstallTarget, SSH_INSTALL_TARGETS, supportedSshInstallTargetsText, uninstallSshInstallTarget, uninstallWorkspaceSshInstallTarget, type SshConfigInstallTarget } from './ssh-install-targets.ts'
 import { createStatusInfo, formatStatusText, statusIsHealthy } from './status.ts'
 import { parseToolchainSelector, readToolchainPlan, resolveToolchainPlan } from './toolchains/plan.ts'
 import type { ToolchainSelector } from './toolchains/types.ts'
@@ -91,7 +93,7 @@ export const USAGE = `Usage:
   boxdown down [--workspace <path>]...
   boxdown purge [--workspace <path|ssh-alias|repo>] [--alias <name>]
   boxdown doctor [--workspace <path>]
-  boxdown ssh install [--workspace <path>] [--alias <name>] [--target <name>]...
+  boxdown ssh install [--workspace <path>] [--alias <name>] [--target <name>]... [--verbose]
   boxdown ssh uninstall [--workspace <path>] [--alias <name>] [--target <name>]...
   boxdown ssh-proxy [--workspace <path>] [--alias <name>] [--agent-profile <tier>] [--verbose]
   boxdown tunnel [--port <port>] [--port <local:remote>] [--workspace <path>] [--alias <name>] [--agent-profile <tier>] [--verbose]
@@ -1050,8 +1052,12 @@ async function resolveSshInstallTargets (
   }
 }
 
-function printSkippedSshInstallTargets (command: 'setup' | 'ssh install'): void {
-  process.stdout.write(`\nNo optional SSH install targets selected. Run boxdown ${command} ${sshInstallTargetFlagHintsText()} to install optional targets explicitly. Supported targets: ${supportedSshInstallTargetsText()}.\n`)
+function skippedSshInstallTargetNotice (
+  command: 'setup' | 'ssh install'
+): RemoteAccessInstallNotice {
+  return {
+    message: `No optional app integrations were selected. Run boxdown ${command} with --target codex, --target claude, or --target cursor to add one later.`
+  }
 }
 
 interface SetupWorkspaceOptions {
@@ -1149,7 +1155,8 @@ function createCliProgress (
       target,
       env: options.env
     }),
-    target
+    target,
+    color: (options.env ?? process.env).NO_COLOR === undefined
   })
 }
 
@@ -1421,22 +1428,42 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
       const resolvedTargets = await resolveSshInstallTargets(parsed, options)
 
       if (resolvedTargets.cancelled) {
-        process.stderr.write('Canceled SSH install.\n')
+        process.stderr.write(formatRemoteAccessCancellation('SSH install', {
+          color: process.stderr.isTTY === true && (options.env ?? process.env).NO_COLOR === undefined
+        }))
         return 1
       }
 
       writeWorkspaceMetadata(context, alias, undefined, parsed.agentProfile)
-      await installSshConfig(context, alias)
+      const progress = createCliProgress(parsed, 'stdout', { env: options.env })
 
-      if (resolvedTargets.skippedNonInteractive) {
-        printSkippedSshInstallTargets('ssh install')
-      }
+      return runLoggedLifecycle(context, 'ssh install', argv, async () => {
+        let exitCode: 0 | 1 = 0
 
-      for (const target of resolvedTargets.targets) {
-        await installSshInstallTarget(context, alias, target)
-      }
+        await withProgressSection(progress, 'Configure remote access', [
+          `Workspace: ${context.workspaceFolder}`,
+          `SSH alias: ${alias}`
+        ], async () => {
+          progress.setSteps(remoteAccessProgressSteps(resolvedTargets.targets))
+          const report = await installRemoteAccess(context, alias, resolvedTargets.targets, {
+            progress,
+            retryCommand: 'boxdown ssh install',
+            notices: resolvedTargets.skippedNonInteractive
+              ? [skippedSshInstallTargetNotice('ssh install')]
+              : []
+          })
 
-      return 0
+          writeRemoteAccessInstallReport(report, {
+            outcomeLabel: 'Configuration',
+            verbose: parsed.verbose,
+            progress,
+            env: options.env ?? process.env
+          })
+          exitCode = remoteAccessExitCode(report)
+        })
+
+        return exitCode
+      })
     }
 
     if (parsed.command === 'ssh-uninstall') {
@@ -1546,7 +1573,7 @@ export async function runCli (argv: string[] = process.argv.slice(2), options: R
       })
 
       if (resolvedTargets.skippedNonInteractive) {
-        printSkippedSshInstallTargets('setup')
+        process.stdout.write(`\n${skippedSshInstallTargetNotice('setup').message}\n`)
       }
 
       return 0

@@ -98,7 +98,7 @@ describe('remote access install result rendering', () => {
     assert.match(output, /Configuration complete/)
     assert.match(output, /Next step/)
     assert.match(output, /Open this project in Cursor:/)
-    assert.match(output, /cursor --folder-uri/)
+    assert.match(output, /cursor --folder-uri 'vscode-remote:\/\/ssh-remote\+demo-devcontainer\/workspaces\/demo'/)
     assert.doesNotMatch(output, /SSH connection not tested/)
     assert.doesNotMatch(output, /SSH config/)
     assert.doesNotMatch(output, /Cursor settings/)
@@ -126,6 +126,19 @@ describe('remote access install result rendering', () => {
     assert.match(output, /boxdown ssh install --target cursor/)
     assert.doesNotMatch(output, /cursor --folder-uri/)
     assert.strictEqual(remoteAccessExitCode(report), 1)
+  })
+
+  test('removes a redundant app suffix from failure and skipped labels', () => {
+    const report = successfulCursorReport()
+    report.apps = []
+    report.failures.push({ scope: 'app', target: 'codex', label: 'ChatGPT app', message: 'Invalid JSON' })
+    report.skipped.push({ target: 'codex', label: 'ChatGPT app', reason: 'SSH alias configuration failed' })
+
+    const output = formatRemoteAccessInstallReport(report, { outcomeLabel: 'Configuration', interactive: false, columns: 80, verbose: false, color: false })
+
+    assert.match(output, /ChatGPT configuration failed/)
+    assert.match(output, /ChatGPT skipped/)
+    assert.doesNotMatch(output, /ChatGPT app (?:configuration failed|skipped)/)
   })
 
   test('omits every action for a failed app target while retaining later successful actions', () => {
@@ -168,7 +181,7 @@ describe('remote access install result rendering', () => {
   test('wraps prose but never truncates a dedicated long value', () => {
     const report = successfulCursorReport()
     report.notices.push({ message: 'No optional app integrations were selected in this non-interactive shell.' })
-    const output = formatRemoteAccessInstallReport(report, { outcomeLabel: 'Configuration', interactive: false, columns: 32, verbose: false, color: false })
+    const output = formatRemoteAccessInstallReport(report, { outcomeLabel: 'Configuration', interactive: true, columns: 32, verbose: false, color: false })
     assert.match(output, /No optional app integrations\n\s+were selected in this/)
     assert.match(output, /cursor --folder-uri \\/)
     assert.match(output, /vscode-remote:\/\/ssh-remote\+demo-devcontainer\/workspaces\/demo/)
