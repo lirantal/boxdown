@@ -11808,6 +11808,130 @@ describe('devcontainer git config hooks', () => {
     assert.strictEqual(readFileSync(projectEnv, 'utf8'), 'PROJECT_VALUE=unchanged\n')
   })
 
+  test('initialization boots or reuses a varlock proxy session for schema workspaces and writes placeholder wiring', () => {
+    const initializePath = join(assetsDevcontainerDir, 'hooks', 'initialize.sh')
+    const binDir = join(tempDir('varlock-initialize-bin'), 'bin')
+    const workspace = tempDir('varlock-initialize-workspace')
+    const hostCaDir = tempDir('varlock-initialize-host-ca')
+    const stateDir = tempDir('varlock-initialize-stub-state')
+    const secretDir = join(tempDir('varlock-initialize-state'), 'secrets')
+    const argsLog = join(tempDir('varlock-initialize-log'), 'args.log')
+    mkdirSync(binDir)
+    mkdirSync(secretDir, { recursive: true })
+    writeFileSync(join(workspace, '.env.schema'), '# @sensitive\nDEMO_TOKEN=\n')
+    writeFileSync(join(hostCaDir, 'ca-cert.pem'), 'proxy-ca-sentinel')
+    writeFileSync(join(hostCaDir, 'combined-ca.pem'), 'combined-ca-sentinel')
+    writeFileSync(join(binDir, 'op'), '#!/usr/bin/env bash\nexit 1\n')
+    chmodSync(join(binDir, 'op'), 0o755)
+    writeFileSync(join(binDir, 'varlock'), [
+      '#!/usr/bin/env bash',
+      'printf \'%s\\n\' "$*" >> "${VARLOCK_STUB_ARGS_LOG}"',
+      '[[ "${VARLOCK_STUB_MODE:-ok}" == "fail" ]] && exit 1',
+      'if [[ "$1" == "proxy" && "$2" == "status" ]]; then',
+      '  if [[ -f "${VARLOCK_STUB_STATE_DIR}/started" ]]; then',
+      '    printf \'[{"id":"stub-session","cwd":"%s"}]\\n\' "${VARLOCK_STUB_WORKSPACE}"',
+      '  else',
+      '    printf \'[]\\n\'',
+      '  fi',
+      'elif [[ "$1" == "proxy" && "$2" == "start" ]]; then',
+      '  touch "${VARLOCK_STUB_STATE_DIR}/started"',
+      'elif [[ "$*" == *"--proxy-url"* ]]; then',
+      '  guest_url=""; cert_dir=""; previous=""',
+      '  for argument in "$@"; do',
+      '    [[ "${previous}" == "--proxy-url" ]] && guest_url="${argument}"',
+      '    [[ "${previous}" == "--cert-dir" ]] && cert_dir="${argument}"',
+      '    previous="${argument}"',
+      '  done',
+      '  printf "export HTTPS_PROXY=\'%s\'\\n" "${guest_url}"',
+      '  printf "export SSL_CERT_FILE=\'%s/combined-ca.pem\'\\n" "${cert_dir}"',
+      '  printf "export DEMO_TOKEN=\'DEMO-PLACEHOLDER\'\\n"',
+      'else',
+      '  printf "export HTTPS_PROXY=\'http://127.0.0.1:59999\'\\n"',
+      '  printf "export SSL_CERT_FILE=\'%s/combined-ca.pem\'\\n" "${VARLOCK_STUB_CA_DIR}"',
+      'fi',
+      ''
+    ].join('\n'))
+    chmodSync(join(binDir, 'varlock'), 0o755)
+    writeFileSync(join(secretDir, 'ANTHROPIC_API_KEY'), 'stale-anthropic-runtime-sentinel')
+
+    const baseEnv = {
+      ...process.env,
+      PATH: `${binDir}${delimiter}${process.env.PATH ?? ''}`,
+      BOXDOWN_WORKSPACE_FOLDER: workspace,
+      BOXDOWN_SECRET_ENV_DIR: secretDir,
+      VARLOCK_STUB_ARGS_LOG: argsLog,
+      VARLOCK_STUB_CA_DIR: hostCaDir,
+      VARLOCK_STUB_STATE_DIR: stateDir,
+      VARLOCK_STUB_WORKSPACE: workspace,
+      ANTHROPIC_API_KEY: 'anthropic-runtime-sentinel'
+    }
+
+    // no session running: initialization boots one, then wires the container
+    execFileSync('bash', [initializePath], { env: baseEnv })
+
+    const guestEnv = readFileSync(join(secretDir, 'varlock.env'), 'utf8')
+    assert.match(guestEnv, /HTTPS_PROXY='http:\/\/host\.docker\.internal:59999'/)
+    assert.match(guestEnv, /SSL_CERT_FILE='\/run\/boxdown\/secrets\/varlock-ca\/combined-ca\.pem'/)
+    assert.match(guestEnv, /DEMO_TOKEN='DEMO-PLACEHOLDER'/)
+    assert.strictEqual(statSync(join(secretDir, 'varlock.env')).mode & 0o777, 0o600)
+    assert.strictEqual(readFileSync(join(secretDir, 'varlock-ca', 'ca-cert.pem'), 'utf8'), 'proxy-ca-sentinel')
+    assert.strictEqual(readFileSync(join(secretDir, 'varlock-ca', 'combined-ca.pem'), 'utf8'), 'combined-ca-sentinel')
+    assert.strictEqual(existsSync(join(secretDir, 'ANTHROPIC_API_KEY')), false)
+    assert.match(readFileSync(argsLog, 'utf8'), /^proxy start$/m)
+    assert.match(readFileSync(argsLog, 'utf8'), /--session stub-session/)
+
+    // session now registered: a re-run reuses it instead of starting another
+    rmSync(argsLog)
+    execFileSync('bash', [initializePath], { env: baseEnv })
+    assert.doesNotMatch(readFileSync(argsLog, 'utf8'), /^proxy start$/m)
+    assert.match(readFileSync(argsLog, 'utf8'), /--session stub-session/)
+
+    // a workspace-local node_modules/.bin/varlock is preferred over PATH
+    rmSync(argsLog)
+    const localBinDir = join(workspace, 'node_modules', '.bin')
+    mkdirSync(localBinDir, { recursive: true })
+    writeFileSync(
+      join(localBinDir, 'varlock'),
+      readFileSync(join(binDir, 'varlock'), 'utf8').replace("printf '%s\\n'", "printf 'local %s\\n'")
+    )
+    chmodSync(join(localBinDir, 'varlock'), 0o755)
+    execFileSync('bash', [initializePath], { env: baseEnv })
+    assert.match(readFileSync(argsLog, 'utf8'), /^local proxy status/m)
+    assert.doesNotMatch(readFileSync(argsLog, 'utf8'), /^proxy status/m)
+    rmSync(join(workspace, 'node_modules'), { recursive: true, force: true })
+
+    // explicit session selection bypasses workspace lookup
+    rmSync(argsLog)
+    execFileSync('bash', [initializePath], {
+      env: { ...baseEnv, BOXDOWN_VARLOCK_PROXY_SESSION: 'explicit-session' }
+    })
+    assert.match(readFileSync(argsLog, 'utf8'), /--session explicit-session/)
+
+    // a workspace without .env.schema keeps the plaintext secret-file behavior
+    const plainWorkspace = tempDir('varlock-initialize-plain-workspace')
+    execFileSync('bash', [initializePath], {
+      env: { ...baseEnv, BOXDOWN_WORKSPACE_FOLDER: plainWorkspace }
+    })
+    assert.strictEqual(existsSync(join(secretDir, 'varlock.env')), false)
+    assert.strictEqual(existsSync(join(secretDir, 'varlock-ca')), false)
+    assert.strictEqual(readFileSync(join(secretDir, 'ANTHROPIC_API_KEY'), 'utf8'), 'anthropic-runtime-sentinel')
+
+    // a failing varlock CLI falls back non-blocking after the boot timeout
+    rmSync(join(stateDir, 'started'))
+    execFileSync('bash', [initializePath], {
+      env: { ...baseEnv, VARLOCK_STUB_MODE: 'fail', BOXDOWN_VARLOCK_BOOT_TIMEOUT_SECONDS: '1' }
+    })
+    assert.strictEqual(existsSync(join(secretDir, 'varlock.env')), false)
+    assert.strictEqual(readFileSync(join(secretDir, 'ANTHROPIC_API_KEY'), 'utf8'), 'anthropic-runtime-sentinel')
+
+    // BOXDOWN_VARLOCK=0 disables detection entirely
+    execFileSync('bash', [initializePath], {
+      env: { ...baseEnv, BOXDOWN_VARLOCK: '0' }
+    })
+    assert.strictEqual(existsSync(join(secretDir, 'varlock.env')), false)
+    assert.strictEqual(readFileSync(join(secretDir, 'ANTHROPIC_API_KEY'), 'utf8'), 'anthropic-runtime-sentinel')
+  })
+
   test('initialize snapshots host gitconfig and removes stale snapshot when host file is absent', () => {
     const initializePath = join(assetsDevcontainerDir, 'hooks', 'initialize.sh')
     const workspace = tempDir('initialize-gitconfig-workspace')
@@ -12103,6 +12227,37 @@ describe('interactive shell setup', () => {
     assert.match(result.stdout, /^snyk:yes$/m)
     assert.match(result.stdout, /^op:no$/m)
     assert.doesNotMatch(`${result.stdout}\n${result.stderr}`, /bootstrap-sentinel/)
+  })
+
+  test('sources varlock proxy wiring when present without outputting values', () => {
+    const bootstrapEnvWithoutSecrets = () => {
+      const env = { ...process.env }
+      delete env.ANTHROPIC_API_KEY
+      delete env.DEMO_TOKEN
+      delete env.HTTPS_PROXY
+      return env
+    }
+    const bootstrapPath = join(assetsDevcontainerDir, 'utils', 'secret-env-bootstrap.sh')
+    const secretDir = tempDir('varlock-bootstrap')
+    writeFileSync(join(secretDir, 'varlock.env'), [
+      "export DEMO_TOKEN='DEMO-PLACEHOLDER'",
+      "export HTTPS_PROXY='http://host.docker.internal:59999'",
+      ''
+    ].join('\n'))
+    const result = spawnSync('bash', [
+      '-c',
+      'source "$1"; [[ "${DEMO_TOKEN:-}" == "DEMO-PLACEHOLDER" ]] && echo demo:yes; [[ "${HTTPS_PROXY:-}" == "http://host.docker.internal:59999" ]] && echo proxy:yes; [[ -z "${ANTHROPIC_API_KEY:-}" ]] && echo anthropic:no',
+      'bash',
+      bootstrapPath
+    ], {
+      encoding: 'utf8',
+      env: { ...bootstrapEnvWithoutSecrets(), BOXDOWN_SECRET_ENV_DIR: secretDir }
+    })
+
+    assert.strictEqual(result.status, 0)
+    assert.match(result.stdout, /^demo:yes$/m)
+    assert.match(result.stdout, /^proxy:yes$/m)
+    assert.match(result.stdout, /^anthropic:no$/m)
   })
 
   test('defaults to conservative TTY width normalization', () => {
