@@ -1,6 +1,6 @@
 {
     "name": "Project Devcontainer",
-    "image": "ghcr.io/lirantal/boxdown:4.3.0",
+    "image": "ghcr.io/lirantal/boxdown:4.3.1",
     // Ask the editor to forward these container ports (no Docker appPort).
     "forwardPorts": [8787, 3005, 3001, 3000],
 
