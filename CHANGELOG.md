@@ -1,5 +1,11 @@
 # boxdown
 
+## 4.3.1
+
+### Patch Changes
+
+- [`efe811c`](https://github.com/lirantal/boxdown/commit/efe811cde17d9d16a56391b563409de05ace7ca6) Thanks [@lirantal](https://github.com/lirantal)! - Keep interactive setup prompts and progress output readable in narrow terminals.
+
 ## 4.3.0
 
 ### Minor Changes
