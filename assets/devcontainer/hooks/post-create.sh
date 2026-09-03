@@ -43,12 +43,23 @@ configure_git_signing() {
 }
 
 configure_local_git() {
-  # Local git prefs only apply inside a repository; skip when there is no .git (avoids postCreate failure).
-  if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    git config --local --replace-all core.pager 'less -R'
-    git config --local --unset-all credential.https://github.com.helper >/dev/null 2>&1 || true
-    git config --local --add credential.https://github.com.helper ''
-    git config --local --add credential.https://github.com.helper '!gh auth git-credential'
+  local workspace_folder="${BOXDOWN_CONTAINER_WORKSPACE_FOLDER:-${PWD}}"
+  # The workspace mount can briefly be unavailable while concurrent devcontainer
+  # lifecycle commands settle. Local Git preferences are optional, so do not let
+  # that transient state abort the whole post-create hook.
+  if [[ ! -d "${workspace_folder}" ]] || ! git -C "${workspace_folder}" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    return 0
+  fi
+
+  if ! git -C "${workspace_folder}" config --local --replace-all core.pager 'less -R'; then
+    echo "post-create: warning: workspace Git configuration could not be applied; continuing without local Git preferences." >&2
+    return 0
+  fi
+
+  git -C "${workspace_folder}" config --local --unset-all credential.https://github.com.helper >/dev/null 2>&1 || true
+  if ! git -C "${workspace_folder}" config --local --add credential.https://github.com.helper '' ||
+     ! git -C "${workspace_folder}" config --local --add credential.https://github.com.helper '!gh auth git-credential'; then
+    echo "post-create: warning: workspace Git configuration could not be applied; continuing without local Git preferences." >&2
   fi
 }
 

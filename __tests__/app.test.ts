@@ -12075,6 +12075,29 @@ describe('devcontainer git config hooks', () => {
     assert.strictEqual(execFileSync('git', ['config', '--local', '--get', 'core.pager'], { cwd: workspace }).toString('utf8').trim(), 'less -R')
   })
 
+  test('post-create local git setup does not abort when repository config becomes unavailable', () => {
+    const postCreatePath = join(assetsDevcontainerDir, 'hooks', 'post-create.sh')
+    const workspace = tempDir('post-create-local-git-race')
+    const result = spawnSync('bash', [
+      '-c',
+      [
+        'git() {',
+        '  case "$*" in',
+        '    *"rev-parse --is-inside-work-tree"*) return 0 ;;',
+        '    *) printf "%s\\n" "fatal: --local can only be used inside a git repository" >&2; return 128 ;;',
+        '  esac',
+        '}',
+        'source "$1"',
+        'configure_local_git'
+      ].join('\n'),
+      'bash',
+      postCreatePath
+    ], { cwd: workspace, encoding: 'utf8' })
+
+    assert.strictEqual(result.status, 0, result.stderr)
+    assert.match(result.stderr, /post-create: warning: workspace Git configuration could not be applied/u)
+  })
+
   test('git signing bootstrap preserves an explicit user signing configuration without an agent', () => {
     const bootstrapPath = join(assetsDevcontainerDir, 'utils', 'git-signing-bootstrap.sh')
     const targetPath = join(tempDir('git-signing-target'), '.gitconfig')

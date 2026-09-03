@@ -16,6 +16,7 @@ import { ensureHostSshKey } from './ssh-key.ts'
 import { containerProfileMatches, type ContainerSummary, parseDockerPsJsonLines } from './status.ts'
 import { DEFAULT_AGENT_PROFILE, parseAgentProfileMarker, type AgentProfile, type ContainerAgentProfile } from './agent-profile.ts'
 import { readToolchainPlan } from './toolchains/plan.ts'
+import { withWorkspaceLifecycleLock } from './workspace-lifecycle-lock.ts'
 
 export interface StartOptions {
   agentProfile?: AgentProfile
@@ -447,7 +448,7 @@ export async function assertContainerAgentProfile (
   }
 }
 
-export async function startDevcontainer (context: WorkspaceContext, options: StartOptions = {}): Promise<string> {
+async function startDevcontainerUnlocked (context: WorkspaceContext, options: StartOptions = {}): Promise<string> {
   const agentProfile = options.agentProfile ?? DEFAULT_AGENT_PROFILE
   const toolchainPlan = readToolchainPlan(context)
   const progress = options.progress
@@ -639,6 +640,10 @@ export async function startDevcontainer (context: WorkspaceContext, options: Sta
     }
     throw error
   }
+}
+
+export async function startDevcontainer (context: WorkspaceContext, options: StartOptions = {}): Promise<string> {
+  return await withWorkspaceLifecycleLock(context, () => startDevcontainerUnlocked(context, options))
 }
 
 export async function printPortHint (context: WorkspaceContext, containerId: string, options: { logger?: WorkspaceCommandLogger } = {}): Promise<void> {
