@@ -53,7 +53,10 @@
     "runArgs": [
         // publish container port 3000 with dynamic host port (CLI / start.sh)
         "-p",
-        "127.0.0.1::3000"
+        "127.0.0.1::3000",
+        // make the host reachable as host.docker.internal on Linux engines too
+        // (Docker Desktop resolves it natively); used by varlock proxy mode
+        "--add-host=host.docker.internal:host-gateway"
     ],
     // --
     "postCreateCommand": "bash .devcontainer/hooks/post-create.sh",

@@ -16,6 +16,14 @@ export_if_present() {
   fi
 }
 
+# When the host runs a varlock credential proxy, this file carries placeholder
+# values plus HTTP(S)_PROXY and CA-bundle wiring instead of real secrets. The
+# plaintext per-secret files below are then absent by construction.
+if [[ -r "${SECRET_ENV_DIR}/varlock.env" ]]; then
+  # shellcheck disable=SC1091
+  source "${SECRET_ENV_DIR}/varlock.env"
+fi
+
 export_if_present ANTHROPIC_API_KEY
 export_if_present SNYK_TOKEN
 export_if_present OP_SERVICE_ACCOUNT_TOKEN
