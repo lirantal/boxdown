@@ -64,6 +64,8 @@ export type DockerCommandRunner = (
   logger?: WorkspaceCommandLogger
 ) => Promise<CommandResult>
 
+const WORKSPACE_CONTAINER_LOOKUP_TIMEOUT_MS = 30_000
+
 export function isPublishedBoxdownImage (image?: DockerImageInfo): boolean {
   return /^ghcr\.io\/lirantal\/boxdown:\S+$/.test(image?.name ?? '')
 }
@@ -101,8 +103,16 @@ export function parseContainerIdFromUpOutput (output: string): string | undefine
   return /"containerId"\s*:\s*"([^"]+)"/.exec(output)?.[1]
 }
 
-export async function findWorkspaceContainer (context: WorkspaceContext, options: { logger?: WorkspaceCommandLogger, resourceName?: string } = {}): Promise<ContainerSummary | undefined> {
-  const result = await runBuffered('docker', [
+export async function findWorkspaceContainer (
+  context: WorkspaceContext,
+  options: {
+    logger?: WorkspaceCommandLogger
+    resourceName?: string
+    runCommand?: typeof runBuffered
+  } = {}
+): Promise<ContainerSummary | undefined> {
+  const runCommand = options.runCommand ?? runBuffered
+  const result = await runCommand('docker', [
     'ps',
     '-a',
     '--filter',
@@ -112,7 +122,8 @@ export async function findWorkspaceContainer (context: WorkspaceContext, options
   ], {
     logger: options.logger,
     mirrorStdout: false,
-    mirrorStderr: false
+    mirrorStderr: false,
+    timeoutMs: WORKSPACE_CONTAINER_LOOKUP_TIMEOUT_MS
   })
 
   if (result.code !== 0) {

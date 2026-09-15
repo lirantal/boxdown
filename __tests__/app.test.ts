@@ -17,7 +17,7 @@ import { AGENT_PROFILES, agentProfileMarker, isAgentProfile, parseAgentProfileMa
 import { color, formatPromptEnd, formatPromptTitle, promptRail, selectedMark } from '../src/cli-style.ts'
 import { buildGeneratedDevcontainerConfig, publishContainerPortFromConfig, readGeneratedAgentProfile, sourcePathIsInside, writeGeneratedDevcontainerConfig } from '../src/config.ts'
 import { BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_AGENTS_DIR, BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CLAUDE_CREDENTIALS_PATH, BOXDOWN_CONTAINER_AGENT_PROFILE_SOURCE_CODEX_AUTH_PATH, BOXDOWN_CONTAINER_AGENTS_DIR, BOXDOWN_CONTAINER_CLAUDE_CONFIG_PATH, BOXDOWN_CONTAINER_CLAUDE_CREDENTIALS_PATH, BOXDOWN_CONTAINER_CLAUDE_DIR, BOXDOWN_CONTAINER_CODEX_AUTH_PATH, BOXDOWN_CONTAINER_CODEX_DIR, BOXDOWN_CONTAINER_DEVCONTAINER_DIR, BOXDOWN_CONTAINER_GITCONFIG_PATH, BOXDOWN_CONTAINER_HOST_GITCONFIG_DIR, BOXDOWN_CONTAINER_SECRET_ENV_BOOTSTRAP, BOXDOWN_CONTAINER_SECRET_ENV_DIR, BOXDOWN_CONTAINER_TOOLCHAIN_PLAN_PATH, BOXDOWN_CONTAINER_TOOLCHAIN_RESULTS_DIR, BOXDOWN_CONTAINER_TOOLCHAINS_DIR, DEVCONTAINER_CLI_VERSION } from '../src/constants.ts'
-import { codingAgentDevcontainerExecArgs, findDockerImageConsumers, inspectContainerAgentProfile, isPublishedBoxdownImage, parseDockerInspectImage, removeDockerImageIfUnused, sshdProxyDockerArgs, sshTunnelArgs, startDevcontainer, type DockerCommandRunner } from '../src/devcontainer.ts'
+import { codingAgentDevcontainerExecArgs, findDockerImageConsumers, findWorkspaceContainer, inspectContainerAgentProfile, isPublishedBoxdownImage, parseDockerInspectImage, removeDockerImageIfUnused, sshdProxyDockerArgs, sshTunnelArgs, startDevcontainer, type DockerCommandRunner } from '../src/devcontainer.ts'
 import { resolveDevcontainerCli } from '../src/devcontainer-cli.ts'
 import { doctorHasFailures, formatDoctorText, runDoctorChecks, type DoctorCommandResult, type DoctorCommandRunner } from '../src/doctor.ts'
 import { parseSshPublicKey, reportGitSigningPlan, resolveConfiguredSshSigningKey, resolveGitSigningPlan, selectGitSigningKey, type GitSigningPlan, type GitSigningReason } from '../src/git-signing.ts'
@@ -11340,6 +11340,33 @@ describe('devcontainer config generation', () => {
 })
 
 describe('docker image inspection', () => {
+  test('workspace container lookup bounds the Docker inspection command', async () => {
+    const context = createWorkspaceContext({
+      workspace: tempDir('bounded-container-lookup-workspace'),
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('bounded-container-lookup-cache'),
+        BOXDOWN_DATA_HOME: tempDir('bounded-container-lookup-data')
+      }
+    })
+    let capturedTimeoutMs: number | undefined
+
+    await assert.rejects(findWorkspaceContainer(context, {
+      runCommand: async (command, args, options) => {
+        assert.strictEqual(command, 'docker')
+        assert.deepStrictEqual(args.slice(0, 2), ['ps', '-a'])
+        capturedTimeoutMs = options.timeoutMs
+        return {
+          code: 124,
+          stdout: '',
+          stderr: 'Command timed out after 30000 milliseconds.\n',
+          timedOut: true
+        }
+      }
+    }), /Could not inspect devcontainer/)
+
+    assert.strictEqual(capturedTimeoutMs, 30_000)
+  })
+
   test('parses the narrow image-only Docker inspect projection', () => {
     assert.deepStrictEqual(parseDockerInspectImage('"sha256:abc"|"node:24"\n', 'container-1'), {
       id: 'sha256:abc',
