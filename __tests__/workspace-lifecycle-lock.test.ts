@@ -1,11 +1,11 @@
 import assert from 'node:assert'
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, test } from 'node:test'
 
 import { createWorkspaceContext } from '../src/paths.ts'
-import { withWorkspaceLifecycleLock } from '../src/workspace-lifecycle-lock.ts'
+import { reclaimWorkspaceLifecycleLock, withWorkspaceLifecycleLock } from '../src/workspace-lifecycle-lock.ts'
 
 function tempDir (name: string): string {
   return mkdtempSync(join(tmpdir(), `boxdown-${name}-`))
@@ -22,12 +22,13 @@ describe('workspace lifecycle lock', () => {
     })
     const lockPath = join(context.workspaceDataDir, 'lifecycle.lock')
 
-    mkdirSync(lockPath, { recursive: true })
-    writeFileSync(join(lockPath, 'owner.json'), `${JSON.stringify({
+    const orphanedOwner = {
       pid: 424242,
       timestamp: '2026-09-15T15:50:33.577Z',
       nonce: 'orphaned-owner'
-    })}\n`)
+    }
+    mkdirSync(lockPath, { recursive: true })
+    writeFileSync(join(lockPath, 'owner.json'), `${JSON.stringify(orphanedOwner)}\n`)
 
     const result = await withWorkspaceLifecycleLock(context, async () => 'recovered', {
       now: () => new Date('2026-09-15T15:50:34.000Z'),
@@ -38,6 +39,13 @@ describe('workspace lifecycle lock', () => {
     })
 
     assert.strictEqual(result, 'recovered')
+    const reclaimedLocks = readdirSync(context.workspaceDataDir)
+      .filter(entry => entry.startsWith('lifecycle.lock.reclaimed-'))
+    assert.strictEqual(reclaimedLocks.length, 1)
+    assert.deepStrictEqual(
+      JSON.parse(readFileSync(join(context.workspaceDataDir, reclaimedLocks[0]!, 'owner.json'), 'utf8')),
+      orphanedOwner
+    )
   })
 
   test('serializes concurrent lifecycle operations for the same workspace', async () => {
@@ -88,5 +96,39 @@ describe('workspace lifecycle lock', () => {
     assert.deepStrictEqual(await Promise.all([first, second]), ['first', 'second'])
     assert.deepStrictEqual(events, ['first-enter', 'first-exit', 'second-enter'])
     assert.strictEqual(waitNotifications, 1)
+  })
+
+  test('does not let a late dead-owner reclaimer move a replacement lock', () => {
+    const context = createWorkspaceContext({
+      workspace: tempDir('reclaim-race-workspace'),
+      env: {
+        BOXDOWN_CACHE_HOME: tempDir('reclaim-race-cache'),
+        BOXDOWN_DATA_HOME: tempDir('reclaim-race-data')
+      }
+    })
+    const lockPath = join(context.workspaceDataDir, 'lifecycle.lock')
+    const orphanedOwner = {
+      pid: 424242,
+      timestamp: '2026-09-15T15:50:33.577Z',
+      nonce: 'orphaned-owner'
+    }
+    const replacementOwner = {
+      pid: process.pid,
+      timestamp: '2026-09-15T15:50:34.000Z',
+      nonce: 'replacement-owner'
+    }
+
+    mkdirSync(lockPath, { recursive: true })
+    writeFileSync(join(lockPath, 'owner.json'), `${JSON.stringify(orphanedOwner)}\n`)
+
+    const reclaimed = reclaimWorkspaceLifecycleLock(lockPath, orphanedOwner, (source, destination) => {
+      assert.strictEqual(reclaimWorkspaceLifecycleLock(lockPath, orphanedOwner), true)
+      mkdirSync(lockPath, { mode: 0o700 })
+      writeFileSync(join(lockPath, 'owner.json'), `${JSON.stringify(replacementOwner)}\n`)
+      renameSync(source, destination)
+    })
+
+    assert.strictEqual(reclaimed, false)
+    assert.deepStrictEqual(JSON.parse(readFileSync(join(lockPath, 'owner.json'), 'utf8')), replacementOwner)
   })
 })

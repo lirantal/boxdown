@@ -4,7 +4,7 @@
 
 **Goal:** Make Boxdown recover immediately from lifecycle locks owned by dead processes, show live lock contention, and prevent the workspace-container lookup from blocking forever.
 
-**Architecture:** Keep the existing atomic directory lock and owner nonce. Move PID liveness ahead of the age gate so confirmed-dead owners are reclaimed immediately, add a one-shot wait callback for progress, and apply a 30-second timeout only to the filtered Docker lookup that triggered the incident.
+**Architecture:** Keep the existing atomic directory lock and owner nonce. Move PID liveness ahead of the age gate so confirmed-dead owners are reclaimed immediately, atomically rename dead generations to retained tombstones so late reclaimers cannot disturb replacement locks, add a one-shot wait callback for progress, and apply a 30-second timeout only to the filtered Docker lookup that triggered the incident.
 
 **Tech Stack:** TypeScript, Node.js filesystem/process APIs, Node test runner, pnpm.
 
@@ -12,6 +12,8 @@
 
 - Preserve serialization while a recorded owner PID is alive.
 - Never reclaim a live lock based only on age.
+- Reclaim dead locks with an atomic, generation-specific rename; retain the
+  non-empty destination as a tombstone until workspace purge.
 - Keep malformed lock state as an explicit error.
 - Do not add deadlines to `devcontainer up`, image builds, container stops, or container removal.
 - Do not change the separate Cursor integration lock.
@@ -30,7 +32,7 @@
 - Consumes: `WorkspaceContext`, `ProgressReporter.status(message: string)`.
 - Produces: `WorkspaceLifecycleLockOptions.onWait?: () => void`; immediate dead-owner recovery; one wait notification per acquisition attempt.
 
-- [ ] **Step 1: Write the failing dead-owner regression test**
+- [x] **Step 1: Write the failing dead-owner regression test**
 
 Add imports for `mkdirSync` and `writeFileSync`, then create a valid young lock
 whose injected liveness probe returns `false`. Assert the operation runs and the
@@ -66,7 +68,7 @@ test('reclaims a lock immediately when its owner process is dead', async () => {
 })
 ```
 
-- [ ] **Step 2: Run the dead-owner test to verify RED**
+- [x] **Step 2: Run the dead-owner test to verify RED**
 
 Run:
 
@@ -77,7 +79,7 @@ pnpm exec node --import tsx --test --test-name-pattern "reclaims a lock immediat
 Expected: FAIL with `dead owner was not reclaimed immediately` because the
 current implementation checks liveness only after ten minutes.
 
-- [ ] **Step 3: Write the failing one-shot contention notification test**
+- [x] **Step 3: Write the failing one-shot contention notification test**
 
 Extend the existing concurrent-operation test with an `onWait` callback and
 assert it runs exactly once even though the contender polls multiple times:
@@ -105,7 +107,7 @@ assert.ok(contentionPolls >= 1)
 assert.strictEqual(waitNotifications, 1)
 ```
 
-- [ ] **Step 4: Run the contention test to verify RED**
+- [x] **Step 4: Run the contention test to verify RED**
 
 Run:
 
@@ -116,7 +118,7 @@ pnpm exec node --import tsx --test --test-name-pattern "serializes concurrent" _
 Expected: FAIL because `onWait` is currently ignored and the notification count
 is zero.
 
-- [ ] **Step 5: Implement immediate recovery and one-shot notification**
+- [x] **Step 5: Implement immediate recovery and one-shot notification**
 
 In `WorkspaceLifecycleLockOptions`, remove `staleLockMs` and add:
 
@@ -148,7 +150,13 @@ if (!waitNotified) {
 
 Keep the existing timeout and 50 ms poll after this block.
 
-- [ ] **Step 6: Wire contention to lifecycle progress**
+Implement reclamation as an atomic rename to a path derived from the complete
+owner record. Retain the renamed, non-empty directory as a generation tombstone
+so another contender holding the same stale observation cannot rename or
+delete a replacement lock. Verify the owner after the move and fail closed if
+the moved record cannot be validated.
+
+- [x] **Step 6: Wire contention to lifecycle progress**
 
 Update `startDevcontainer` to pass a callback only when progress exists:
 
@@ -171,7 +179,7 @@ checks:
 assert.match(devcontainerSource, /onWait: \(\) => options\.progress\?\.status\('Waiting for another Boxdown operation'\)/)
 ```
 
-- [ ] **Step 7: Run focused tests to verify GREEN**
+- [x] **Step 7: Run focused tests to verify GREEN**
 
 Run:
 
@@ -182,7 +190,7 @@ pnpm exec node --import tsx --test --test-name-pattern "progress source|lifecycl
 
 Expected: PASS.
 
-- [ ] **Step 8: Commit Task 1**
+- [x] **Step 8: Commit Task 1**
 
 ```bash
 git add src/workspace-lifecycle-lock.ts src/devcontainer.ts __tests__/workspace-lifecycle-lock.test.ts __tests__/app.test.ts
@@ -199,7 +207,7 @@ git commit -m "fix: recover orphaned lifecycle locks"
 - Consumes: `runBuffered(command, args, options)` and `CommandResult`.
 - Produces: `findWorkspaceContainer(..., { runCommand?: typeof runBuffered })`; a 30-second timeout on its filtered `docker ps -a` call.
 
-- [ ] **Step 1: Write the failing timeout-wiring test**
+- [x] **Step 1: Write the failing timeout-wiring test**
 
 Import `findWorkspaceContainer` and add:
 
@@ -232,7 +240,7 @@ test('workspace container lookup bounds the Docker inspection command', async ()
 })
 ```
 
-- [ ] **Step 2: Run the lookup test to verify RED**
+- [x] **Step 2: Run the lookup test to verify RED**
 
 Run:
 
@@ -243,7 +251,7 @@ pnpm exec node --import tsx --test --test-name-pattern "workspace container look
 Expected: FAIL because `findWorkspaceContainer` does not accept or call the
 injected runner and passes no timeout.
 
-- [ ] **Step 3: Implement the bounded lookup**
+- [x] **Step 3: Implement the bounded lookup**
 
 Add a focused constant and runner option:
 
@@ -276,7 +284,7 @@ export async function findWorkspaceContainer (
 
 Leave parsing and the existing nonzero-exit error unchanged.
 
-- [ ] **Step 4: Run focused tests to verify GREEN**
+- [x] **Step 4: Run focused tests to verify GREEN**
 
 Run:
 
@@ -286,7 +294,7 @@ pnpm exec node --import tsx --test --test-name-pattern "workspace container look
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit Task 2**
+- [x] **Step 5: Commit Task 2**
 
 ```bash
 git add src/devcontainer.ts __tests__/app.test.ts
@@ -302,7 +310,7 @@ git commit -m "fix: bound workspace container lookup"
 - Consumes: completed Tasks 1 and 2.
 - Produces: verified source, tests, lint, and distribution build.
 
-- [ ] **Step 1: Run the complete test suite**
+- [x] **Step 1: Run the complete test suite**
 
 ```bash
 pnpm test
@@ -310,7 +318,7 @@ pnpm test
 
 Expected: all tests pass with zero failures.
 
-- [ ] **Step 2: Run lint**
+- [x] **Step 2: Run lint**
 
 ```bash
 pnpm lint
@@ -318,7 +326,7 @@ pnpm lint
 
 Expected: exit code 0 with no lint errors.
 
-- [ ] **Step 3: Run the production build**
+- [x] **Step 3: Run the production build**
 
 ```bash
 pnpm build
@@ -326,7 +334,7 @@ pnpm build
 
 Expected: exit code 0 and regenerated build artifacts complete successfully.
 
-- [ ] **Step 4: Inspect the final diff and repository state**
+- [x] **Step 4: Inspect the final diff and repository state**
 
 ```bash
 git diff HEAD~2 --check

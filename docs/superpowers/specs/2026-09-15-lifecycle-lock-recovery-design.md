@@ -49,10 +49,11 @@ concurrent lifecycle mutations.
 ### 3. Reclaim confirmed-dead owners immediately and bound the lookup
 
 This is the selected approach. PID liveness distinguishes an orphan from a
-valid long-running owner. The existing nonce-and-owner comparison protects the
-delete operation from racing with lock replacement. A timeout on the filtered
-`docker ps` lookup prevents the specific external command that caused the
-incident from holding the lock indefinitely.
+valid long-running owner. Reclamation atomically renames the lock to a
+generation-specific, non-empty tombstone. The retained tombstone prevents a
+late reclaimer for that owner generation from moving or deleting a replacement
+lock. A timeout on the filtered `docker ps` lookup prevents the specific
+external command that caused the incident from holding the lock indefinitely.
 
 ## Design
 
@@ -60,8 +61,12 @@ incident from holding the lock indefinitely.
 
 When acquisition observes an existing, well-formed lock, it checks the recorded
 PID immediately. If the PID is not alive, it re-reads and compares the complete
-owner record, reclaims that exact lock, and retries acquisition. Lock age is not
-part of dead-owner recovery.
+owner record, atomically renames that exact lock to a path derived from the full
+owner record, verifies the moved owner, and retries acquisition. The non-empty
+renamed directory is retained as a generation tombstone: simultaneous or late
+reclaimers use the same destination and therefore cannot rename a newer lock
+over it. Tombstones are removed with the workspace's data during purge. Lock
+age is not part of dead-owner recovery.
 
 If the PID is alive or liveness cannot be determined, Boxdown retains the lock
 and waits up to the existing five-minute acquisition timeout. A live owner is
@@ -93,6 +98,8 @@ container creation and mutation commands keep their current behavior.
 ## Error Handling
 
 - A dead owner is recovered transparently.
+- A failed or unverifiable atomic reclaim fails closed rather than deleting a
+  possibly replaced lock.
 - An alive or indeterminate owner eventually produces the existing lifecycle
   lock timeout error.
 - A missing owner file retains the current bounded wait, allowing an acquiring
@@ -104,7 +111,9 @@ container creation and mutation commands keep their current behavior.
 ## Testing
 
 - Create a young lock owned by a dead PID and assert immediate recovery without
-  sleeping.
+  sleeping, plus retention of its generation tombstone.
+- Simulate two reclaimers for one dead generation and assert the late reclaimer
+  cannot move the replacement lock.
 - Create a lock owned by a live PID and assert the contender waits, emits one
   notification, and enters only after release.
 - Assert the notification is wired from `startDevcontainer` to progress output.

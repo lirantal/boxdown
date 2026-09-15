@@ -1,5 +1,5 @@
-import { randomUUID } from 'node:crypto'
-import { mkdirSync, readFileSync, rmSync, rmdirSync, unlinkSync, writeFileSync } from 'node:fs'
+import { createHash, randomUUID } from 'node:crypto'
+import { mkdirSync, readFileSync, renameSync, rmSync, rmdirSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 import type { WorkspaceContext } from './paths.ts'
@@ -18,7 +18,7 @@ export interface WorkspaceLifecycleLockOptions {
   onWait?: () => void
 }
 
-interface LockOwner {
+export interface LockOwner {
   pid: number
   timestamp: string
   nonce: string
@@ -100,7 +100,18 @@ function sameLockOwner (left: LockOwner, right: LockOwner): boolean {
   return left.pid === right.pid && left.timestamp === right.timestamp && left.nonce === right.nonce
 }
 
-function reclaimLock (lockPath: string, observed: LockOwner): boolean {
+function reclaimedLockPath (lockPath: string, owner: LockOwner): string {
+  const generation = createHash('sha256')
+    .update(serializeLockOwner(owner))
+    .digest('hex')
+  return `${lockPath}.reclaimed-${generation}`
+}
+
+export function reclaimWorkspaceLifecycleLock (
+  lockPath: string,
+  observed: LockOwner,
+  moveLock: (source: string, destination: string) => void = renameSync
+): boolean {
   let current: LockOwner
   try {
     current = readLockOwner(lockPath)
@@ -109,13 +120,25 @@ function reclaimLock (lockPath: string, observed: LockOwner): boolean {
   }
   if (!sameLockOwner(current, observed)) return false
 
+  const reclaimedPath = reclaimedLockPath(lockPath, observed)
   try {
-    unlinkSync(join(lockPath, LOCK_OWNER_FILENAME))
-    rmdirSync(lockPath)
-    return true
+    // Keep the non-empty destination as a generation tombstone. A late
+    // reclaimer for this owner then cannot rename a replacement lock over it.
+    moveLock(lockPath, reclaimedPath)
   } catch {
     return false
   }
+
+  let reclaimed: LockOwner
+  try {
+    reclaimed = readLockOwner(reclaimedPath)
+  } catch (error) {
+    throw new Error(`Cannot verify reclaimed workspace lifecycle lock: ${reclaimedPath}`, { cause: error })
+  }
+  if (!sameLockOwner(reclaimed, observed)) {
+    throw new Error(`Workspace lifecycle lock changed during reclamation: ${lockPath}`)
+  }
+  return true
 }
 
 async function acquireWorkspaceLifecycleLock (
@@ -164,7 +187,7 @@ async function acquireWorkspaceLifecycleLock (
     } catch {
       alive = true
     }
-    if (!alive && reclaimLock(lockPath, observed)) continue
+    if (!alive && reclaimWorkspaceLifecycleLock(lockPath, observed)) continue
 
     if (!waitNotified) {
       options.onWait?.()
