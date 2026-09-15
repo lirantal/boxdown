@@ -643,7 +643,13 @@ async function startDevcontainerUnlocked (context: WorkspaceContext, options: St
 }
 
 export async function startDevcontainer (context: WorkspaceContext, options: StartOptions = {}): Promise<string> {
-  return await withWorkspaceLifecycleLock(context, () => startDevcontainerUnlocked(context, options))
+  return await withWorkspaceLifecycleLock(
+    context,
+    () => startDevcontainerUnlocked(context, options),
+    options.progress === undefined
+      ? {}
+      : { onWait: () => options.progress?.status('Waiting for another Boxdown operation') }
+  )
 }
 
 export async function printPortHint (context: WorkspaceContext, containerId: string, options: { logger?: WorkspaceCommandLogger } = {}): Promise<void> {

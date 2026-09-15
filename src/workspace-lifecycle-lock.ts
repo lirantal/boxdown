@@ -7,16 +7,15 @@ import type { WorkspaceContext } from './paths.ts'
 const WORKSPACE_LIFECYCLE_LOCK_DIRECTORY = 'lifecycle.lock'
 const LOCK_OWNER_FILENAME = 'owner.json'
 const DEFAULT_LOCK_TIMEOUT_MS = 300_000
-const DEFAULT_STALE_LOCK_MS = 600_000
 const MAX_LOCK_OWNER_BYTES = 16_384
 
 export interface WorkspaceLifecycleLockOptions {
   lockTimeoutMs?: number
-  staleLockMs?: number
   now?: () => Date
   sleep?: (milliseconds: number) => Promise<void>
   pidIsAlive?: (pid: number) => boolean
   createNonce?: () => string
+  onWait?: () => void
 }
 
 interface LockOwner {
@@ -125,12 +124,12 @@ async function acquireWorkspaceLifecycleLock (
 ): Promise<LockToken> {
   const lockPath = join(context.workspaceDataDir, WORKSPACE_LIFECYCLE_LOCK_DIRECTORY)
   const timeoutMs = options.lockTimeoutMs ?? DEFAULT_LOCK_TIMEOUT_MS
-  const staleLockMs = options.staleLockMs ?? DEFAULT_STALE_LOCK_MS
   const now = options.now ?? (() => new Date())
   const sleep = options.sleep ?? (async (milliseconds: number) => await new Promise(resolve => setTimeout(resolve, milliseconds)))
   const pidIsAlive = options.pidIsAlive ?? defaultPidIsAlive
   const createNonce = options.createNonce ?? randomUUID
   const startedAt = now().getTime()
+  let waitNotified = false
 
   mkdirSync(context.workspaceDataDir, { recursive: true, mode: 0o700 })
   for (;;) {
@@ -159,15 +158,17 @@ async function acquireWorkspaceLifecycleLock (
       continue
     }
 
-    const age = now().getTime() - Date.parse(observed.timestamp)
-    if (age >= staleLockMs) {
-      let alive: boolean
-      try {
-        alive = pidIsAlive(observed.pid)
-      } catch {
-        alive = true
-      }
-      if (!alive && reclaimLock(lockPath, observed)) continue
+    let alive: boolean
+    try {
+      alive = pidIsAlive(observed.pid)
+    } catch {
+      alive = true
+    }
+    if (!alive && reclaimLock(lockPath, observed)) continue
+
+    if (!waitNotified) {
+      options.onWait?.()
+      waitNotified = true
     }
 
     const elapsed = now().getTime() - startedAt

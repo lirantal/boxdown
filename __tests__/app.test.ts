@@ -9474,6 +9474,7 @@ describe('progress output', () => {
     assert.match(devcontainerSource, /spinnerLabel: 'Preparing container SSH runtime'/)
     assert.match(devcontainerSource, /spinnerLabel: 'Refreshing GitHub CLI auth inside the devcontainer'/)
     assert.match(devcontainerSource, /spinnerLabel: 'Verifying GitHub CLI auth inside the devcontainer'/)
+    assert.match(devcontainerSource, /onWait: \(\) => options\.progress\?\.status\('Waiting for another Boxdown operation'\)/)
     assert.strictEqual(devcontainerSource.match(/reportGitSigningPlan\(signingPlan/g)?.length, 2)
     assert.match(sshKeySource, /Generating Boxdown SSH identity/)
     assert.match(sshKeySource, /Writing Boxdown SSH public key/)
