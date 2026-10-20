@@ -1,5 +1,11 @@
 # boxdown
 
+## 4.3.2
+
+### Patch Changes
+
+- [`195a887`](https://github.com/lirantal/boxdown/commit/195a887b306644984bee5d980008919fb12bb4b4) Thanks [@lirantal](https://github.com/lirantal)! - fix: regression with boxdown race condition
+
 ## 4.3.1
 
 ### Patch Changes
