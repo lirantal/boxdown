@@ -90,7 +90,7 @@ Boxdown-generated configuration ──► Dev Container
           └── desktop app registration   └── project toolchains
 ```
 
-See [Generated configuration and state](./docs/features/generated-config-and-state.md)
+See [Generated configuration and state](./features/generated-config-and-state.md)
 for the exact cache, data, runtime-secret, and mount boundaries.
 
 ## Install Boxdown
@@ -130,7 +130,7 @@ appears as a warning rather than a required-check failure.
 
 Quick check: resolve failures before setup. Warnings describe optional
 capabilities and do not necessarily prevent the workspace from starting. The
-full behavior is documented under [`doctor`](./docs/features/lifecycle.md#doctor).
+full behavior is documented under [`doctor`](./features/lifecycle.md#doctor).
 
 ## Prepare a Workspace with `boxdown setup`
 
@@ -167,7 +167,7 @@ markers, resolves them against release-pinned defaults, and records the
 confirmed plan outside the repository. If there is no supported toolchain to
 provision, choose `No toolchains` interactively or use `--toolchain none`.
 
-See [Workspace toolchains](./docs/features/toolchains.md) for the supported
+See [Workspace toolchains](./features/toolchains.md) for the supported
 markers, version precedence, compatibility checks, and provisioning behavior.
 
 ### Choose an Agent Profile Deliberately
@@ -227,7 +227,7 @@ boxdown ssh install --target codex
 ```
 
 The details and cleanup rules are covered in [SSH config and proxy
-workflow](./docs/features/ssh-config-and-proxy.md).
+workflow](./features/ssh-config-and-proxy.md).
 
 ## Launch Codex with `boxdown codex`
 
@@ -311,7 +311,7 @@ gh auth status --hostname github.com
 
 The token is now available to processes in that container, including an agent.
 Only perform this refresh when the task requires that authority. See [GitHub
-auth refresh](./docs/features/github-auth-refresh.md) for the exact host-token
+auth refresh](./features/github-auth-refresh.md) for the exact host-token
 and Git configuration flow.
 
 ## Inspect and Control the Workspace Lifecycle
@@ -475,5 +475,5 @@ concrete. Add GitHub authentication only when a task needs it, and compare
 
 When you are comfortable with the core workflow, explore `boxdown tunnel` for
 container-local web servers, `boxdown list --json` for automation, and the
-[Boxdown feature documentation](./docs/features/README.md) for the complete
+[Boxdown feature documentation](./features/README.md) for the complete
 command behavior.
