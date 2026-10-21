@@ -67,8 +67,10 @@ configure_runtime_secret_environment() {
   /usr/local/bin/node "${DEVCONTAINER_DIR}/utils/npm-global-bootstrap.mjs"
   # Also initialize shell startup when no workspace toolchain was selected.
   # Reuse the same path-safety and startup-file ownership checks.
-  source "${DEVCONTAINER_DIR}/utils/toolchains-bootstrap.sh"
-  ensure_mise_directories && ensure_ssh_login_path
+  (
+    source "${DEVCONTAINER_DIR}/utils/toolchains-bootstrap.sh"
+    ensure_mise_directories && ensure_ssh_login_path
+  )
 }
 
 configure_sshd_runtime() {
