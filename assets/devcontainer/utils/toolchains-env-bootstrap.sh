@@ -4,10 +4,4 @@
 # shell options here: interactive and noninteractive callers own those modes.
 source /opt/boxdown/devcontainer/utils/secret-env-bootstrap.sh
 
-if [[ -n "${HOME:-}" ]]; then
-  toolchains_bin="${HOME}/.local/bin"
-  case ":${PATH:-}:" in
-    *":${toolchains_bin}:"*) ;;
-    *) export PATH="${toolchains_bin}${PATH:+:${PATH}}" ;;
-  esac
-fi
+source "${BASH_SOURCE[0]%/*}/npm-global-env.sh"

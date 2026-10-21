@@ -99,6 +99,12 @@ until you explicitly opt in to a Python-based installation. Existing
 workspaces keep their current container until you run `boxdown start --recreate`
 or `boxdown setup --recreate`.
 
+You can upgrade npm CLIs such as Snyk inside a container with
+`npm install -g snyk@latest`. Global installations take precedence over the
+image-bundled npm tools and persist across restarts and Node toolchain changes
+within that container. See [npm global CLIs](./docs/features/toolchains.md#npm-global-clis)
+for storage, precedence, and recreation details.
+
 ### FAQ
 
 #### Why does Boxdown say my workspace uses a “legacy locally-built Dev Container image”?

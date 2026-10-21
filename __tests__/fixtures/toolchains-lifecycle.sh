@@ -61,6 +61,7 @@ make_bootstrap() {
     -e "s#MISE_NO_CONFIG=1 /usr/local/bin/mise#MISE_NO_CONFIG=1 ${mise}#g" \
     "${ORIGINAL_BOOTSTRAP}" > "${target}"
   cp "${DEVCONTAINER_DIR}/utils/deps-install.sh" "$(dirname "${target}")/deps-install.sh"
+  cp "${DEVCONTAINER_DIR}/utils/npm-global-env.sh" "$(dirname "${target}")/npm-global-env.sh"
   chmod 0755 "${target}"
 }
 
@@ -69,6 +70,7 @@ make_env_dispatcher() {
   mkdir -p "$(dirname "${target}")"
   sed "s#/opt/boxdown/devcontainer/utils/secret-env-bootstrap.sh#${secret_bootstrap}#" \
     "${DEVCONTAINER_DIR}/utils/toolchains-env-bootstrap.sh" > "${target}"
+  cp "${DEVCONTAINER_DIR}/utils/npm-global-env.sh" "$(dirname "${target}")/npm-global-env.sh"
   chmod 0755 "${target}"
 }
 
@@ -249,9 +251,40 @@ BASHRC
   run_bootstrap "${bootstrap}" "${home}" "${plan}" "${results}" "${workspace}" "${log}"
   [[ "$(sed -n '1p' "${home}/.bashrc")" == 'source /opt/boxdown/devcontainer/utils/toolchains-env-bootstrap.sh' ]] ||
     fail 'secret and toolchain dispatcher was not placed before the noninteractive bashrc return'
-  [[ "$(sed -n '2p' "${home}/.bashrc")" == 'export PATH="$HOME/.local/bin:$PATH"' ]] ||
-    fail 'toolchain PATH was not placed before the noninteractive bashrc return'
+  [[ "$(sed -n '2p' "${home}/.bashrc")" == '# Standard Debian noninteractive guard.' ]] ||
+    fail 'shell startup was duplicated or the existing bashrc changed'
   grep -Fqx 'export USER_BASHRC_MARKER=preserved' "${home}/.bashrc" || fail 'bashrc contents were not preserved'
+}
+
+test_posix_login_profile() {
+  local dir="${TEST_ROOT}/posix-profile" home="${TEST_ROOT}/posix-profile/home"
+  local bootstrap="${dir}/devcontainer/utils/toolchains-bootstrap.sh"
+  mkdir -p "${home}/.local/bin" "${home}/.local/share/boxdown/npm-global/bin"
+  make_bootstrap "${bootstrap}" "${dir}/mise"
+  # Upgrade an existing profile containing the previous Bash-only entry.
+  printf '%s\n' 'export USER_PROFILE_MARKER=preserved' \
+    'source /opt/boxdown/devcontainer/utils/toolchains-env-bootstrap.sh' > "${home}/.profile"
+  HOME="${home}" bash -c 'source "$1"; ensure_mise_directories; ensure_ssh_login_path; ensure_ssh_login_path' _ "${bootstrap}"
+  [[ "$(wc -l < "${home}/.profile")" == 2 ]] || fail 'profile migration was not idempotent'
+  printf '%s\n' '#!/bin/sh' 'printf "%s\n" wrapper' > "${home}/.local/bin/boxdown-profile-wrapper"
+  printf '%s\n' '#!/bin/sh' 'printf "%s\n" global' > "${home}/.local/share/boxdown/npm-global/bin/boxdown-profile-global"
+  chmod 0755 "${home}/.local/bin/boxdown-profile-wrapper" "${home}/.local/share/boxdown/npm-global/bin/boxdown-profile-global"
+  HOME="${home}" PATH='/usr/bin:/bin' env -u NPM_CONFIG_PREFIX -u npm_config_prefix /bin/sh -lc '
+    set -eu
+    test "$USER_PROFILE_MARKER" = preserved
+    test "$NPM_CONFIG_PREFIX" = "$HOME/.local/share/boxdown/npm-global"
+    case "$PATH" in "$HOME/.local/bin:$NPM_CONFIG_PREFIX/bin:"*) ;; *) exit 11 ;; esac
+    test "$(boxdown-profile-wrapper)" = wrapper
+    test "$(boxdown-profile-global)" = global
+  ' || fail 'POSIX login shell did not load the profile and managed paths'
+  HOME="${home}" PATH='/usr/bin:/bin' npm_config_prefix="${dir}/custom prefix" /bin/sh -lc '
+    test "$NPM_CONFIG_PREFIX" = "$npm_config_prefix"
+    case "$PATH" in "$HOME/.local/bin:$npm_config_prefix/bin:"*) ;; *) exit 12 ;; esac
+  ' || fail 'POSIX profile ignored an explicit npm prefix'
+  grep -Fqx 'source /opt/boxdown/devcontainer/utils/toolchains-env-bootstrap.sh' \
+    "${home}/.bashrc" || fail 'Bash dispatcher was removed from bashrc'
+  grep -Fqx 'source /opt/boxdown/devcontainer/utils/toolchains-env-bootstrap.sh' \
+    "${home}/.local/share/boxdown/toolchains/bash-env.sh" || fail 'Bash dispatcher was removed from BASH_ENV'
 }
 
 test_env_dispatcher_preserves_caller_shell_options() {
@@ -270,7 +303,7 @@ test_env_dispatcher_preserves_caller_shell_options() {
     false | true
     [[ $? == 0 ]] || exit 12
     [[ -z "${unset_after_dispatcher}" ]] || exit 13
-    [[ "$PATH" == "$HOME/.local/bin:/usr/bin:/bin" ]] || exit 14
+    [[ "$PATH" == "$HOME/.local/bin:$NPM_CONFIG_PREFIX/bin:$HOME/.local/node_modules/.bin:$HOME/.opencode/bin:${CODEX_HOME:-$HOME/.codex}/packages/standalone/current/bin:/usr/bin:/bin" ]] || exit 14
     [[ "${BOXDOWN_SECRET_DISPATCHER_SENTINEL}" == present ]] || exit 15
   ' _ "${dispatcher}" || fail 'dispatcher changed disabled caller shell options or did not load PATH and secrets'
 
@@ -280,7 +313,7 @@ test_env_dispatcher_preserves_caller_shell_options() {
     source "$1"
     [[ "$-" == *u* ]] || exit 21
     if false | true; then exit 22; fi
-    [[ "$PATH" == "$HOME/.local/bin:/usr/bin:/bin" ]] || exit 23
+    [[ "$PATH" == "$HOME/.local/bin:$NPM_CONFIG_PREFIX/bin:$HOME/.local/node_modules/.bin:$HOME/.opencode/bin:${CODEX_HOME:-$HOME/.codex}/packages/standalone/current/bin:/usr/bin:/bin" ]] || exit 23
     [[ "${BOXDOWN_SECRET_DISPATCHER_SENTINEL}" == present ]] || exit 24
   ' _ "${dispatcher}" || fail 'dispatcher changed enabled caller shell options or did not load PATH and secrets'
 }
@@ -429,6 +462,7 @@ test_post_start_validator
 test_post_create_dispatch
 test_dependency_exit_semantics
 test_noninteractive_bashrc_path
+test_posix_login_profile
 test_env_dispatcher_preserves_caller_shell_options
 test_results_failures_and_modes
 test_owned_wrappers
