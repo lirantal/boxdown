@@ -61,6 +61,7 @@ make_bootstrap() {
     -e "s#MISE_NO_CONFIG=1 /usr/local/bin/mise#MISE_NO_CONFIG=1 ${mise}#g" \
     "${ORIGINAL_BOOTSTRAP}" > "${target}"
   cp "${DEVCONTAINER_DIR}/utils/deps-install.sh" "$(dirname "${target}")/deps-install.sh"
+  cp "${DEVCONTAINER_DIR}/utils/npm-global-env.sh" "$(dirname "${target}")/npm-global-env.sh"
   chmod 0755 "${target}"
 }
 
@@ -69,6 +70,7 @@ make_env_dispatcher() {
   mkdir -p "$(dirname "${target}")"
   sed "s#/opt/boxdown/devcontainer/utils/secret-env-bootstrap.sh#${secret_bootstrap}#" \
     "${DEVCONTAINER_DIR}/utils/toolchains-env-bootstrap.sh" > "${target}"
+  cp "${DEVCONTAINER_DIR}/utils/npm-global-env.sh" "$(dirname "${target}")/npm-global-env.sh"
   chmod 0755 "${target}"
 }
 
@@ -249,8 +251,8 @@ BASHRC
   run_bootstrap "${bootstrap}" "${home}" "${plan}" "${results}" "${workspace}" "${log}"
   [[ "$(sed -n '1p' "${home}/.bashrc")" == 'source /opt/boxdown/devcontainer/utils/toolchains-env-bootstrap.sh' ]] ||
     fail 'secret and toolchain dispatcher was not placed before the noninteractive bashrc return'
-  [[ "$(sed -n '2p' "${home}/.bashrc")" == 'export PATH="$HOME/.local/bin:$PATH"' ]] ||
-    fail 'toolchain PATH was not placed before the noninteractive bashrc return'
+  [[ "$(sed -n '2p' "${home}/.bashrc")" == '# Standard Debian noninteractive guard.' ]] ||
+    fail 'shell startup was duplicated or the existing bashrc changed'
   grep -Fqx 'export USER_BASHRC_MARKER=preserved' "${home}/.bashrc" || fail 'bashrc contents were not preserved'
 }
 
@@ -270,7 +272,7 @@ test_env_dispatcher_preserves_caller_shell_options() {
     false | true
     [[ $? == 0 ]] || exit 12
     [[ -z "${unset_after_dispatcher}" ]] || exit 13
-    [[ "$PATH" == "$HOME/.local/bin:/usr/bin:/bin" ]] || exit 14
+    [[ "$PATH" == "$HOME/.local/bin:$NPM_CONFIG_PREFIX/bin:$HOME/.local/node_modules/.bin:$HOME/.opencode/bin:${CODEX_HOME:-$HOME/.codex}/packages/standalone/current/bin:/usr/bin:/bin" ]] || exit 14
     [[ "${BOXDOWN_SECRET_DISPATCHER_SENTINEL}" == present ]] || exit 15
   ' _ "${dispatcher}" || fail 'dispatcher changed disabled caller shell options or did not load PATH and secrets'
 
@@ -280,7 +282,7 @@ test_env_dispatcher_preserves_caller_shell_options() {
     source "$1"
     [[ "$-" == *u* ]] || exit 21
     if false | true; then exit 22; fi
-    [[ "$PATH" == "$HOME/.local/bin:/usr/bin:/bin" ]] || exit 23
+    [[ "$PATH" == "$HOME/.local/bin:$NPM_CONFIG_PREFIX/bin:$HOME/.local/node_modules/.bin:$HOME/.opencode/bin:${CODEX_HOME:-$HOME/.codex}/packages/standalone/current/bin:/usr/bin:/bin" ]] || exit 23
     [[ "${BOXDOWN_SECRET_DISPATCHER_SENTINEL}" == present ]] || exit 24
   ' _ "${dispatcher}" || fail 'dispatcher changed enabled caller shell options or did not load PATH and secrets'
 }

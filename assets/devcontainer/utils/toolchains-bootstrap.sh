@@ -250,7 +250,7 @@ remove_failed_runtime_wrappers() {
 }
 
 append_path_line() {
-  local file="$1" path_line='export PATH="$HOME/.local/bin:$PATH"'
+  local file="$1" path_line='source /opt/boxdown/devcontainer/utils/toolchains-env-bootstrap.sh'
   target_is_missing_or_regular "${file}" || return 1
   if [[ ! -e "${file}" ]]; then
     (umask 077; : > "${file}") || return 1
@@ -276,7 +276,6 @@ prepend_ssh_bootstrap_lines() {
   fi
   {
     printf '%s\n' "${dispatcher_line}"
-    printf '%s\n' "${path_line}"
     if [[ -e "${file}" ]]; then
       grep -Fvx -e "${dispatcher_line}" -e "${path_line}" -e "${legacy_secret_line}" "${file}" || true
     fi
@@ -414,7 +413,7 @@ main() {
     write_result "${fingerprint}" failed '' || true
     return 0
   fi
-  export PATH="${HOME}/.local/bin:${PATH}"
+  source "${DEVCONTAINER_DIR}/utils/npm-global-env.sh"
 
   while IFS=$'\t' read -r id version; do
     [[ -n "${id}" ]] || continue

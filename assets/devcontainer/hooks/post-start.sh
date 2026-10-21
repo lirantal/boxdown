@@ -90,6 +90,7 @@ NODE
 }
 
 configure_toolchains_if_needed() {
+  /usr/local/bin/node "${DEVCONTAINER_DIR}/utils/npm-global-bootstrap.mjs"
   if toolchains_need_bootstrap; then
     bash "${DEVCONTAINER_DIR}/utils/toolchains-bootstrap.sh" ||
       echo "post-start: warning: workspace toolchain provisioning could not start." >&2

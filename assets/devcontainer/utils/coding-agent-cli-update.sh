@@ -20,10 +20,7 @@ progress() {
 }
 
 prepend_agent_bin_paths() {
-  local codex_home="${CODEX_HOME:-${HOME}/.codex}"
-
-  PATH="${HOME}/.local/node_modules/.bin:${HOME}/.local/bin:${HOME}/.opencode/bin:${codex_home}/packages/standalone/current/bin:${PATH}"
-  export PATH
+  source "${BASH_SOURCE[0]%/*}/npm-global-env.sh"
 }
 
 usage() {

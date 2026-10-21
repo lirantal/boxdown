@@ -88,6 +88,42 @@ neither is written into the target repository or host runtime state. The Node
 selected version. Otherwise, Boxdown provisions the selected Node.js, Python,
 Go, or Rust version in container-local state.
 
+## npm Global CLIs
+
+`npm install -g <package>` installs into a stable, user-owned prefix at
+`~/.local/share/boxdown/npm-global`, shared across selected Node versions. Its
+`bin` directory precedes image-bundled tools in interactive shells, SSH commands,
+and non-interactive Bash commands using Boxdown's `BASH_ENV`. Runtime wrappers in
+`~/.local/bin` retain first priority. Startup removes duplicate managed PATH
+entries and continues to disable repository-controlled mise configuration.
+
+Image npm tools, including Snyk, initially resolve through replaceable links in
+this prefix. An npm global upgrade replaces those links without modifying the
+image's package manifest or lockfile. The executable path stays the same, so
+even a shell that already cached the image command invokes the upgrade:
+
+```sh
+npm install -g snyk@latest
+npm ls -g snyk --depth=0
+command -v snyk
+snyk --version
+```
+
+Global installations survive container restarts and Node selection changes in
+the same container. Reinstall packages with native Node addons if their Node ABI
+changes. Recreating or removing the container discards these container-local
+installations. Explicit `NPM_CONFIG_PREFIX`, `npm_config_prefix`, or npm
+`--prefix` overrides still work; when using a command-specific prefix, manage
+that prefix's PATH yourself.
+
+Codex and Claude's automatic image-package refreshes retain their explicit
+`~/.local` installation prefix. A global user upgrade takes precedence over the
+image package; it does not change the image refresh policy. To adopt these
+startup changes in an existing workspace, recreate its container with the
+updated Boxdown version.
+
+## Dependency Synchronization
+
 After provisioning, Boxdown performs only these declared dependency
 synchronizations:
 

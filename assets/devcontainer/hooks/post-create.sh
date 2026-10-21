@@ -64,13 +64,11 @@ configure_local_git() {
 }
 
 configure_runtime_secret_environment() {
-  local bashrc="${HOME}/.bashrc"
-  local source_line='source /opt/boxdown/devcontainer/utils/secret-env-bootstrap.sh'
-
-  touch "${bashrc}"
-  if ! grep -Fqx "${source_line}" "${bashrc}"; then
-    printf '%s\n' "${source_line}" >> "${bashrc}"
-  fi
+  /usr/local/bin/node "${DEVCONTAINER_DIR}/utils/npm-global-bootstrap.mjs"
+  # Also initialize shell startup when no workspace toolchain was selected.
+  # Reuse the same path-safety and startup-file ownership checks.
+  source "${DEVCONTAINER_DIR}/utils/toolchains-bootstrap.sh"
+  ensure_mise_directories && ensure_ssh_login_path
 }
 
 configure_sshd_runtime() {
