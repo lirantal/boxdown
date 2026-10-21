@@ -256,6 +256,37 @@ BASHRC
   grep -Fqx 'export USER_BASHRC_MARKER=preserved' "${home}/.bashrc" || fail 'bashrc contents were not preserved'
 }
 
+test_posix_login_profile() {
+  local dir="${TEST_ROOT}/posix-profile" home="${TEST_ROOT}/posix-profile/home"
+  local bootstrap="${dir}/devcontainer/utils/toolchains-bootstrap.sh"
+  mkdir -p "${home}/.local/bin" "${home}/.local/share/boxdown/npm-global/bin"
+  make_bootstrap "${bootstrap}" "${dir}/mise"
+  # Upgrade an existing profile containing the previous Bash-only entry.
+  printf '%s\n' 'export USER_PROFILE_MARKER=preserved' \
+    'source /opt/boxdown/devcontainer/utils/toolchains-env-bootstrap.sh' > "${home}/.profile"
+  HOME="${home}" bash -c 'source "$1"; ensure_mise_directories; ensure_ssh_login_path; ensure_ssh_login_path' _ "${bootstrap}"
+  [[ "$(wc -l < "${home}/.profile")" == 2 ]] || fail 'profile migration was not idempotent'
+  printf '%s\n' '#!/bin/sh' 'printf "%s\n" wrapper' > "${home}/.local/bin/boxdown-profile-wrapper"
+  printf '%s\n' '#!/bin/sh' 'printf "%s\n" global' > "${home}/.local/share/boxdown/npm-global/bin/boxdown-profile-global"
+  chmod 0755 "${home}/.local/bin/boxdown-profile-wrapper" "${home}/.local/share/boxdown/npm-global/bin/boxdown-profile-global"
+  HOME="${home}" PATH='/usr/bin:/bin' env -u NPM_CONFIG_PREFIX -u npm_config_prefix /bin/sh -lc '
+    set -eu
+    test "$USER_PROFILE_MARKER" = preserved
+    test "$NPM_CONFIG_PREFIX" = "$HOME/.local/share/boxdown/npm-global"
+    case "$PATH" in "$HOME/.local/bin:$NPM_CONFIG_PREFIX/bin:"*) ;; *) exit 11 ;; esac
+    test "$(boxdown-profile-wrapper)" = wrapper
+    test "$(boxdown-profile-global)" = global
+  ' || fail 'POSIX login shell did not load the profile and managed paths'
+  HOME="${home}" PATH='/usr/bin:/bin' npm_config_prefix="${dir}/custom prefix" /bin/sh -lc '
+    test "$NPM_CONFIG_PREFIX" = "$npm_config_prefix"
+    case "$PATH" in "$HOME/.local/bin:$npm_config_prefix/bin:"*) ;; *) exit 12 ;; esac
+  ' || fail 'POSIX profile ignored an explicit npm prefix'
+  grep -Fqx 'source /opt/boxdown/devcontainer/utils/toolchains-env-bootstrap.sh' \
+    "${home}/.bashrc" || fail 'Bash dispatcher was removed from bashrc'
+  grep -Fqx 'source /opt/boxdown/devcontainer/utils/toolchains-env-bootstrap.sh' \
+    "${home}/.local/share/boxdown/toolchains/bash-env.sh" || fail 'Bash dispatcher was removed from BASH_ENV'
+}
+
 test_env_dispatcher_preserves_caller_shell_options() {
   local dir="${TEST_ROOT}/env-dispatcher" home="${TEST_ROOT}/env-dispatcher/home"
   local dispatcher="${dir}/toolchains-env-bootstrap.sh" secret_bootstrap="${dir}/secret-env-bootstrap.sh"
@@ -431,6 +462,7 @@ test_post_start_validator
 test_post_create_dispatch
 test_dependency_exit_semantics
 test_noninteractive_bashrc_path
+test_posix_login_profile
 test_env_dispatcher_preserves_caller_shell_options
 test_results_failures_and_modes
 test_owned_wrappers

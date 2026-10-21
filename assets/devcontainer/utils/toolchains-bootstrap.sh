@@ -256,6 +256,12 @@ append_path_line() {
     (umask 077; : > "${file}") || return 1
   fi
   regular_file_is_safe "${file}" || return 1
+  if [[ "${file}" == "${HOME}/.profile" ]]; then
+    # POSIX login shells cannot source the Bash dispatcher or its array helpers.
+    # Remove the old entry when refreshing a workspace created before this fix.
+    sed -i '\|^source /opt/boxdown/devcontainer/utils/toolchains-env-bootstrap.sh$|d' "${file}" || return 1
+    path_line='export NPM_CONFIG_PREFIX="${npm_config_prefix:-${NPM_CONFIG_PREFIX:-${HOME}/.local/share/boxdown/npm-global}}"; export PATH="$HOME/.local/bin:$NPM_CONFIG_PREFIX/bin:$HOME/.local/node_modules/.bin:$HOME/.opencode/bin:${CODEX_HOME:-$HOME/.codex}/packages/standalone/current/bin:$PATH"'
+  fi
   grep -Fqx "${path_line}" "${file}" || printf '%s\n' "${path_line}" >> "${file}"
 }
 
