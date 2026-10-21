@@ -7,7 +7,7 @@ const fixture = fileURLToPath(new URL('./fixtures/npm-global-lifecycle.sh', impo
 const utils = fileURLToPath(new URL('../assets/devcontainer/utils', import.meta.url))
 
 test('npm globals replace image tools in cached shells and survive shell startup and runtime changes', {timeout: 120_000}, () => {
-  const result = spawnSync('bash', [fixture, utils, process.execPath], {encoding: 'utf8'})
+  const result = spawnSync('bash', [fixture, utils, process.execPath], {encoding: 'utf8', timeout: 110_000})
   assert.ifError(result.error)
   assert.strictEqual(result.status, 0, `${result.stdout}\n${result.stderr}`)
   assert.match(result.stdout, /npm global lifecycle fixture: ok/u)
