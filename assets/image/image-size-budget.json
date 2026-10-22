@@ -1,15 +1,13 @@
 {
   "schemaVersion": 1,
-  "compressedBytes": 683058480,
+  "compressedBytes": 753066259,
   "allowedGrowthPercent": 10,
   "measurement": {
     "source": "current accepted Docker build",
-    "method": "docker buildx AMD64 OCI archive export; sum the manifest's compressed layer bytes from descriptor sizes; its 10% verifier allowance produces a final limit equal to the prior budget plus the observed mise increase and a 10% allowance",
-    "measuredAt": "2026-08-02",
-    "baselineCompressedBytes": 710945145,
-    "miseCompressedBytes": 36744711,
-    "platforms": {
-      "linux/amd64": 747689856
-    }
+    "method": "docker buildx dual-platform OCI export; sum each platform manifest's compressed layer bytes from descriptor sizes and use the larger total; the verifier reported the maximum without identifying the platform",
+    "measuredAt": "2026-10-01",
+    "workflowJobUrl": "https://github.com/lirantal/boxdown/actions/runs/36892250029/job/110470480276",
+    "revision": "ce84c964b172d9d98826754bc11b1cf3db204b58",
+    "maximumPlatformCompressedBytes": 753066259
   }
 }

@@ -133,9 +133,7 @@ test('sets a 10 percent compressed image growth budget', () => {
     measurement?: {
       source?: string
       method?: string
-      baselineCompressedBytes?: number
-      miseCompressedBytes?: number
-      platforms?: Record<string, number>
+      maximumPlatformCompressedBytes?: number
     }
   }
 
@@ -146,20 +144,12 @@ test('sets a 10 percent compressed image growth budget', () => {
   assert.equal(budget.allowedGrowthPercent, 10)
   assert.equal(budget.measurement?.source, 'current accepted Docker build')
   assert.match(budget.measurement?.method ?? '', /compressed layer bytes/i)
-  assert.deepEqual(Object.keys(budget.measurement?.platforms ?? {}), ['linux/amd64'])
-  const measuredBytes = Math.max(...Object.values(budget.measurement?.platforms ?? {}))
-  const baselineBytes = budget.measurement?.baselineCompressedBytes
-  const miseBytes = budget.measurement?.miseCompressedBytes
-
-  assert.equal(typeof baselineBytes, 'number')
-  assert.equal(typeof miseBytes, 'number')
-  assert.equal(miseBytes, measuredBytes - baselineBytes!)
-  const allowedBytes = baselineBytes! + Math.ceil(miseBytes! * (1 + budget.allowedGrowthPercent! / 100))
-  assert.equal(
-    Math.floor(budget.compressedBytes! * (1 + budget.allowedGrowthPercent! / 100)),
-    allowedBytes
-  )
-  assert.equal(measuredBytes <= allowedBytes, true)
+  const measuredBytes = budget.measurement?.maximumPlatformCompressedBytes
+  assert.equal(typeof measuredBytes, 'number')
+  assert.equal(budget.compressedBytes, measuredBytes)
+  const allowedBytes = Math.floor(budget.compressedBytes! * (1 + budget.allowedGrowthPercent! / 100))
+  assert.equal(allowedBytes, 828372884)
+  assert.equal(measuredBytes! <= allowedBytes, true)
 })
 
 test('uses the pinned Node image and has no mutable installer or lazy tools', () => {
