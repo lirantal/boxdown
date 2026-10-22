@@ -133,6 +133,9 @@ test('sets a 10 percent compressed image growth budget', () => {
     measurement?: {
       source?: string
       method?: string
+      measuredAt?: string
+      workflowJobUrl?: string
+      revision?: string
       maximumPlatformCompressedBytes?: number
     }
   }
@@ -144,6 +147,14 @@ test('sets a 10 percent compressed image growth budget', () => {
   assert.equal(budget.allowedGrowthPercent, 10)
   assert.equal(budget.measurement?.source, 'current accepted Docker build')
   assert.match(budget.measurement?.method ?? '', /compressed layer bytes/i)
+  const measuredAt = budget.measurement?.measuredAt ?? ''
+  assert.match(measuredAt, /^\d{4}-\d{2}-\d{2}$/)
+  assert.equal(new Date(measuredAt).toISOString().slice(0, 10), measuredAt)
+  assert.match(
+    budget.measurement?.workflowJobUrl ?? '',
+    /^https:\/\/github\.com\/lirantal\/boxdown\/actions\/runs\/\d+\/job\/\d+$/
+  )
+  assert.match(budget.measurement?.revision ?? '', /^[a-f0-9]{40}$/)
   const measuredBytes = budget.measurement?.maximumPlatformCompressedBytes
   assert.equal(typeof measuredBytes, 'number')
   assert.equal(budget.compressedBytes, measuredBytes)
