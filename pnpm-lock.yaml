@@ -208,8 +208,8 @@ importers:
   .:
     dependencies:
       '@devcontainers/cli':
-        specifier: 0.84.1
-        version: 0.84.1
+        specifier: 0.89.0
+        version: 0.89.0
       jsonc-parser:
         specifier: 3.3.1
         version: 3.3.1
@@ -353,8 +353,8 @@ packages:
     resolution: {integrity: sha512-dlT1m5e/0yUL0kRNcQn7yGLVThkgbB0Ga/1AmfDDC/8ik6AIiSf2QLQO2zPYvefsHP0aFgxO93cVLCCfDp7kzQ==}
     engines: {node: '>= 20.12.0'}
 
-  '@devcontainers/cli@0.84.1':
-    resolution: {integrity: sha512-r+JR/4R8lznPQNwLyHPIzHJ1mj3p2l5lGyHeq2FetEfpe6s6BVLE9mFl7MxQI4wKNqfWCIO7DSokoCWRlzQSIg==}
+  '@devcontainers/cli@0.89.0':
+    resolution: {integrity: sha512-LzaoOGKQ/Zql6PsiZ4hVIYVZagzWkD65aG/1ou5/Kly5Y1PtjLg1yn7qu+LZCzVoAl6DZZ/pbz8qOO4RLNlqMg==}
     engines: {node: '>=20.0.0'}
     hasBin: true
 
@@ -2146,7 +2146,7 @@ snapshots:
       fast-wrap-ansi: 0.2.2
       sisteransi: 1.0.5
 
-  '@devcontainers/cli@0.84.1': {}
+  '@devcontainers/cli@0.89.0': {}
 
   '@emnapi/core@1.10.0':
     dependencies:
