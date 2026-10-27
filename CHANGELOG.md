@@ -1,5 +1,17 @@
 # boxdown
 
+## 4.3.3
+
+### Patch Changes
+
+- [#82](https://github.com/lirantal/boxdown/pull/82) [`35aa253`](https://github.com/lirantal/boxdown/commit/35aa253dd9d0f44648d23de4368e2695debca759) Thanks [@lirantal](https://github.com/lirantal)! - Use a stable npm global prefix so user-installed CLIs take precedence over image tools across shells, container restarts, and Node toolchain changes. Preserve image fallbacks at the same executable paths so cached shell commands also pick up global upgrades.
+
+## 4.3.2
+
+### Patch Changes
+
+- [`195a887`](https://github.com/lirantal/boxdown/commit/195a887b306644984bee5d980008919fb12bb4b4) Thanks [@lirantal](https://github.com/lirantal)! - fix: regression with boxdown race condition
+
 ## 4.3.1
 
 ### Patch Changes
