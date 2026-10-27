@@ -1,5 +1,11 @@
 # boxdown
 
+## 4.3.4
+
+### Patch Changes
+
+- [#50](https://github.com/lirantal/boxdown/pull/50) [`bab6d58`](https://github.com/lirantal/boxdown/commit/bab6d586f721fcc18c9d7c9e828c1b64f5cd2bb9) Thanks [@dependabot](https://github.com/apps/dependabot)! - Update the bundled Dev Containers CLI to 0.89.0 and align its runtime version check.
+
 ## 4.3.3
 
 ### Patch Changes
