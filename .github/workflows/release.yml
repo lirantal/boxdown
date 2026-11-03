@@ -29,6 +29,8 @@ jobs:
         with:
           node-version: 24.x
           cache: 'pnpm'
+      - name: Set up pinned npm
+        run: bash "${{ github.workspace }}/.github/scripts/setup-npm.sh"
       - name: install dependencies
         run: pnpm install --frozen-lockfile
       - name: build project
@@ -39,7 +41,6 @@ jobs:
         env:
           # `npm view` is used only for registry metadata. It must not reject
           # this pnpm-managed project through npm's devEngines validation.
-          NPM_CONFIG_FORCE: true
         run: |
           package_name="$(node -p "require('./package.json').name")"
           version="$(node -p "require('./package.json').version")"
@@ -77,8 +78,6 @@ jobs:
           pr-title: "chore: new release candidate"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Allow Changesets' internal npm calls to warn on pnpm-only devEngines instead of failing the release.
-          NPM_CONFIG_FORCE: true
       - name: Set up QEMU
         if: steps.release-state.outputs.publish == 'true'
         uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
@@ -284,8 +283,6 @@ jobs:
         run: pnpm exec changeset publish --no-git-tag
         env:
           NPM_CONFIG_PROVENANCE: true
-          # Allow Changesets' internal npm calls to warn on pnpm-only devEngines instead of failing the release.
-          NPM_CONFIG_FORCE: true
           NPM_TOKEN: ''
       - name: Create GitHub Release
         env:
