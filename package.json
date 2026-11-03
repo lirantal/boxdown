@@ -29,13 +29,6 @@
     "node": ">=24.0.0",
     "pnpm": ">=11.0.0"
   },
-  "devEngines": {
-    "packageManager": {
-      "name": "pnpm",
-      "version": ">=11.0.0",
-      "onFail": "download"
-    }
-  },
   "files": [
     "assets",
     "docs",
@@ -128,5 +121,6 @@
       "lcov",
       "html"
     ]
-  }
+  },
+  "packageManager": "pnpm@12.9.0"
 }
